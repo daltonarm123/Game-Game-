@@ -15,10 +15,30 @@ Modern, maintained, tick-based kingdom strategy game platform.
 ## Quick Start
 
 1. Install Node 20+
-2. Install dependencies:
+2. Install workspace dependencies:
    - `npm install`
-3. Run all dev services:
+3. Start local DB/Redis:
+   - `docker compose -f infra/docker-compose.yml up -d`
+4. Copy env template to `.env` at repo root and adjust as needed.
+5. Run all dev services:
    - `npm run dev`
+
+## Implemented Foundation (Current)
+
+- Postgres-backed API bootstrap/schema creation
+- Kingdom registration endpoint
+- Kingdom read endpoint (resources/buildings/queue)
+- Build queue endpoint (cost + timer + enqueue)
+- Tick worker that auto-completes due build queue items
+
+## API Endpoints (v1)
+
+- `GET /healthz`
+- `POST /api/dev/register`
+  - body: `{ "userId": "u1", "username": "Envy", "kingdomName": "NorthEast" }`
+- `GET /api/kingdom/:name`
+- `POST /api/kingdom/:name/build`
+  - body: `{ "buildingCode": "farm" }`
 
 ## First Milestone (Month 1)
 
