@@ -30,8 +30,10 @@ Modern, maintained, tick-based kingdom strategy game platform.
 - Kingdom read endpoint (resources/buildings/troops/queues)
 - Build queue endpoint (cost + timer + enqueue)
 - Train queue endpoint (cost + timer + enqueue)
+- War Room v1 attack endpoint + stored attack reports
 - Tick worker that auto-completes due build/train queue items
 - Tick alignment support for exact 5-minute boundaries (`:00, :05, :10...`)
+- Ruleset baseline doc: `docs/RULESET_V1.md`
 
 ## API Endpoints (v1)
 
@@ -43,6 +45,9 @@ Modern, maintained, tick-based kingdom strategy game platform.
   - body: `{ "buildingCode": "farm" }`
 - `POST /api/kingdom/:name/train`
   - body: `{ "troopCode": "footmen", "quantity": 100 }`
+- `POST /api/war-room/:attacker/attack`
+  - body: `{ "defenderKingdom": "Target", "sentTroops": { "footmen": 1000, "pikemen": 200 } }`
+- `GET /api/war-room/reports/:kingdom?limit=25`
 
 ## First Milestone (Month 1)
 

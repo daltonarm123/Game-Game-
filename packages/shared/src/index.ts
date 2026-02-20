@@ -4,7 +4,7 @@ export const SEASONS = ["spring", "summer", "autumn", "winter"] as const;
 
 export type Season = (typeof SEASONS)[number];
 
-export type BuildingCode = "farm" | "lumberyard" | "quarry" | "barracks" | "stables";
+export type BuildingCode = "farm" | "lumberyard" | "quarry" | "barracks" | "stables" | "castles";
 
 export type BuildingDef = {
   code: BuildingCode;
@@ -20,4 +20,5 @@ export const BUILDINGS: BuildingDef[] = [
   { code: "quarry", name: "Stone Quarry", woodCost: 100, stoneCost: 140, baseBuildSeconds: 110 },
   { code: "barracks", name: "Barracks", woodCost: 220, stoneCost: 220, baseBuildSeconds: 150 },
   { code: "stables", name: "Stables", woodCost: 260, stoneCost: 180, baseBuildSeconds: 160 },
+  { code: "castles", name: "Castles", woodCost: 900, stoneCost: 1400, baseBuildSeconds: 360 },
 ];

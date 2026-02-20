@@ -25,6 +25,82 @@ const trainBody = z.object({
   quantity: z.number().int().min(1).max(50000),
 });
 
+const attackBody = z.object({
+  defenderKingdom: z.string().min(2),
+  sentTroops: z.record(z.string(), z.number().int().min(0)).refine((v) => Object.values(v).some((n) => n > 0), {
+    message: "At least one troop amount must be > 0",
+  }),
+});
+
+const TROOP_STATS: Record<string, { att: number; def: number }> = {
+  footmen: { att: 1, def: 1 },
+  pikemen: { att: 2, def: 2 },
+  archers: { att: 1, def: 4 },
+  light_cavalry: { att: 5, def: 4 },
+  heavy_cavalry: { att: 7, def: 5 },
+};
+
+function clamp(v: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, v));
+}
+
+function combatResultFromRatio(ratio: number): string {
+  if (ratio < 0.25) return "FLEE";
+  if (ratio < 0.75) return "MAJOR LOSS";
+  if (ratio < 0.95) return "MINOR LOSS";
+  if (ratio < 1.15) return "STALEMATE";
+  if (ratio < 1.4) return "MINOR VICTORY";
+  if (ratio < 2.5) return "VICTORY";
+  if (ratio < 5.0) return "MAJOR VICTORY";
+  return "OVERWHELMING VICTORY";
+}
+
+function landPctForResult(result: string): number {
+  if (result === "STALEMATE") return 0.0075;
+  if (result === "MINOR VICTORY") return 0.015;
+  if (result === "VICTORY") return 0.025;
+  if (result === "MAJOR VICTORY") return 0.0375;
+  if (result === "OVERWHELMING VICTORY") return 0.05;
+  return 0;
+}
+
+function attackerLossPct(result: string): number {
+  if (result === "FLEE") return 0.7;
+  if (result === "MAJOR LOSS") return 0.5;
+  if (result === "MINOR LOSS") return 0.35;
+  if (result === "STALEMATE") return 0.25;
+  if (result === "MINOR VICTORY") return 0.18;
+  if (result === "VICTORY") return 0.12;
+  if (result === "MAJOR VICTORY") return 0.08;
+  return 0.04;
+}
+
+function defenderLossPct(result: string): number {
+  if (result === "FLEE") return 0.05;
+  if (result === "MAJOR LOSS") return 0.12;
+  if (result === "MINOR LOSS") return 0.18;
+  if (result === "STALEMATE") return 0.25;
+  if (result === "MINOR VICTORY") return 0.35;
+  if (result === "VICTORY") return 0.45;
+  if (result === "MAJOR VICTORY") return 0.55;
+  return 0.65;
+}
+
+function applyLosses(units: Record<string, number>, pct: number, scope?: Record<string, number>) {
+  const losses: Record<string, number> = {};
+  const result: Record<string, number> = { ...units };
+  const keys = Object.keys(scope || units);
+  for (const k of keys) {
+    const base = Number(scope ? scope[k] || 0 : units[k] || 0);
+    const cur = Number(result[k] || 0);
+    if (base <= 0 || cur <= 0) continue;
+    const loss = clamp(Math.floor(base * pct), 0, cur);
+    losses[k] = loss;
+    result[k] = cur - loss;
+  }
+  return { losses, remaining: result };
+}
+
 app.get("/healthz", async (_req, res) => {
   try {
     await pool.query("SELECT 1");
@@ -250,6 +326,147 @@ app.post("/api/kingdom/:name/train", async (req, res) => {
     return res.json({ ok: true, ...out });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/war-room/:attacker/attack", async (req, res) => {
+  const attackerName = String(req.params.attacker || "").trim();
+  const parsed = attackBody.safeParse(req.body);
+  if (!attackerName) return res.status(400).json({ ok: false, error: "attacker kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+
+  const defenderName = parsed.data.defenderKingdom.trim();
+  const sentTroopsRaw = Object.fromEntries(
+    Object.entries(parsed.data.sentTroops).map(([k, v]) => [String(k).toLowerCase(), Number(v || 0)]),
+  );
+
+  try {
+    const out = await withTx(async (c) => {
+      const a = await c.query(`SELECT id, name, land FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [attackerName]);
+      if (!a.rowCount) throw new Error("attacker kingdom not found");
+      const d = await c.query(`SELECT id, name, land FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [defenderName]);
+      if (!d.rowCount) throw new Error("defender kingdom not found");
+
+      const atk = a.rows[0];
+      const def = d.rows[0];
+      if (Number(atk.id) === Number(def.id)) throw new Error("cannot attack self");
+
+      const atkRows = await c.query(`SELECT troop_code, amount FROM kingdom_troops WHERE kingdom_id=$1`, [atk.id]);
+      const defRows = await c.query(`SELECT troop_code, amount FROM kingdom_troops WHERE kingdom_id=$1`, [def.id]);
+      const defCastle = await c.query(
+        `SELECT COALESCE(level,0) AS lvl FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='castles' LIMIT 1`,
+        [def.id],
+      );
+
+      const attackerTroops: Record<string, number> = {};
+      const defenderTroops: Record<string, number> = {};
+      for (const r of atkRows.rows) attackerTroops[String(r.troop_code)] = Number(r.amount || 0);
+      for (const r of defRows.rows) defenderTroops[String(r.troop_code)] = Number(r.amount || 0);
+
+      for (const [code, sent] of Object.entries(sentTroopsRaw)) {
+        if (sent <= 0) continue;
+        const have = Number(attackerTroops[code] || 0);
+        if (have < sent) throw new Error(`not enough ${code} (have ${have}, need ${sent})`);
+      }
+
+      let attackerPower = 0;
+      for (const [code, sent] of Object.entries(sentTroopsRaw)) {
+        if (sent <= 0) continue;
+        attackerPower += Number(sent) * Number(TROOP_STATS[code]?.att || 0);
+      }
+
+      let defenderPowerRaw = 0;
+      for (const [code, amount] of Object.entries(defenderTroops)) {
+        defenderPowerRaw += Number(amount) * Number(TROOP_STATS[code]?.def || 0);
+      }
+      const castles = Number(defCastle.rows[0]?.lvl || 0);
+      const castleBonus = castles > 0 ? Math.sqrt(castles) / 100 : 0;
+      const defenderPower = defenderPowerRaw * (1 + castleBonus);
+
+      const ratio = attackerPower <= 0 ? 0 : attackerPower / Math.max(1, defenderPower);
+      const result = combatResultFromRatio(ratio);
+
+      const aLossPct = attackerLossPct(result);
+      const dLossPct = defenderLossPct(result);
+
+      const sentOnly = Object.fromEntries(Object.entries(sentTroopsRaw).filter(([, v]) => v > 0));
+      const attackerAfterSend: Record<string, number> = { ...attackerTroops };
+      for (const [code, sent] of Object.entries(sentOnly)) {
+        attackerAfterSend[code] = Number(attackerAfterSend[code] || 0) - Number(sent);
+      }
+      const attackerBattle = applyLosses(sentOnly, aLossPct, sentOnly);
+      for (const [code, sent] of Object.entries(sentOnly)) {
+        const survivors = Number(sent) - Number(attackerBattle.losses[code] || 0);
+        attackerAfterSend[code] = Number(attackerAfterSend[code] || 0) + Math.max(0, survivors);
+      }
+
+      const defenderBattle = applyLosses(defenderTroops, dLossPct);
+
+      const landPct = landPctForResult(result);
+      const defenderLand = Number(def.land || 0);
+      const landTaken = Math.max(0, Math.floor(defenderLand * landPct));
+      const attackerLandNew = Number(atk.land || 0) + landTaken;
+      const defenderLandNew = Math.max(0, defenderLand - landTaken);
+
+      for (const [code, amount] of Object.entries(attackerAfterSend)) {
+        await c.query(`UPDATE kingdom_troops SET amount=$3 WHERE kingdom_id=$1 AND troop_code=$2`, [atk.id, code, Math.max(0, Math.floor(amount))]);
+      }
+      for (const [code, amount] of Object.entries(defenderBattle.remaining)) {
+        await c.query(`UPDATE kingdom_troops SET amount=$3 WHERE kingdom_id=$1 AND troop_code=$2`, [def.id, code, Math.max(0, Math.floor(amount))]);
+      }
+
+      await c.query(`UPDATE kingdoms SET land=$2 WHERE id=$1`, [atk.id, attackerLandNew]);
+      await c.query(`UPDATE kingdoms SET land=$2 WHERE id=$1`, [def.id, defenderLandNew]);
+
+      const rep = await c.query(
+        `INSERT INTO attack_reports(attacker_kingdom_id, defender_kingdom_id, attacker_name, defender_name, result, ratio, land_taken, attacker_power, defender_power, sent_troops, attacker_losses, defender_losses)\n         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb)\n         RETURNING id, created_at`,
+        [
+          atk.id,
+          def.id,
+          atk.name,
+          def.name,
+          result,
+          ratio,
+          landTaken,
+          attackerPower,
+          defenderPower,
+          JSON.stringify(sentOnly),
+          JSON.stringify(attackerBattle.losses),
+          JSON.stringify(defenderBattle.losses),
+        ],
+      );
+
+      return {
+        report: rep.rows[0],
+        result,
+        ratio: Number(ratio.toFixed(4)),
+        attackerPower: Number(attackerPower.toFixed(2)),
+        defenderPower: Number(defenderPower.toFixed(2)),
+        landTaken,
+        attackerLosses: attackerBattle.losses,
+        defenderLosses: defenderBattle.losses,
+      };
+    });
+
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/war-room/reports/:kingdom", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const limit = clamp(Number(req.query.limit || 25), 1, 200);
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+
+  try {
+    const rows = await pool.query(
+      `SELECT id, attacker_name, defender_name, result, ratio, land_taken, attacker_power, defender_power, sent_troops, attacker_losses, defender_losses, created_at\n       FROM attack_reports\n       WHERE LOWER(attacker_name)=LOWER($1) OR LOWER(defender_name)=LOWER($1)\n       ORDER BY created_at DESC\n       LIMIT $2`,
+      [kingdom, limit],
+    );
+    return res.json({ ok: true, items: rows.rows });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 

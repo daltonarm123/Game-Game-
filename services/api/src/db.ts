@@ -13,6 +13,7 @@ const BUILDINGS = [
   { code: "quarry", name: "Stone Quarry", woodCost: 100, stoneCost: 140, baseBuildSeconds: 110 },
   { code: "barracks", name: "Barracks", woodCost: 220, stoneCost: 220, baseBuildSeconds: 150 },
   { code: "stables", name: "Stables", woodCost: 260, stoneCost: 180, baseBuildSeconds: 160 },
+  { code: "castles", name: "Castles", woodCost: 900, stoneCost: 1400, baseBuildSeconds: 360 },
 ] as const;
 
 const TROOPS = [
@@ -113,8 +114,27 @@ export async function ensureSchema(): Promise<void> {
       CHECK (status IN ('queued','completed','cancelled'))
     );
 
+    CREATE TABLE IF NOT EXISTS attack_reports (
+      id BIGSERIAL PRIMARY KEY,
+      attacker_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      defender_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      attacker_name TEXT NOT NULL,
+      defender_name TEXT NOT NULL,
+      result TEXT NOT NULL,
+      ratio NUMERIC(12,4) NOT NULL,
+      land_taken BIGINT NOT NULL DEFAULT 0,
+      attacker_power NUMERIC(18,2) NOT NULL,
+      defender_power NUMERIC(18,2) NOT NULL,
+      sent_troops JSONB NOT NULL DEFAULT '{}'::jsonb,
+      attacker_losses JSONB NOT NULL DEFAULT '{}'::jsonb,
+      defender_losses JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE INDEX IF NOT EXISTS build_queue_due_idx ON build_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS train_queue_due_idx ON train_queue(status, completes_at);
+    CREATE INDEX IF NOT EXISTS attack_reports_defender_idx ON attack_reports(defender_kingdom_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS attack_reports_attacker_idx ON attack_reports(attacker_kingdom_id, created_at DESC);
   `);
 
   for (const b of BUILDINGS) {
