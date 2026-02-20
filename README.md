@@ -63,3 +63,8 @@ Modern, maintained, tick-based kingdom strategy game platform.
 
 - Month-1 demo plan and forward roadmap:
   - `docs/MONTH1_DEMO_AND_ROADMAP.md`
+- Strict investor pitch runbook:
+  - `docs/INVESTOR_DEMO_SCRIPT.md`
+- Local demo env helper scripts:
+  - `scripts/start-demo-env.ps1`
+  - `scripts/seed-demo-data.ps1`
