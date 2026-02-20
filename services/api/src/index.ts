@@ -9,6 +9,7 @@ const app = express();
 app.use(express.json());
 
 const API_PORT = Number(process.env.API_PORT || 8080);
+const ATTACK_RETURN_MINUTES = Number(process.env.ATTACK_RETURN_MINUTES || 20);
 
 const registerBody = z.object({
   userId: z.string().min(1),
@@ -395,9 +396,10 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
         attackerAfterSend[code] = Number(attackerAfterSend[code] || 0) - Number(sent);
       }
       const attackerBattle = applyLosses(sentOnly, aLossPct, sentOnly);
+      const attackerSurvivors: Record<string, number> = {};
       for (const [code, sent] of Object.entries(sentOnly)) {
-        const survivors = Number(sent) - Number(attackerBattle.losses[code] || 0);
-        attackerAfterSend[code] = Number(attackerAfterSend[code] || 0) + Math.max(0, survivors);
+        const survivors = Math.max(0, Number(sent) - Number(attackerBattle.losses[code] || 0));
+        attackerSurvivors[code] = survivors;
       }
 
       const defenderBattle = applyLosses(defenderTroops, dLossPct);
@@ -436,6 +438,15 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
         ],
       );
 
+      for (const [code, survivors] of Object.entries(attackerSurvivors)) {
+        if (Number(survivors) <= 0) continue;
+        await c.query(
+          `INSERT INTO troop_movements(owner_kingdom_id, owner_kingdom_name, target_kingdom_id, target_kingdom_name, troop_code, quantity, departed_at, returns_at, status, source_attack_report_id)
+           VALUES ($1,$2,$3,$4,$5,$6,now(), now() + ($7 || ' minutes')::interval, 'out', $8)`,
+          [atk.id, atk.name, def.id, def.name, code, Math.floor(survivors), ATTACK_RETURN_MINUTES, rep.rows[0].id],
+        );
+      }
+
       return {
         report: rep.rows[0],
         result,
@@ -445,12 +456,106 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
         landTaken,
         attackerLosses: attackerBattle.losses,
         defenderLosses: defenderBattle.losses,
+        attackerSurvivorsAway: attackerSurvivors,
       };
     });
 
     return res.json({ ok: true, ...out });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/war-room/:kingdom", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+
+  try {
+    const k = await pool.query(
+      `SELECT id, name, land, food, gold, created_at FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`,
+      [kingdom],
+    );
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const row = k.rows[0];
+
+    const rankQ = await pool.query(
+      `WITH nw AS (
+         SELECT id,
+                (land * 0.04 + food * 0.0001 + gold * 0.0005 + stone * 0.0002 + wood * 0.0002) AS networth
+         FROM kingdoms
+       ),
+       r AS (
+         SELECT id, networth, ROW_NUMBER() OVER (ORDER BY networth DESC) AS rank
+         FROM nw
+       )
+       SELECT rank, networth FROM r WHERE id = $1`,
+      [row.id],
+    );
+
+    const homeRows = await pool.query(
+      `SELECT tt.code, tt.name, COALESCE(kt.amount,0) AS home
+       FROM troop_types tt
+       LEFT JOIN kingdom_troops kt ON kt.troop_code = tt.code AND kt.kingdom_id = $1
+       ORDER BY tt.code`,
+      [row.id],
+    );
+
+    const trainRows = await pool.query(
+      `SELECT troop_code, COALESCE(SUM(quantity),0) AS qty
+       FROM train_queue
+       WHERE kingdom_id = $1 AND status='queued'
+       GROUP BY troop_code`,
+      [row.id],
+    );
+    const awayRows = await pool.query(
+      `SELECT troop_code, COALESCE(SUM(quantity),0) AS qty
+       FROM troop_movements
+       WHERE owner_kingdom_id = $1 AND status='out' AND returns_at > now()
+       GROUP BY troop_code`,
+      [row.id],
+    );
+
+    const trainMap = new Map<string, number>();
+    const awayMap = new Map<string, number>();
+    for (const tr of trainRows.rows) trainMap.set(String(tr.troop_code), Number(tr.qty || 0));
+    for (const aw of awayRows.rows) awayMap.set(String(aw.troop_code), Number(aw.qty || 0));
+
+    const troops = homeRows.rows.map((t) => ({
+      troopCode: t.code,
+      troopName: t.name,
+      home: Number(t.home || 0),
+      train: Number(trainMap.get(String(t.code)) || 0),
+      away: Number(awayMap.get(String(t.code)) || 0),
+    }));
+
+    const training = await pool.query(
+      `SELECT id, troop_code, quantity, started_at, completes_at
+       FROM train_queue
+       WHERE kingdom_id = $1 AND status='queued'
+       ORDER BY completes_at ASC
+       LIMIT 50`,
+      [row.id],
+    );
+
+    return res.json({
+      ok: true,
+      kingdom: {
+        id: row.id,
+        name: row.name,
+        rank: Number(rankQ.rows[0]?.rank || 0),
+        networth: Number(rankQ.rows[0]?.networth || 0),
+        populationHome: troops.reduce((a, b) => a + Number(b.home || 0), 0),
+        populationTrain: troops.reduce((a, b) => a + Number(b.train || 0), 0),
+        populationAway: troops.reduce((a, b) => a + Number(b.away || 0), 0),
+        food: Number(row.food || 0),
+        gold: Number(row.gold || 0),
+      },
+      troops,
+      training: training.rows,
+      actions: ["Train Troops", "Attack Kingdom"],
+    });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 

@@ -1,4 +1,4 @@
-﻿import React, { useMemo, useState } from "react";
+﻿import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 type NavItem = { id: string; label: string; group: "top" | "kingdom" };
@@ -10,6 +10,8 @@ const NAV_ITEMS: NavItem[] = [
   { id: "overview", label: "Overview", group: "kingdom" },
   { id: "buildings", label: "Buildings", group: "kingdom" },
   { id: "war-room", label: "War Room", group: "kingdom" },
+  { id: "train-troops", label: "Train Troops", group: "kingdom" },
+  { id: "attack-kingdom", label: "Attack Kingdom", group: "kingdom" },
   { id: "guildhall", label: "Guildhall", group: "kingdom" },
   { id: "holy-circle", label: "Holy Circle", group: "kingdom" },
   { id: "alliance", label: "Alliance", group: "kingdom" },
@@ -29,6 +31,24 @@ const CARD: React.CSSProperties = {
   border: "1px solid rgba(217, 182, 118, 0.35)",
   borderRadius: 12,
   padding: 12,
+};
+
+const API_BASE = (window as any).__GG_API_BASE || "http://localhost:8080";
+const INPUT_STYLE: React.CSSProperties = {
+  padding: "8px 10px",
+  borderRadius: 8,
+  border: "1px solid rgba(217,182,118,.35)",
+  background: "rgba(0,0,0,.2)",
+  color: "#f2e5cf",
+};
+
+const BTN_STYLE: React.CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: 8,
+  border: "1px solid rgba(217,182,118,.35)",
+  background: "rgba(205,169,105,.28)",
+  color: "#f2e5cf",
+  cursor: "pointer",
 };
 
 function OverviewMock() {
@@ -73,6 +93,523 @@ function Placeholder({ label }: { label: string }) {
       <div style={{ fontSize: 18, fontWeight: 700 }}>{label}</div>
       <div style={{ opacity: 0.8, marginTop: 8 }}>
         This tab is scaffolded and ready for feature implementation.
+      </div>
+    </div>
+  );
+}
+
+function WarRoomView() {
+  const [kingdom, setKingdom] = useState("Elixer");
+  const [data, setData] = useState<any>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [actionMsg, setActionMsg] = useState("");
+  const [trainTroop, setTrainTroop] = useState("pikemen");
+  const [trainQty, setTrainQty] = useState(1000);
+  const [attackTarget, setAttackTarget] = useState("");
+  const [sentTroops, setSentTroops] = useState<Record<string, number>>({});
+  const [reports, setReports] = useState<Array<any>>([]);
+
+  async function load() {
+    setLoading(true);
+    setError("");
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`);
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setData(j);
+      const rr = await fetch(`${API_BASE}/api/war-room/reports/${encodeURIComponent(kingdom)}?limit=12`);
+      const rj = await rr.json();
+      if (rr.ok && rj?.ok) setReports(Array.isArray(rj.items) ? rj.items : []);
+    } catch (e: any) {
+      setError(String(e?.message || e));
+      setData(null);
+      setReports([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const k = data?.kingdom;
+  const troops = (data?.troops || []) as Array<any>;
+  const training = (data?.training || []) as Array<any>;
+  const troopCodeOptions = troops.map((t) => String(t.troopCode || ""));
+
+  async function submitTrain(e: React.FormEvent) {
+    e.preventDefault();
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/train`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          troopCode: trainTroop,
+          quantity: Math.max(1, Math.floor(Number(trainQty || 0))),
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Queued ${Number(trainQty || 0).toLocaleString()} ${trainTroop}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Train failed: ${String(e?.message || e)}`);
+    }
+  }
+
+  function updateSent(code: string, value: number) {
+    setSentTroops((prev) => ({ ...prev, [code]: Math.max(0, Math.floor(value || 0)) }));
+  }
+
+  async function submitAttack(e: React.FormEvent) {
+    e.preventDefault();
+    setActionMsg("");
+    try {
+      const payload = Object.fromEntries(
+        Object.entries(sentTroops).filter(([, v]) => Number(v || 0) > 0),
+      );
+      const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}/attack`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          defenderKingdom: attackTarget,
+          sentTroops: payload,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(
+        `Attack result: ${j.result} | Ratio ${Number(j.ratio || 0).toFixed(2)} | Land ${Number(j.landTaken || 0).toLocaleString()}`,
+      );
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Attack failed: ${String(e?.message || e)}`);
+    }
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <div style={CARD}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>War Room</div>
+          <input
+            value={kingdom}
+            onChange={(e) => setKingdom(e.target.value)}
+            style={{
+              padding: "8px 10px",
+              borderRadius: 8,
+              border: "1px solid rgba(217,182,118,.35)",
+              background: "rgba(0,0,0,.2)",
+              color: "#f2e5cf",
+            }}
+            placeholder="Kingdom name"
+          />
+          <button
+            onClick={() => void load()}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px solid rgba(217,182,118,.35)",
+              background: "rgba(205,169,105,.28)",
+              color: "#f2e5cf",
+              cursor: "pointer",
+            }}
+          >
+            Load
+          </button>
+        </div>
+        {loading ? <div style={{ marginTop: 8 }}>Loading...</div> : null}
+        {error ? <div style={{ marginTop: 8, color: "#ffae9a" }}>{error}</div> : null}
+        {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
+      </div>
+
+      {k ? (
+        <>
+          <div style={CARD}>
+            <div style={{ fontSize: 20, fontWeight: 700 }}>War Room - {k.name}</div>
+            <div style={{ marginTop: 6, opacity: 0.9 }}>
+              Rank: #{k.rank || "N/A"} • Networth: {Math.floor(Number(k.networth || 0)).toLocaleString()}
+            </div>
+            <div style={{ marginTop: 6, opacity: 0.9 }}>
+              Population: {Number(k.populationHome || 0).toLocaleString()} / {Number((k.populationHome || 0) + (k.populationTrain || 0) + (k.populationAway || 0)).toLocaleString()}
+            </div>
+            <div style={{ marginTop: 6, opacity: 0.9 }}>
+              Food: {Number(k.food || 0).toLocaleString()} • Gold: {Number(k.gold || 0).toLocaleString()}
+            </div>
+          </div>
+
+          <div style={CARD}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Kingdom Troops</div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: 6 }}>Troop</th>
+                    <th style={{ textAlign: "right", padding: 6 }}>Home</th>
+                    <th style={{ textAlign: "right", padding: 6 }}>Train</th>
+                    <th style={{ textAlign: "right", padding: 6 }}>Away</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {troops.map((t) => (
+                    <tr key={t.troopCode}>
+                      <td style={{ padding: 6 }}>{t.troopName}</td>
+                      <td style={{ padding: 6, textAlign: "right" }}>{Number(t.home || 0).toLocaleString()}</td>
+                      <td style={{ padding: 6, textAlign: "right" }}>{Number(t.train || 0).toLocaleString()}</td>
+                      <td style={{ padding: 6, textAlign: "right" }}>{Number(t.away || 0).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div style={CARD}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Actions</div>
+            <div style={{ display: "grid", gap: 10 }}>
+              <form onSubmit={submitTrain} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <div style={{ minWidth: 110, opacity: 0.9 }}>Train Troops</div>
+                <select
+                  value={trainTroop}
+                  onChange={(e) => setTrainTroop(e.target.value)}
+                  style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(217,182,118,.35)", background: "rgba(0,0,0,.2)", color: "#f2e5cf" }}
+                >
+                  {troopCodeOptions.map((code) => (
+                    <option key={code} value={code}>
+                      {code}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  min={1}
+                  max={50000}
+                  value={trainQty}
+                  onChange={(e) => setTrainQty(Math.max(1, Number(e.target.value || 1)))}
+                  style={{ width: 130, padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(217,182,118,.35)", background: "rgba(0,0,0,.2)", color: "#f2e5cf" }}
+                />
+                <button type="submit" style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid rgba(217,182,118,.35)", background: "rgba(205,169,105,.28)", color: "#f2e5cf", cursor: "pointer" }}>
+                  Queue Training
+                </button>
+              </form>
+
+              <form onSubmit={submitAttack} style={{ display: "grid", gap: 8 }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  <div style={{ minWidth: 110, opacity: 0.9 }}>Attack Kingdom</div>
+                  <input
+                    value={attackTarget}
+                    onChange={(e) => setAttackTarget(e.target.value)}
+                    placeholder="Defender kingdom"
+                    style={{ minWidth: 220, padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(217,182,118,.35)", background: "rgba(0,0,0,.2)", color: "#f2e5cf" }}
+                  />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 8 }}>
+                  {troops.map((t) => (
+                    <label key={t.troopCode} style={{ display: "grid", gap: 4 }}>
+                      <span style={{ fontSize: 12, opacity: 0.85 }}>
+                        {t.troopName} (home {Number(t.home || 0).toLocaleString()})
+                      </span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={Number(t.home || 0)}
+                        value={Number(sentTroops[t.troopCode] || 0)}
+                        onChange={(e) => updateSent(t.troopCode, Math.min(Number(t.home || 0), Number(e.target.value || 0)))}
+                        style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(217,182,118,.35)", background: "rgba(0,0,0,.2)", color: "#f2e5cf" }}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div>
+                  <button type="submit" style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid rgba(217,182,118,.35)", background: "rgba(205,169,105,.28)", color: "#f2e5cf", cursor: "pointer" }}>
+                    Launch Attack
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <div style={CARD}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Training...</div>
+            {training.length === 0 ? <div style={{ opacity: 0.8 }}>No active training queue.</div> : null}
+            {training.map((q) => (
+              <div key={q.id} style={{ marginBottom: 6 }}>
+                {Number(q.quantity || 0).toLocaleString()} x {q.troop_code} • {String(q.completes_at).replace("T", " ").slice(0, 19)}
+              </div>
+            ))}
+          </div>
+
+          <div style={CARD}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Recent Battles</div>
+            {reports.length === 0 ? <div style={{ opacity: 0.8 }}>No recent reports.</div> : null}
+            {reports.map((r) => (
+              <div key={r.id} style={{ marginBottom: 6 }}>
+                {String(r.created_at).replace("T", " ").slice(0, 19)} • {r.attacker_name} vs {r.defender_name} • {r.result} • Land {Number(r.land_taken || 0).toLocaleString()}
+              </div>
+            ))}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function TrainTroopsView() {
+  const [kingdom, setKingdom] = useState("Elixer");
+  const [data, setData] = useState<any>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [actionMsg, setActionMsg] = useState("");
+  const [trainTroop, setTrainTroop] = useState("pikemen");
+  const [trainQty, setTrainQty] = useState(1000);
+
+  async function load() {
+    setLoading(true);
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`);
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setData(j);
+    } catch (e: any) {
+      setError(String(e?.message || e));
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const k = data?.kingdom;
+  const troops = (data?.troops || []) as Array<any>;
+  const training = (data?.training || []) as Array<any>;
+  const troopCodeOptions = troops.map((t) => String(t.troopCode || ""));
+
+  async function submitTrain(e: React.FormEvent) {
+    e.preventDefault();
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/train`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          troopCode: trainTroop,
+          quantity: Math.max(1, Math.floor(Number(trainQty || 0))),
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Queued ${Number(trainQty || 0).toLocaleString()} ${trainTroop}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Train failed: ${String(e?.message || e)}`);
+    }
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <div style={CARD}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>Train Troops</div>
+          <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={INPUT_STYLE} />
+          <button onClick={() => void load()} style={BTN_STYLE}>
+            Load
+          </button>
+        </div>
+        {loading ? <div style={{ marginTop: 8 }}>Loading...</div> : null}
+        {error ? <div style={{ marginTop: 8, color: "#ffae9a" }}>{error}</div> : null}
+        {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
+      </div>
+
+      {k ? (
+        <>
+          <div style={CARD}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Kingdom Troops</div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: 6 }}>Troop</th>
+                    <th style={{ textAlign: "right", padding: 6 }}>Home</th>
+                    <th style={{ textAlign: "right", padding: 6 }}>Train</th>
+                    <th style={{ textAlign: "right", padding: 6 }}>Away</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {troops.map((t) => (
+                    <tr key={t.troopCode}>
+                      <td style={{ padding: 6 }}>{t.troopName}</td>
+                      <td style={{ padding: 6, textAlign: "right" }}>{Number(t.home || 0).toLocaleString()}</td>
+                      <td style={{ padding: 6, textAlign: "right" }}>{Number(t.train || 0).toLocaleString()}</td>
+                      <td style={{ padding: 6, textAlign: "right" }}>{Number(t.away || 0).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div style={CARD}>
+            <form onSubmit={submitTrain} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <select value={trainTroop} onChange={(e) => setTrainTroop(e.target.value)} style={INPUT_STYLE}>
+                {troopCodeOptions.map((code) => (
+                  <option key={code} value={code}>
+                    {code}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="number"
+                min={1}
+                max={50000}
+                value={trainQty}
+                onChange={(e) => setTrainQty(Math.max(1, Number(e.target.value || 1)))}
+                style={{ ...INPUT_STYLE, width: 130 }}
+              />
+              <button type="submit" style={BTN_STYLE}>
+                Queue Training
+              </button>
+            </form>
+          </div>
+
+          <div style={CARD}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Training Queue</div>
+            {training.length === 0 ? <div style={{ opacity: 0.8 }}>No active training queue.</div> : null}
+            {training.map((q) => (
+              <div key={q.id} style={{ marginBottom: 6 }}>
+                {Number(q.quantity || 0).toLocaleString()} x {q.troop_code} • {String(q.completes_at).replace("T", " ").slice(0, 19)}
+              </div>
+            ))}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function AttackKingdomView() {
+  const [kingdom, setKingdom] = useState("Elixer");
+  const [data, setData] = useState<any>(null);
+  const [reports, setReports] = useState<Array<any>>([]);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [actionMsg, setActionMsg] = useState("");
+  const [attackTarget, setAttackTarget] = useState("");
+  const [sentTroops, setSentTroops] = useState<Record<string, number>>({});
+
+  async function load() {
+    setLoading(true);
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`);
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setData(j);
+      const rr = await fetch(`${API_BASE}/api/war-room/reports/${encodeURIComponent(kingdom)}?limit=12`);
+      const rj = await rr.json();
+      if (rr.ok && rj?.ok) setReports(Array.isArray(rj.items) ? rj.items : []);
+    } catch (e: any) {
+      setError(String(e?.message || e));
+      setData(null);
+      setReports([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const troops = (data?.troops || []) as Array<any>;
+
+  function updateSent(code: string, value: number) {
+    setSentTroops((prev) => ({ ...prev, [code]: Math.max(0, Math.floor(value || 0)) }));
+  }
+
+  async function submitAttack(e: React.FormEvent) {
+    e.preventDefault();
+    setActionMsg("");
+    try {
+      const payload = Object.fromEntries(Object.entries(sentTroops).filter(([, v]) => Number(v || 0) > 0));
+      const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}/attack`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          defenderKingdom: attackTarget,
+          sentTroops: payload,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Attack result: ${j.result} | Ratio ${Number(j.ratio || 0).toFixed(2)} | Land ${Number(j.landTaken || 0).toLocaleString()}`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Attack failed: ${String(e?.message || e)}`);
+    }
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <div style={CARD}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>Attack Kingdom</div>
+          <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={INPUT_STYLE} />
+          <button onClick={() => void load()} style={BTN_STYLE}>
+            Load
+          </button>
+        </div>
+        {loading ? <div style={{ marginTop: 8 }}>Loading...</div> : null}
+        {error ? <div style={{ marginTop: 8, color: "#ffae9a" }}>{error}</div> : null}
+        {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
+      </div>
+
+      <div style={CARD}>
+        <form onSubmit={submitAttack} style={{ display: "grid", gap: 8 }}>
+          <input value={attackTarget} onChange={(e) => setAttackTarget(e.target.value)} placeholder="Defender kingdom" style={{ ...INPUT_STYLE, minWidth: 220 }} />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 8 }}>
+            {troops.map((t) => (
+              <label key={t.troopCode} style={{ display: "grid", gap: 4 }}>
+                <span style={{ fontSize: 12, opacity: 0.85 }}>
+                  {t.troopName} (home {Number(t.home || 0).toLocaleString()})
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={Number(t.home || 0)}
+                  value={Number(sentTroops[t.troopCode] || 0)}
+                  onChange={(e) => updateSent(t.troopCode, Math.min(Number(t.home || 0), Number(e.target.value || 0)))}
+                  style={INPUT_STYLE}
+                />
+              </label>
+            ))}
+          </div>
+          <div>
+            <button type="submit" style={BTN_STYLE}>
+              Launch Attack
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div style={CARD}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>Recent Battles</div>
+        {reports.length === 0 ? <div style={{ opacity: 0.8 }}>No recent reports.</div> : null}
+        {reports.map((r) => (
+          <div key={r.id} style={{ marginBottom: 6 }}>
+            {String(r.created_at).replace("T", " ").slice(0, 19)} • {r.attacker_name} vs {r.defender_name} • {r.result} • Land {Number(r.land_taken || 0).toLocaleString()}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -144,7 +681,11 @@ function App() {
         </aside>
 
         <section style={{ display: "grid", gap: 12 }}>
-          {active.id === "overview" ? <OverviewMock /> : <Placeholder label={active.label} />}
+          {active.id === "overview" ? <OverviewMock /> : null}
+          {active.id === "war-room" ? <WarRoomView /> : null}
+          {active.id === "train-troops" ? <TrainTroopsView /> : null}
+          {active.id === "attack-kingdom" ? <AttackKingdomView /> : null}
+          {active.id !== "overview" && active.id !== "war-room" && active.id !== "train-troops" && active.id !== "attack-kingdom" ? <Placeholder label={active.label} /> : null}
         </section>
       </div>
     </main>

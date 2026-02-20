@@ -70,6 +70,38 @@ async function processTrainQueueTick(): Promise<number> {
   });
 }
 
+async function processTroopReturnsTick(): Promise<number> {
+  return withTx(async (c) => {
+    const due = await c.query(
+      `
+      SELECT id, owner_kingdom_id, troop_code, quantity
+      FROM troop_movements
+      WHERE status = 'out'
+        AND returns_at <= now()
+      ORDER BY returns_at ASC
+      FOR UPDATE SKIP LOCKED
+      LIMIT 500
+      `,
+    );
+
+    if (!due.rowCount) return 0;
+
+    for (const row of due.rows) {
+      await c.query(
+        `UPDATE kingdom_troops
+         SET amount = amount + $3
+         WHERE kingdom_id = $1 AND troop_code = $2`,
+        [row.owner_kingdom_id, row.troop_code, row.quantity],
+      );
+
+      await c.query(`UPDATE troop_movements SET status='returned' WHERE id = $1`, [row.id]);
+      await c.query(`UPDATE kingdoms SET last_tick_at = now() WHERE id = $1`, [row.owner_kingdom_id]);
+    }
+
+    return due.rowCount;
+  });
+}
+
 function nextAlignedDelayMs(nowMs: number, alignSeconds: number): number {
   const step = Math.max(1, alignSeconds) * 1000;
   const next = Math.ceil(nowMs / step) * step;
@@ -80,8 +112,9 @@ async function runTick() {
   try {
     const builds = await processBuildQueueTick();
     const trains = await processTrainQueueTick();
-    if (builds > 0 || trains > 0) {
-      console.log(`[tick] ${new Date().toISOString()} completed builds=${builds}, trainings=${trains}`);
+    const returns = await processTroopReturnsTick();
+    if (builds > 0 || trains > 0 || returns > 0) {
+      console.log(`[tick] ${new Date().toISOString()} completed builds=${builds}, trainings=${trains}, returns=${returns}`);
     }
   } catch (e) {
     console.error("[tick] error", e);

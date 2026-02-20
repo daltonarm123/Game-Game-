@@ -61,6 +61,21 @@ export async function ensureSchemaLite(): Promise<void> {
       CHECK (status IN ('queued','completed','cancelled'))
     );
 
+    CREATE TABLE IF NOT EXISTS troop_movements (
+      id BIGSERIAL PRIMARY KEY,
+      owner_kingdom_id BIGINT NOT NULL,
+      owner_kingdom_name TEXT NOT NULL,
+      target_kingdom_id BIGINT,
+      target_kingdom_name TEXT,
+      troop_code TEXT NOT NULL,
+      quantity INT NOT NULL,
+      departed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      returns_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL DEFAULT 'out',
+      source_attack_report_id BIGINT,
+      CHECK (status IN ('out','returned','cancelled'))
+    );
+
     CREATE TABLE IF NOT EXISTS kingdom_buildings (
       kingdom_id BIGINT NOT NULL,
       building_code TEXT NOT NULL,
@@ -77,5 +92,6 @@ export async function ensureSchemaLite(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS build_queue_due_idx ON build_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS train_queue_due_idx ON train_queue(status, completes_at);
+    CREATE INDEX IF NOT EXISTS troop_movements_due_idx ON troop_movements(status, returns_at);
   `);
 }

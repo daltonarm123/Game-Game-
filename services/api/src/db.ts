@@ -131,10 +131,27 @@ export async function ensureSchema(): Promise<void> {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS troop_movements (
+      id BIGSERIAL PRIMARY KEY,
+      owner_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      owner_kingdom_name TEXT NOT NULL,
+      target_kingdom_id BIGINT REFERENCES kingdoms(id) ON DELETE SET NULL,
+      target_kingdom_name TEXT,
+      troop_code TEXT NOT NULL REFERENCES troop_types(code),
+      quantity INT NOT NULL,
+      departed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      returns_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL DEFAULT 'out',
+      source_attack_report_id BIGINT REFERENCES attack_reports(id) ON DELETE SET NULL,
+      CHECK (status IN ('out','returned','cancelled'))
+    );
+
     CREATE INDEX IF NOT EXISTS build_queue_due_idx ON build_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS train_queue_due_idx ON train_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS attack_reports_defender_idx ON attack_reports(defender_kingdom_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS attack_reports_attacker_idx ON attack_reports(attacker_kingdom_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS troop_movements_due_idx ON troop_movements(status, returns_at);
+    CREATE INDEX IF NOT EXISTS troop_movements_owner_idx ON troop_movements(owner_kingdom_id, status, returns_at DESC);
   `);
 
   for (const b of BUILDINGS) {

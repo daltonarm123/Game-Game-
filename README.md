@@ -57,3 +57,9 @@ Modern, maintained, tick-based kingdom strategy game platform.
 - Build/train queues
 - Attack + spy report pipeline (v1)
 - Playable web shell and mobile shell
+- Dedicated web actions for `Train Troops` and `Attack Kingdom`
+
+## Demo + Funding Prep
+
+- Month-1 demo plan and forward roadmap:
+  - `docs/MONTH1_DEMO_AND_ROADMAP.md`
