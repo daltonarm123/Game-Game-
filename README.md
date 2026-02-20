@@ -68,3 +68,6 @@ Modern, maintained, tick-based kingdom strategy game platform.
 - Local demo env helper scripts:
   - `scripts/start-demo-env.ps1`
   - `scripts/seed-demo-data.ps1`
+  - `scripts/smoke-test-demo.ps1`
+- Demo env quick setup:
+  - `docs/DEMO_ENV_SETUP.md`
