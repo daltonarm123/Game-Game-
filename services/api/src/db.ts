@@ -15,6 +15,14 @@ const BUILDINGS = [
   { code: "stables", name: "Stables", woodCost: 260, stoneCost: 180, baseBuildSeconds: 160 },
 ] as const;
 
+const TROOPS = [
+  { code: "footmen", name: "Footmen", goldCost: 30, foodCost: 20, trainSeconds: 45 },
+  { code: "pikemen", name: "Pikemen", goldCost: 45, foodCost: 35, trainSeconds: 55 },
+  { code: "archers", name: "Archers", goldCost: 50, foodCost: 40, trainSeconds: 60 },
+  { code: "light_cavalry", name: "Light Cavalry", goldCost: 80, foodCost: 70, trainSeconds: 75 },
+  { code: "heavy_cavalry", name: "Heavy Cavalry", goldCost: 120, foodCost: 100, trainSeconds: 90 },
+] as const;
+
 export async function withTx<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
@@ -45,6 +53,7 @@ export async function ensureSchema(): Promise<void> {
       gold BIGINT NOT NULL DEFAULT 50000,
       wood BIGINT NOT NULL DEFAULT 5000,
       stone BIGINT NOT NULL DEFAULT 5000,
+      food BIGINT NOT NULL DEFAULT 50000,
       land BIGINT NOT NULL DEFAULT 1000,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       last_tick_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -58,11 +67,26 @@ export async function ensureSchema(): Promise<void> {
       base_build_seconds INT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS troop_types (
+      code TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      gold_cost INT NOT NULL,
+      food_cost INT NOT NULL,
+      train_seconds INT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS kingdom_buildings (
       kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
       building_code TEXT NOT NULL REFERENCES building_types(code),
       level INT NOT NULL DEFAULT 0,
       PRIMARY KEY (kingdom_id, building_code)
+    );
+
+    CREATE TABLE IF NOT EXISTS kingdom_troops (
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      troop_code TEXT NOT NULL REFERENCES troop_types(code),
+      amount BIGINT NOT NULL DEFAULT 0,
+      PRIMARY KEY (kingdom_id, troop_code)
     );
 
     CREATE TABLE IF NOT EXISTS build_queue (
@@ -77,7 +101,20 @@ export async function ensureSchema(): Promise<void> {
       CHECK (status IN ('queued','completed','cancelled'))
     );
 
+    CREATE TABLE IF NOT EXISTS train_queue (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      troop_code TEXT NOT NULL REFERENCES troop_types(code),
+      quantity INT NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completes_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      completed_at TIMESTAMPTZ,
+      CHECK (status IN ('queued','completed','cancelled'))
+    );
+
     CREATE INDEX IF NOT EXISTS build_queue_due_idx ON build_queue(status, completes_at);
+    CREATE INDEX IF NOT EXISTS train_queue_due_idx ON train_queue(status, completes_at);
   `);
 
   for (const b of BUILDINGS) {
@@ -92,6 +129,21 @@ export async function ensureSchema(): Promise<void> {
           base_build_seconds = EXCLUDED.base_build_seconds;
       `,
       [b.code, b.name, b.woodCost, b.stoneCost, b.baseBuildSeconds],
+    );
+  }
+
+  for (const t of TROOPS) {
+    await pool.query(
+      `
+      INSERT INTO troop_types (code, name, gold_cost, food_cost, train_seconds)
+      VALUES ($1,$2,$3,$4,$5)
+      ON CONFLICT (code) DO UPDATE
+      SET name = EXCLUDED.name,
+          gold_cost = EXCLUDED.gold_cost,
+          food_cost = EXCLUDED.food_cost,
+          train_seconds = EXCLUDED.train_seconds;
+      `,
+      [t.code, t.name, t.goldCost, t.foodCost, t.trainSeconds],
     );
   }
 }

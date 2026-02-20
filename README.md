@@ -27,9 +27,11 @@ Modern, maintained, tick-based kingdom strategy game platform.
 
 - Postgres-backed API bootstrap/schema creation
 - Kingdom registration endpoint
-- Kingdom read endpoint (resources/buildings/queue)
+- Kingdom read endpoint (resources/buildings/troops/queues)
 - Build queue endpoint (cost + timer + enqueue)
-- Tick worker that auto-completes due build queue items
+- Train queue endpoint (cost + timer + enqueue)
+- Tick worker that auto-completes due build/train queue items
+- Tick alignment support for exact 5-minute boundaries (`:00, :05, :10...`)
 
 ## API Endpoints (v1)
 
@@ -39,6 +41,8 @@ Modern, maintained, tick-based kingdom strategy game platform.
 - `GET /api/kingdom/:name`
 - `POST /api/kingdom/:name/build`
   - body: `{ "buildingCode": "farm" }`
+- `POST /api/kingdom/:name/train`
+  - body: `{ "troopCode": "footmen", "quantity": 100 }`
 
 ## First Milestone (Month 1)
 
