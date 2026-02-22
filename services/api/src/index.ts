@@ -393,7 +393,7 @@ app.get("/api/kingdom/:name", async (req, res) => {
 
     const buildings = await pool.query(
       `
-      SELECT kb.building_code, bt.name AS building_name, kb.level, bt.wood_cost, bt.stone_cost, bt.base_build_seconds
+      SELECT kb.building_code, bt.name AS building_name, kb.level, bt.land_cost, bt.wood_cost, bt.stone_cost, bt.base_build_seconds
       FROM kingdom_buildings kb
       JOIN building_types bt ON bt.code = kb.building_code
       WHERE kb.kingdom_id = $1
@@ -468,7 +468,7 @@ app.post("/api/kingdom/:name/build", async (req, res) => {
       const kingdom = k.rows[0];
 
       const bt = await c.query(
-        `SELECT code, name, wood_cost, stone_cost, base_build_seconds FROM building_types WHERE code=$1 LIMIT 1`,
+        `SELECT code, name, land_cost, wood_cost, stone_cost, base_build_seconds FROM building_types WHERE code=$1 LIMIT 1`,
         [buildingCode],
       );
       if (!bt.rowCount) throw new Error("unknown building code");
@@ -476,6 +476,18 @@ app.post("/api/kingdom/:name/build", async (req, res) => {
 
       const kb = await c.query(`SELECT level FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code=$2 LIMIT 1`, [kingdom.id, buildingCode]);
       const currentLevel = Number(kb.rows[0]?.level || 0);
+
+      const landUse = await c.query(
+        `
+        SELECT COALESCE(SUM(kb.level * bt.land_cost), 0) AS used_land
+        FROM kingdom_buildings kb
+        JOIN building_types bt ON bt.code = kb.building_code
+        WHERE kb.kingdom_id = $1
+        `,
+        [kingdom.id],
+      );
+      const usedLand = Number(landUse.rows[0]?.used_land || 0);
+      const availableLand = Number(kingdom.land || 0) - usedLand;
 
       const q = await c.query(
         `SELECT COALESCE(MAX(target_level), $2::int) AS max_target
@@ -487,6 +499,10 @@ app.post("/api/kingdom/:name/build", async (req, res) => {
 
       const woodCost = Number(def.wood_cost) * nextLevel;
       const stoneCost = Number(def.stone_cost) * nextLevel;
+      const landCost = Number(def.land_cost || 0);
+      if (availableLand < landCost) {
+        throw new Error(`not enough land (need ${landCost}, available ${availableLand})`);
+      }
       if (Number(kingdom.wood) < woodCost || Number(kingdom.stone) < stoneCost) {
         throw new Error(`not enough resources (need wood ${woodCost}, stone ${stoneCost})`);
       }
@@ -501,7 +517,7 @@ app.post("/api/kingdom/:name/build", async (req, res) => {
         [kingdom.id, buildingCode, nextLevel, seconds],
       );
 
-      return { queue: ins.rows[0], costs: { wood: woodCost, stone: stoneCost } };
+      return { queue: ins.rows[0], costs: { land: landCost, wood: woodCost, stone: stoneCost } };
     });
 
     return res.json({ ok: true, ...out });

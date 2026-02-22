@@ -246,6 +246,11 @@ function BuildingsView() {
   const buildings = (details?.buildings || []) as Array<any>;
   const buildQueue = (details?.buildQueue || []).filter((x: any) => x.status === "queued") as Array<any>;
   const econ = details?.economy?.perHour || {};
+  const buildingMap = useMemo(() => {
+    const m: Record<string, any> = {};
+    for (const b of buildings) m[String(b.building_code)] = b;
+    return m;
+  }, [buildings]);
 
   const queueCounts = useMemo(() => {
     const m: Record<string, number> = {};
@@ -255,6 +260,23 @@ function BuildingsView() {
     }
     return m;
   }, [buildQueue]);
+
+  const usedLand = useMemo(() => {
+    let used = 0;
+    for (const b of buildings) {
+      used += Number(b.level || 0) * Number(b.land_cost || 0);
+    }
+    return used;
+  }, [buildings]);
+  const queuedLand = useMemo(() => {
+    let used = 0;
+    for (const q of buildQueue) {
+      const b = buildingMap[String(q.building_code)];
+      used += Number(b?.land_cost || 0);
+    }
+    return used;
+  }, [buildQueue, buildingMap]);
+  const availableLand = Math.max(0, Number(k?.land || 0) - usedLand - queuedLand);
 
   const buildOptions = useMemo(() => {
     if (!Array.isArray(buildings) || buildings.length === 0) return ["farm", "lumberyard", "quarry", "barracks", "stables", "castles"];
@@ -303,7 +325,7 @@ function BuildingsView() {
               Buildings - {k ? k.name : kingdom}
             </div>
             <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 18, fontWeight: 700 }}>
-              Rank #{war?.kingdom?.rank || "N/A"} • Land: {Number(k?.land || 0).toLocaleString()} Acres
+              Rank #{war?.kingdom?.rank || "N/A"} • Land: {availableLand.toLocaleString()} / {Number(k?.land || 0).toLocaleString()} Acres
             </div>
             <div style={{ marginTop: 4, color: TEXT_MUTED, fontSize: 17, fontWeight: 700 }}>
               Stone: {Number(k?.stone || 0).toLocaleString()} ({Number(econ.stone || 0) >= 0 ? "+" : ""}{Number(econ.stone || 0).toLocaleString()}/h) • Wood: {Number(k?.wood || 0).toLocaleString()} ({Number(econ.wood || 0) >= 0 ? "+" : ""}{Number(econ.wood || 0).toLocaleString()}/h)
@@ -380,6 +402,12 @@ function BuildingsView() {
             {buildBusy ? "Queueing..." : "Queue Build"}
           </button>
         </form>
+        {buildingMap[buildCode] ? (
+          <div style={{ marginTop: 8, color: TEXT_MUTED }}>
+            {buildingMap[buildCode].building_name || buildCode} • Time: {Math.floor(Number(buildingMap[buildCode].base_build_seconds || 0) / 3600)}h •
+            Cost: Land {Number(buildingMap[buildCode].land_cost || 0)}, Stone {Number(buildingMap[buildCode].stone_cost || 0)}, Wood {Number(buildingMap[buildCode].wood_cost || 0)}
+          </div>
+        ) : null}
       </div>
 
       <div style={CARD}>

@@ -8,12 +8,20 @@ const DATABASE_URL = process.env.DATABASE_URL || "postgresql://gamegame:gamegame
 export const pool = new Pool({ connectionString: DATABASE_URL });
 
 const BUILDINGS = [
-  { code: "farm", name: "Grain Farm", woodCost: 120, stoneCost: 80, baseBuildSeconds: 90 },
-  { code: "lumberyard", name: "Lumber Yard", woodCost: 140, stoneCost: 90, baseBuildSeconds: 100 },
-  { code: "quarry", name: "Stone Quarry", woodCost: 100, stoneCost: 140, baseBuildSeconds: 110 },
-  { code: "barracks", name: "Barracks", woodCost: 220, stoneCost: 220, baseBuildSeconds: 150 },
-  { code: "stables", name: "Stables", woodCost: 260, stoneCost: 180, baseBuildSeconds: 160 },
-  { code: "castles", name: "Castles", woodCost: 900, stoneCost: 1400, baseBuildSeconds: 360 },
+  { code: "archery_ranges", name: "Archery Ranges", landCost: 5, woodCost: 20, stoneCost: 5, baseBuildSeconds: 4 * 3600 },
+  { code: "barns", name: "Barns", landCost: 2, woodCost: 15, stoneCost: 15, baseBuildSeconds: 2 * 3600 },
+  { code: "barracks", name: "Barracks", landCost: 5, woodCost: 20, stoneCost: 20, baseBuildSeconds: 6 * 3600 },
+  { code: "castles", name: "Castles", landCost: 40, woodCost: 800, stoneCost: 1500, baseBuildSeconds: 7 * 24 * 3600 },
+  { code: "embassies", name: "Embassies", landCost: 2, woodCost: 50, stoneCost: 50, baseBuildSeconds: 4 * 3600 },
+  { code: "farm", name: "Grain Farms", landCost: 10, woodCost: 20, stoneCost: 10, baseBuildSeconds: 5 * 3600 },
+  { code: "guildhalls", name: "Guildhalls", landCost: 2, woodCost: 5, stoneCost: 5, baseBuildSeconds: 10 * 3600 },
+  { code: "horse_farms", name: "Horse Farms", landCost: 10, woodCost: 20, stoneCost: 10, baseBuildSeconds: 5 * 3600 },
+  { code: "houses", name: "Houses", landCost: 1, woodCost: 10, stoneCost: 10, baseBuildSeconds: 2 * 3600 },
+  { code: "lumberyard", name: "Lumber Yards", landCost: 3, woodCost: 10, stoneCost: 5, baseBuildSeconds: 2 * 3600 },
+  { code: "markets", name: "Markets", landCost: 3, woodCost: 25, stoneCost: 10, baseBuildSeconds: 2 * 3600 },
+  { code: "quarry", name: "Stone Quarries", landCost: 3, woodCost: 10, stoneCost: 5, baseBuildSeconds: 2 * 3600 },
+  { code: "stables", name: "Stables", landCost: 5, woodCost: 20, stoneCost: 20, baseBuildSeconds: 6 * 3600 },
+  { code: "temples", name: "Temples", landCost: 2, woodCost: 5, stoneCost: 15, baseBuildSeconds: 10 * 3600 },
 ] as const;
 
 const TROOPS = [
@@ -63,6 +71,7 @@ export async function ensureSchema(): Promise<void> {
     CREATE TABLE IF NOT EXISTS building_types (
       code TEXT PRIMARY KEY,
       name TEXT NOT NULL,
+      land_cost INT NOT NULL DEFAULT 0,
       wood_cost INT NOT NULL,
       stone_cost INT NOT NULL,
       base_build_seconds INT NOT NULL
@@ -154,18 +163,24 @@ export async function ensureSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS troop_movements_owner_idx ON troop_movements(owner_kingdom_id, status, returns_at DESC);
   `);
 
+  await pool.query(`
+    ALTER TABLE building_types
+    ADD COLUMN IF NOT EXISTS land_cost INT NOT NULL DEFAULT 0
+  `);
+
   for (const b of BUILDINGS) {
     await pool.query(
       `
-      INSERT INTO building_types (code, name, wood_cost, stone_cost, base_build_seconds)
-      VALUES ($1,$2,$3,$4,$5)
+      INSERT INTO building_types (code, name, land_cost, wood_cost, stone_cost, base_build_seconds)
+      VALUES ($1,$2,$3,$4,$5,$6)
       ON CONFLICT (code) DO UPDATE
       SET name = EXCLUDED.name,
+          land_cost = EXCLUDED.land_cost,
           wood_cost = EXCLUDED.wood_cost,
           stone_cost = EXCLUDED.stone_cost,
           base_build_seconds = EXCLUDED.base_build_seconds;
       `,
-      [b.code, b.name, b.woodCost, b.stoneCost, b.baseBuildSeconds],
+      [b.code, b.name, b.landCost, b.woodCost, b.stoneCost, b.baseBuildSeconds],
     );
   }
 
