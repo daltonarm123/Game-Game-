@@ -34,6 +34,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\seed-demo-data.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\reset-demo.ps1
 ```
 
+## Full dev kingdom seed (Elixer)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\seed-elixer-dev-kingdom.ps1
+```
+
 ## Run smoke test
 
 ```powershell

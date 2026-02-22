@@ -58,6 +58,22 @@ const TROOP_STATS: Record<string, { att: number; def: number }> = {
   heavy_cavalry: { att: 7, def: 5 },
 };
 
+const ECON_BUILDING_HOURLY = {
+  farmFood: 120,
+  lumberWood: 80,
+  quarryStone: 80,
+  baseGoldPerLand: 3,
+  baseFoodPerLand: 2,
+};
+
+const TROOP_UPKEEP_HOURLY: Record<string, { food: number; gold: number }> = {
+  footmen: { food: 2, gold: 3 },
+  pikemen: { food: 3, gold: 4 },
+  archers: { food: 3, gold: 4 },
+  light_cavalry: { food: 4, gold: 6 },
+  heavy_cavalry: { food: 5, gold: 8 },
+};
+
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
@@ -119,6 +135,55 @@ function applyLosses(units: Record<string, number>, pct: number, scope?: Record<
   return { losses, remaining: result };
 }
 
+function toLevelMap(rows: any[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const r of rows) out[String(r.building_code)] = Number(r.level || 0);
+  return out;
+}
+
+function toTroopMap(rows: any[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const r of rows) out[String(r.troop_code)] = Number(r.amount || 0);
+  return out;
+}
+
+function computeEconomyHourly(land: number, buildingLevels: Record<string, number>, troopAmounts: Record<string, number>) {
+  const farm = Number(buildingLevels.farm || 0);
+  const lumber = Number(buildingLevels.lumberyard || 0);
+  const quarry = Number(buildingLevels.quarry || 0);
+
+  const foodIncome = land * ECON_BUILDING_HOURLY.baseFoodPerLand + farm * ECON_BUILDING_HOURLY.farmFood;
+  const goldIncome = land * ECON_BUILDING_HOURLY.baseGoldPerLand;
+  const woodIncome = lumber * ECON_BUILDING_HOURLY.lumberWood;
+  const stoneIncome = quarry * ECON_BUILDING_HOURLY.quarryStone;
+
+  let foodUpkeep = 0;
+  let goldUpkeep = 0;
+  for (const [code, amount] of Object.entries(troopAmounts)) {
+    const u = TROOP_UPKEEP_HOURLY[code];
+    if (!u) continue;
+    foodUpkeep += Number(amount) * u.food;
+    goldUpkeep += Number(amount) * u.gold;
+  }
+
+  return {
+    perHour: {
+      food: foodIncome - foodUpkeep,
+      gold: goldIncome - goldUpkeep,
+      wood: woodIncome,
+      stone: stoneIncome,
+    },
+    raw: {
+      foodIncome,
+      foodUpkeep,
+      goldIncome,
+      goldUpkeep,
+      woodIncome,
+      stoneIncome,
+    },
+  };
+}
+
 async function seedKingdom(c: PoolClient, opts: {
   userId: string;
   username: string;
@@ -128,6 +193,8 @@ async function seedKingdom(c: PoolClient, opts: {
   wood: number;
   stone: number;
   land: number;
+  buildingLevels?: Record<string, number>;
+  troopAmounts?: Record<string, number>;
 }) {
   await c.query(`INSERT INTO app_users(id, username) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET username=EXCLUDED.username`, [
     opts.userId,
@@ -152,6 +219,22 @@ async function seedKingdom(c: PoolClient, opts: {
      ON CONFLICT (kingdom_id, troop_code) DO NOTHING`,
     [kingdom.id],
   );
+  if (opts.buildingLevels && Object.keys(opts.buildingLevels).length > 0) {
+    for (const [code, level] of Object.entries(opts.buildingLevels)) {
+      await c.query(
+        `UPDATE kingdom_buildings SET level=$3 WHERE kingdom_id=$1 AND building_code=$2`,
+        [kingdom.id, code, Math.max(0, Math.floor(Number(level || 0)))],
+      );
+    }
+  }
+  if (opts.troopAmounts && Object.keys(opts.troopAmounts).length > 0) {
+    for (const [code, amount] of Object.entries(opts.troopAmounts)) {
+      await c.query(
+        `UPDATE kingdom_troops SET amount=$3 WHERE kingdom_id=$1 AND troop_code=$2`,
+        [kingdom.id, code, Math.max(0, Math.floor(Number(amount || 0)))],
+      );
+    }
+  }
   return kingdom;
 }
 
@@ -177,22 +260,52 @@ app.post("/api/dev/demo-reset", async (req, res) => {
         userId: body.attackerUserId,
         username: body.attackerUsername,
         kingdomName: body.attackerName,
-        gold: 200000,
-        food: 200000,
-        wood: 50000,
-        stone: 50000,
-        land: 1000,
+        gold: 15_000_000,
+        food: 30_000_000,
+        wood: 2_000_000,
+        stone: 2_000_000,
+        land: 80_000,
+        buildingLevels: {
+          farm: 2200,
+          lumberyard: 1800,
+          quarry: 1800,
+          barracks: 300,
+          stables: 1200,
+          castles: 250,
+        },
+        troopAmounts: {
+          footmen: 45_000,
+          pikemen: 32_000,
+          archers: 22_000,
+          light_cavalry: 38_000,
+          heavy_cavalry: 27_000,
+        },
       });
 
       const defender = await seedKingdom(c, {
         userId: body.defenderUserId,
         username: body.defenderUsername,
         kingdomName: body.defenderName,
-        gold: 200000,
-        food: 200000,
-        wood: 50000,
-        stone: 50000,
-        land: 1000,
+        gold: 800000,
+        food: 900000,
+        wood: 150000,
+        stone: 150000,
+        land: 25000,
+        buildingLevels: {
+          farm: 700,
+          lumberyard: 550,
+          quarry: 550,
+          barracks: 120,
+          stables: 350,
+          castles: 80,
+        },
+        troopAmounts: {
+          footmen: 11_000,
+          pikemen: 8_000,
+          archers: 6_500,
+          light_cavalry: 9_000,
+          heavy_cavalry: 7_000,
+        },
       });
 
       return { attacker, defender };
@@ -315,7 +428,19 @@ app.get("/api/kingdom/:name", async (req, res) => {
       [kingdom.id],
     );
 
-    return res.json({ ok: true, kingdom, buildings: buildings.rows, troops: troops.rows, buildQueue: buildQueue.rows, trainQueue: trainQueue.rows });
+    const buildingLevels = toLevelMap(buildings.rows);
+    const troopAmounts = toTroopMap(troops.rows);
+    const economy = computeEconomyHourly(Number(kingdom.land || 0), buildingLevels, troopAmounts);
+
+    return res.json({
+      ok: true,
+      kingdom,
+      buildings: buildings.rows,
+      troops: troops.rows,
+      buildQueue: buildQueue.rows,
+      trainQueue: trainQueue.rows,
+      economy,
+    });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }

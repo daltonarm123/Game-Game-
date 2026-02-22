@@ -6,6 +6,23 @@ dotenv.config();
 const LOCAL_DEMO_FAST = String(process.env.LOCAL_DEMO_FAST || "").trim() === "1";
 const TICK_INTERVAL_SECONDS = Number(process.env.TICK_INTERVAL_SECONDS || (LOCAL_DEMO_FAST ? 5 : 300));
 const TICK_ALIGN_SECONDS = Number(process.env.TICK_ALIGN_SECONDS || (LOCAL_DEMO_FAST ? 5 : 300));
+const TICK_HOURS = Math.max(1, TICK_INTERVAL_SECONDS) / 3600;
+
+const ECON_BUILDING_HOURLY = {
+  farmFood: 120,
+  lumberWood: 80,
+  quarryStone: 80,
+  baseGoldPerLand: 3,
+  baseFoodPerLand: 2,
+};
+
+const TROOP_UPKEEP_HOURLY: Record<string, { food: number; gold: number }> = {
+  footmen: { food: 2, gold: 3 },
+  pikemen: { food: 3, gold: 4 },
+  archers: { food: 3, gold: 4 },
+  light_cavalry: { food: 4, gold: 6 },
+  heavy_cavalry: { food: 5, gold: 8 },
+};
 
 async function processBuildQueueTick(): Promise<number> {
   return withTx(async (c) => {
@@ -103,6 +120,78 @@ async function processTroopReturnsTick(): Promise<number> {
   });
 }
 
+async function processEconomyTick(): Promise<number> {
+  return withTx(async (c) => {
+    const kingdoms = await c.query(`SELECT id, land, gold, food, wood, stone FROM kingdoms ORDER BY id ASC`);
+    if (!kingdoms.rowCount) return 0;
+
+    let updated = 0;
+    for (const k of kingdoms.rows) {
+      const b = await c.query(
+        `
+        SELECT
+          COALESCE(MAX(CASE WHEN building_code='farm' THEN level END),0) AS farm,
+          COALESCE(MAX(CASE WHEN building_code='lumberyard' THEN level END),0) AS lumberyard,
+          COALESCE(MAX(CASE WHEN building_code='quarry' THEN level END),0) AS quarry
+        FROM kingdom_buildings
+        WHERE kingdom_id = $1
+        `,
+        [k.id],
+      );
+      const t = await c.query(
+        `
+        SELECT troop_code, amount
+        FROM kingdom_troops
+        WHERE kingdom_id = $1
+        `,
+        [k.id],
+      );
+
+      const farm = Number(b.rows[0]?.farm || 0);
+      const lumber = Number(b.rows[0]?.lumberyard || 0);
+      const quarry = Number(b.rows[0]?.quarry || 0);
+
+      const foodIncomePerHour = Number(k.land || 0) * ECON_BUILDING_HOURLY.baseFoodPerLand + farm * ECON_BUILDING_HOURLY.farmFood;
+      const goldIncomePerHour = Number(k.land || 0) * ECON_BUILDING_HOURLY.baseGoldPerLand;
+      const woodIncomePerHour = lumber * ECON_BUILDING_HOURLY.lumberWood;
+      const stoneIncomePerHour = quarry * ECON_BUILDING_HOURLY.quarryStone;
+
+      let foodUpkeepPerHour = 0;
+      let goldUpkeepPerHour = 0;
+      for (const row of t.rows) {
+        const troopCode = String(row.troop_code);
+        const amount = Number(row.amount || 0);
+        const upkeep = TROOP_UPKEEP_HOURLY[troopCode];
+        if (!upkeep) continue;
+        foodUpkeepPerHour += amount * upkeep.food;
+        goldUpkeepPerHour += amount * upkeep.gold;
+      }
+
+      const foodDelta = Math.floor((foodIncomePerHour - foodUpkeepPerHour) * TICK_HOURS);
+      const goldDelta = Math.floor((goldIncomePerHour - goldUpkeepPerHour) * TICK_HOURS);
+      const woodDelta = Math.floor(woodIncomePerHour * TICK_HOURS);
+      const stoneDelta = Math.floor(stoneIncomePerHour * TICK_HOURS);
+
+      await c.query(
+        `
+        UPDATE kingdoms
+        SET
+          food = GREATEST(0, food + $2),
+          gold = GREATEST(0, gold + $3),
+          wood = GREATEST(0, wood + $4),
+          stone = GREATEST(0, stone + $5),
+          last_tick_at = now()
+        WHERE id = $1
+        `,
+        [k.id, foodDelta, goldDelta, woodDelta, stoneDelta],
+      );
+      updated += 1;
+    }
+
+    return updated;
+  });
+}
+
 function nextAlignedDelayMs(nowMs: number, alignSeconds: number): number {
   const step = Math.max(1, alignSeconds) * 1000;
   const next = Math.ceil(nowMs / step) * step;
@@ -114,8 +203,11 @@ async function runTick() {
     const builds = await processBuildQueueTick();
     const trains = await processTrainQueueTick();
     const returns = await processTroopReturnsTick();
-    if (builds > 0 || trains > 0 || returns > 0) {
-      console.log(`[tick] ${new Date().toISOString()} completed builds=${builds}, trainings=${trains}, returns=${returns}`);
+    const economies = await processEconomyTick();
+    if (builds > 0 || trains > 0 || returns > 0 || economies > 0) {
+      console.log(
+        `[tick] ${new Date().toISOString()} completed builds=${builds}, trainings=${trains}, returns=${returns}, economy=${economies}`,
+      );
     }
   } catch (e) {
     console.error("[tick] error", e);

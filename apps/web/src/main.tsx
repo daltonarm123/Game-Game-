@@ -110,9 +110,11 @@ function OverviewView() {
   }, []);
 
   const k = details?.kingdom;
+  const econ = details?.economy?.perHour || {};
   const bq = (details?.buildQueue || []).filter((x: any) => x.status === "queued").slice(0, 8);
   const tq = (details?.trainQueue || []).filter((x: any) => x.status === "queued").slice(0, 8);
   const populationTotal = Number(war?.kingdom?.populationHome || 0) + Number(war?.kingdom?.populationTrain || 0) + Number(war?.kingdom?.populationAway || 0);
+  const fmtRate = (v: number) => `${v >= 0 ? "+" : ""}${Number(v || 0).toLocaleString()}/h`;
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
@@ -152,10 +154,26 @@ function OverviewView() {
       <div style={CARD}>
         <div style={{ fontWeight: 800, fontSize: 24, color: "#fff7ec", marginBottom: 12 }}>Resources</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8 }}>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>Food: {Number(k?.food || 0).toLocaleString()}</div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>Gold: {Number(k?.gold || 0).toLocaleString()}</div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>Stone: {Number(k?.stone || 0).toLocaleString()}</div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>Wood: {Number(k?.wood || 0).toLocaleString()}</div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>
+            Food: {Number(k?.food || 0).toLocaleString()}{" "}
+            <span style={{ color: Number(econ.food || 0) >= 0 ? "#9ddb8f" : "#ffab9c", fontSize: 18 }}>
+              ({fmtRate(Number(econ.food || 0))})
+            </span>
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>
+            Gold: {Number(k?.gold || 0).toLocaleString()}{" "}
+            <span style={{ color: Number(econ.gold || 0) >= 0 ? "#9ddb8f" : "#ffab9c", fontSize: 18 }}>
+              ({fmtRate(Number(econ.gold || 0))})
+            </span>
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>
+            Stone: {Number(k?.stone || 0).toLocaleString()}{" "}
+            <span style={{ color: "#9ddb8f", fontSize: 18 }}>({fmtRate(Number(econ.stone || 0))})</span>
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>
+            Wood: {Number(k?.wood || 0).toLocaleString()}{" "}
+            <span style={{ color: "#9ddb8f", fontSize: 18 }}>({fmtRate(Number(econ.wood || 0))})</span>
+          </div>
         </div>
       </div>
 
