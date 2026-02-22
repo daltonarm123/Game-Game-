@@ -67,8 +67,11 @@ Modern, maintained, tick-based kingdom strategy game platform.
   - `docs/INVESTOR_DEMO_SCRIPT.md`
 - Local demo env helper scripts:
   - `scripts/start-demo-env.ps1`
+  - `scripts/reset-demo.ps1`
   - `scripts/seed-demo-data.ps1`
   - `scripts/smoke-test-demo.ps1`
 - Demo env quick setup:
   - `docs/DEMO_ENV_SETUP.md`
   - includes automatic fast local mode for quick training/attack demos
+- Fallback recording checklist:
+  - `docs/FALLBACK_VIDEO_SHOTLIST.md`

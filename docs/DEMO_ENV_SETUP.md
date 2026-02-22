@@ -28,6 +28,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-demo-env.ps1 -SkipInfra
 powershell -ExecutionPolicy Bypass -File .\scripts\seed-demo-data.ps1
 ```
 
+## One-click reset (before each meeting)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\reset-demo.ps1
+```
+
 ## Run smoke test
 
 ```powershell

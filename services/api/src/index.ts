@@ -1,5 +1,6 @@
 ﻿import dotenv from "dotenv";
 import express from "express";
+import type { PoolClient } from "pg";
 import { z } from "zod";
 import { ensureSchema, pool, withTx } from "./db.js";
 
@@ -38,6 +39,15 @@ const attackBody = z.object({
   sentTroops: z.record(z.string(), z.number().int().min(0)).refine((v) => Object.values(v).some((n) => n > 0), {
     message: "At least one troop amount must be > 0",
   }),
+});
+
+const demoResetBody = z.object({
+  attackerName: z.string().min(2).optional().default("Elixer"),
+  defenderName: z.string().min(2).optional().default("Galileo"),
+  attackerUserId: z.string().min(1).optional().default("u1"),
+  defenderUserId: z.string().min(1).optional().default("u2"),
+  attackerUsername: z.string().min(1).optional().default("envy90"),
+  defenderUsername: z.string().min(1).optional().default("zoo"),
 });
 
 const TROOP_STATS: Record<string, { att: number; def: number }> = {
@@ -109,12 +119,88 @@ function applyLosses(units: Record<string, number>, pct: number, scope?: Record<
   return { losses, remaining: result };
 }
 
+async function seedKingdom(c: PoolClient, opts: {
+  userId: string;
+  username: string;
+  kingdomName: string;
+  gold: number;
+  food: number;
+  wood: number;
+  stone: number;
+  land: number;
+}) {
+  await c.query(`INSERT INTO app_users(id, username) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET username=EXCLUDED.username`, [
+    opts.userId,
+    opts.username,
+  ]);
+  const k = await c.query(
+    `INSERT INTO kingdoms(user_id, name, gold, food, wood, stone, land)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     RETURNING id, name`,
+    [opts.userId, opts.kingdomName, opts.gold, opts.food, opts.wood, opts.stone, opts.land],
+  );
+  const kingdom = k.rows[0];
+  await c.query(
+    `INSERT INTO kingdom_buildings(kingdom_id, building_code, level)
+     SELECT $1::bigint, code, 0 FROM building_types
+     ON CONFLICT (kingdom_id, building_code) DO NOTHING`,
+    [kingdom.id],
+  );
+  await c.query(
+    `INSERT INTO kingdom_troops(kingdom_id, troop_code, amount)
+     SELECT $1::bigint, code, 0 FROM troop_types
+     ON CONFLICT (kingdom_id, troop_code) DO NOTHING`,
+    [kingdom.id],
+  );
+  return kingdom;
+}
+
 app.get("/healthz", async (_req, res) => {
   try {
     await pool.query("SELECT 1");
     res.json({ ok: true, service: "api", db: "up", ts: new Date().toISOString() });
   } catch (e: any) {
     res.status(500).json({ ok: false, service: "api", db: "down", error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/dev/demo-reset", async (req, res) => {
+  const parsed = demoResetBody.safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const body = parsed.data;
+
+  try {
+    const out = await withTx(async (c) => {
+      await c.query(`TRUNCATE troop_movements, attack_reports, train_queue, build_queue, kingdom_troops, kingdom_buildings, kingdoms, app_users RESTART IDENTITY CASCADE`);
+
+      const attacker = await seedKingdom(c, {
+        userId: body.attackerUserId,
+        username: body.attackerUsername,
+        kingdomName: body.attackerName,
+        gold: 200000,
+        food: 200000,
+        wood: 50000,
+        stone: 50000,
+        land: 1000,
+      });
+
+      const defender = await seedKingdom(c, {
+        userId: body.defenderUserId,
+        username: body.defenderUsername,
+        kingdomName: body.defenderName,
+        gold: 200000,
+        food: 200000,
+        wood: 50000,
+        stone: 50000,
+        land: 1000,
+      });
+
+      return { attacker, defender };
+    });
+
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 

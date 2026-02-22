@@ -42,6 +42,9 @@ const CARD: React.CSSProperties = {
 };
 
 const API_BASE = (window as any).__GG_API_BASE || "http://localhost:8080";
+const BUILD_SHA = (import.meta as any).env?.VITE_GIT_SHA || "dev";
+const BUILD_MODE = (import.meta as any).env?.MODE || "development";
+const FAST_FLAG = (import.meta as any).env?.VITE_LOCAL_DEMO_FAST || "unknown";
 const INPUT_STYLE: React.CSSProperties = {
   padding: "10px 12px",
   borderRadius: 8,
@@ -64,7 +67,13 @@ const BTN_STYLE: React.CSSProperties = {
   fontFamily: FONT_BODY,
 };
 
-function OverviewMock() {
+function OverviewView() {
+  const [kingdom, setKingdom] = useState("Elixer");
+  const [details, setDetails] = useState<any>(null);
+  const [war, setWar] = useState<any>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
   const metricCard = (label: string, value: string) => (
     <div style={CARD}>
       <div style={{ fontSize: 12, color: TEXT_MUTED, textTransform: "uppercase", letterSpacing: 0.7 }}>{label}</div>
@@ -72,34 +81,105 @@ function OverviewMock() {
     </div>
   );
 
+  async function load() {
+    setLoading(true);
+    setError("");
+    try {
+      const [kRes, wRes] = await Promise.all([
+        fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}`),
+        fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`),
+      ]);
+      const kJson = await kRes.json();
+      const wJson = await wRes.json();
+      if (!kRes.ok || !kJson?.ok) throw new Error(kJson?.error || `Kingdom HTTP ${kRes.status}`);
+      if (!wRes.ok || !wJson?.ok) throw new Error(wJson?.error || `War Room HTTP ${wRes.status}`);
+      setDetails(kJson);
+      setWar(wJson);
+    } catch (e: any) {
+      setDetails(null);
+      setWar(null);
+      setError(String(e?.message || e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const k = details?.kingdom;
+  const bq = (details?.buildQueue || []).filter((x: any) => x.status === "queued").slice(0, 8);
+  const tq = (details?.trainQueue || []).filter((x: any) => x.status === "queued").slice(0, 8);
+  const populationTotal = Number(war?.kingdom?.populationHome || 0) + Number(war?.kingdom?.populationTrain || 0) + Number(war?.kingdom?.populationAway || 0);
+
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <div style={CARD}>
-        <div style={{ fontSize: 38, fontWeight: 800, color: "#fff7ec", lineHeight: 1.05, fontFamily: FONT_DISPLAY }}>Overview - [KG] Elixer</div>
-        <div style={{ color: TEXT_MUTED, marginTop: 8, fontSize: 18, fontWeight: 700 }}>Rank #13 / Duke • Religion: Nastfuru • Spring season</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 38, fontWeight: 800, color: "#fff7ec", lineHeight: 1.05, fontFamily: FONT_DISPLAY }}>
+              Overview - {k ? k.name : kingdom}
+            </div>
+            <div style={{ color: TEXT_MUTED, marginTop: 8, fontSize: 18, fontWeight: 700 }}>
+              Rank #{war?.kingdom?.rank || "N/A"} • Networth {Math.floor(Number(war?.kingdom?.networth || 0)).toLocaleString()}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={INPUT_STYLE} />
+            <button onClick={() => void load()} style={BTN_STYLE}>
+              Load
+            </button>
+          </div>
+        </div>
+        {loading ? <div style={{ marginTop: 10, color: TEXT_MUTED }}>Loading overview...</div> : null}
+        {error ? (
+          <div style={{ marginTop: 10, color: "#ffae9a", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span>{error}</span>
+            <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
+          </div>
+        ) : null}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
-        {metricCard("Networth", "39,049")}
-        {metricCard("Land", "43,459 / 43,460")}
-        {metricCard("Population", "280,233 / 409,865")}
-        {metricCard("Tax Rate", "24%")}
+        {metricCard("Networth", Math.floor(Number(war?.kingdom?.networth || 0)).toLocaleString())}
+        {metricCard("Land", `${Number(k?.land || 0).toLocaleString()}`)}
+        {metricCard("Population", `${Number(war?.kingdom?.populationHome || 0).toLocaleString()} / ${populationTotal.toLocaleString()}`)}
+        {metricCard("Gold", `${Number(k?.gold || 0).toLocaleString()}`)}
       </div>
 
       <div style={CARD}>
-        <div style={{ fontWeight: 800, fontSize: 24, color: "#fff7ec", marginBottom: 12 }}>Resources (example layout)</div>
+        <div style={{ fontWeight: 800, fontSize: 24, color: "#fff7ec", marginBottom: 12 }}>Resources</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8 }}>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>Food: 747,550 / 10,211,752 <span style={{ color: "#9ddb8f" }}>(+901,296/h)</span></div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>Gold: 117,267 / 4,822,440 <span style={{ color: "#9ddb8f" }}>(+145,500/h)</span></div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>Stone: 30,359 / 328,755 <span style={{ color: "#ffab9c" }}>(-144/h)</span></div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>Wood: 34,514 / 357,918 <span style={{ color: "#9ddb8f" }}>(+132/h)</span></div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>Food: {Number(k?.food || 0).toLocaleString()}</div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>Gold: {Number(k?.gold || 0).toLocaleString()}</div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>Stone: {Number(k?.stone || 0).toLocaleString()}</div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>Wood: {Number(k?.wood || 0).toLocaleString()}</div>
         </div>
       </div>
 
-      <div style={CARD}>
+      <div style={{ ...CARD, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
         <div style={{ fontWeight: 800, fontSize: 24, color: "#fff7ec", marginBottom: 10 }}>Queues</div>
-        <div style={{ fontSize: 22, fontWeight: 700 }}>Training: 6,000 x Pikemen • 03:10:14</div>
-        <div style={{ fontSize: 22, fontWeight: 700, marginTop: 6 }}>Building: 300 x Stone Quarries • 01:03:59</div>
+        <div style={{ fontWeight: 800, fontSize: 20, color: "#fff7ec" }}> </div>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Training</div>
+          {tq.length === 0 ? <div style={{ color: TEXT_MUTED }}>No active training queue.</div> : null}
+          {tq.map((q: any) => (
+            <div key={`tq-${q.id}`} style={{ marginBottom: 6, fontSize: 16 }}>
+              {Number(q.quantity || 0).toLocaleString()} x {q.troop_code} • {String(q.completes_at).replace("T", " ").slice(0, 19)}
+            </div>
+          ))}
+        </div>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Building</div>
+          {bq.length === 0 ? <div style={{ color: TEXT_MUTED }}>No active building queue.</div> : null}
+          {bq.map((q: any) => (
+            <div key={`bq-${q.id}`} style={{ marginBottom: 6, fontSize: 16 }}>
+              {q.building_code} lvl {q.target_level} • {String(q.completes_at).replace("T", " ").slice(0, 19)}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -242,7 +322,12 @@ function WarRoomView() {
           </button>
         </div>
         {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading...</div> : null}
-        {error ? <div style={{ marginTop: 8, color: "#ffae9a" }}>{error}</div> : null}
+        {error ? (
+          <div style={{ marginTop: 8, color: "#ffae9a", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span>{error}</span>
+            <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
+          </div>
+        ) : null}
         {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
       </div>
 
@@ -444,7 +529,12 @@ function TrainTroopsView() {
           </button>
         </div>
         {loading ? <div style={{ marginTop: 8 }}>Loading...</div> : null}
-        {error ? <div style={{ marginTop: 8, color: "#ffae9a" }}>{error}</div> : null}
+        {error ? (
+          <div style={{ marginTop: 8, color: "#ffae9a", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span>{error}</span>
+            <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
+          </div>
+        ) : null}
         {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
       </div>
 
@@ -588,7 +678,12 @@ function AttackKingdomView() {
           </button>
         </div>
         {loading ? <div style={{ marginTop: 8 }}>Loading...</div> : null}
-        {error ? <div style={{ marginTop: 8, color: "#ffae9a" }}>{error}</div> : null}
+        {error ? (
+          <div style={{ marginTop: 8, color: "#ffae9a", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span>{error}</span>
+            <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
+          </div>
+        ) : null}
         {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
       </div>
 
@@ -755,13 +850,31 @@ function App() {
         </aside>
 
         <section style={{ display: "grid", gap: 12 }}>
-          {active.id === "overview" ? <OverviewMock /> : null}
+          {active.id === "overview" ? <OverviewView /> : null}
           {active.id === "war-room" ? <WarRoomView /> : null}
           {active.id === "train-troops" ? <TrainTroopsView /> : null}
           {active.id === "attack-kingdom" ? <AttackKingdomView /> : null}
           {active.id !== "overview" && active.id !== "war-room" && active.id !== "train-troops" && active.id !== "attack-kingdom" ? <Placeholder label={active.label} /> : null}
         </section>
       </div>
+      <footer
+        style={{
+          marginTop: 8,
+          borderTop: "1px solid rgba(217,182,118,.18)",
+          background: "rgba(15,15,18,0.72)",
+          padding: "10px 16px",
+          fontSize: 13,
+          color: TEXT_MUTED,
+          display: "flex",
+          gap: 16,
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+        }}
+      >
+        <span>Build: {BUILD_SHA}</span>
+        <span>Mode: {BUILD_MODE}</span>
+        <span>Fast Demo: {FAST_FLAG}</span>
+      </footer>
     </main>
   );
 }

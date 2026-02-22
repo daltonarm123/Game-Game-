@@ -6,12 +6,15 @@ This script is designed for a live investor/backer demo with minimal setup risk.
 
 1. Start demo environment:
    - `powershell -ExecutionPolicy Bypass -File .\scripts\start-demo-env.ps1`
-2. Seed demo kingdoms:
+2. Reset/seed demo kingdoms:
+   - `powershell -ExecutionPolicy Bypass -File .\scripts\reset-demo.ps1`
    - `powershell -ExecutionPolicy Bypass -File .\scripts\seed-demo-data.ps1`
 3. Open web app:
    - `http://localhost:5173`
 4. Confirm API health:
    - `http://localhost:8080/healthz`
+5. Keep fallback clip ready:
+   - `docs/FALLBACK_VIDEO_SHOTLIST.md`
 
 ## 1) Demo Goal Statement (30 seconds)
 

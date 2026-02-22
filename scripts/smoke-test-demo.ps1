@@ -18,9 +18,15 @@ $health = Invoke-RestMethod -Method Get -Uri "$ApiBase/healthz"
 if (-not $health.ok) { throw "API health check failed" }
 Write-Host "Health OK" -ForegroundColor Green
 
-Post-Json -Url "$ApiBase/api/dev/register" -Body @{ userId = "u1"; username = "envy90"; kingdomName = "Elixer" } | Out-Null
-Post-Json -Url "$ApiBase/api/dev/register" -Body @{ userId = "u2"; username = "zoo"; kingdomName = "Galileo" } | Out-Null
-Write-Host "Register OK" -ForegroundColor Green
+Post-Json -Url "$ApiBase/api/dev/demo-reset" -Body @{
+  attackerName = "Elixer"
+  defenderName = "Galileo"
+  attackerUserId = "u1"
+  defenderUserId = "u2"
+  attackerUsername = "envy90"
+  defenderUsername = "zoo"
+} | Out-Null
+Write-Host "Reset + register OK" -ForegroundColor Green
 
 Post-Json -Url "$ApiBase/api/kingdom/Elixer/train" -Body @{ troopCode = "footmen"; quantity = 1 } | Out-Null
 Write-Host "Train queue OK" -ForegroundColor Green
