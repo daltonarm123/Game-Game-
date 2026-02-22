@@ -25,11 +25,11 @@ npm install
 $wd = (Get-Location).Path
 
 Write-Host "==> Starting API service..." -ForegroundColor Cyan
-$apiCmd = "cd `"$wd`"; npm run dev -w @game-game/api"
+$apiCmd = "cd `"$wd`"; `$env:LOCAL_DEMO_FAST='1'; `$env:FAST_BUILD_SECONDS='5'; `$env:FAST_TRAIN_SECONDS='5'; `$env:ATTACK_RETURN_SECONDS='20'; npm run dev -w @game-game/api"
 Start-Process powershell -ArgumentList @('-NoExit','-Command',$apiCmd) | Out-Null
 
 Write-Host "==> Starting tick worker service..." -ForegroundColor Cyan
-$workerCmd = "cd `"$wd`"; npm run dev -w @game-game/game-server"
+$workerCmd = "cd `"$wd`"; `$env:LOCAL_DEMO_FAST='1'; `$env:TICK_INTERVAL_SECONDS='5'; `$env:TICK_ALIGN_SECONDS='5'; npm run dev -w @game-game/game-server"
 Start-Process powershell -ArgumentList @('-NoExit','-Command',$workerCmd) | Out-Null
 
 Write-Host "==> Starting web app..." -ForegroundColor Cyan

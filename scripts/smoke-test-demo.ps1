@@ -22,10 +22,23 @@ Post-Json -Url "$ApiBase/api/dev/register" -Body @{ userId = "u1"; username = "e
 Post-Json -Url "$ApiBase/api/dev/register" -Body @{ userId = "u2"; username = "zoo"; kingdomName = "Galileo" } | Out-Null
 Write-Host "Register OK" -ForegroundColor Green
 
-Post-Json -Url "$ApiBase/api/kingdom/Elixer/train" -Body @{ troopCode = "heavy_cavalry"; quantity = 1000 } | Out-Null
+Post-Json -Url "$ApiBase/api/kingdom/Elixer/train" -Body @{ troopCode = "footmen"; quantity = 1 } | Out-Null
 Write-Host "Train queue OK" -ForegroundColor Green
 
-$attack = Post-Json -Url "$ApiBase/api/war-room/Elixer/attack" -Body @{ defenderKingdom = "Galileo"; sentTroops = @{ heavy_cavalry = 100 } }
+$hasHome = $false
+for ($i=0; $i -lt 20; $i++) {
+  $warPeek = Invoke-RestMethod -Method Get -Uri "$ApiBase/api/war-room/Elixer"
+  $homeFoot = 0
+  foreach ($t in $warPeek.troops) {
+    if ($t.troopCode -eq "footmen") { $homeFoot = [int]$t.home; break }
+  }
+  if ($homeFoot -ge 1) { $hasHome = $true; break }
+  Start-Sleep -Seconds 1
+}
+if (-not $hasHome) { throw "Timed out waiting for trained footman to arrive home" }
+Write-Host "Training completion OK" -ForegroundColor Green
+
+$attack = Post-Json -Url "$ApiBase/api/war-room/Elixer/attack" -Body @{ defenderKingdom = "Galileo"; sentTroops = @{ footmen = 1 } }
 if (-not $attack.ok) { throw "Attack call failed" }
 Write-Host ("Attack OK: " + $attack.result) -ForegroundColor Green
 

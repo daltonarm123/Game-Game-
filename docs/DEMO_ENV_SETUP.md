@@ -7,6 +7,15 @@ cd C:\Users\dalto\OneDrive\Desktop\Game-Game-
 powershell -ExecutionPolicy Bypass -File .\scripts\start-demo-env.ps1
 ```
 
+This automatically enables fast local demo mode:
+
+- `LOCAL_DEMO_FAST=1`
+- `FAST_BUILD_SECONDS=5`
+- `FAST_TRAIN_SECONDS=5`
+- `ATTACK_RETURN_SECONDS=20`
+- `TICK_INTERVAL_SECONDS=5`
+- `TICK_ALIGN_SECONDS=5`
+
 ## If Docker is already running elsewhere
 
 ```powershell

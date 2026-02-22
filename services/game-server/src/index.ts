@@ -3,8 +3,9 @@ import { ensureSchemaLite, pool, withTx } from "./db.js";
 
 dotenv.config();
 
-const TICK_INTERVAL_SECONDS = Number(process.env.TICK_INTERVAL_SECONDS || 300);
-const TICK_ALIGN_SECONDS = Number(process.env.TICK_ALIGN_SECONDS || 300);
+const LOCAL_DEMO_FAST = String(process.env.LOCAL_DEMO_FAST || "").trim() === "1";
+const TICK_INTERVAL_SECONDS = Number(process.env.TICK_INTERVAL_SECONDS || (LOCAL_DEMO_FAST ? 5 : 300));
+const TICK_ALIGN_SECONDS = Number(process.env.TICK_ALIGN_SECONDS || (LOCAL_DEMO_FAST ? 5 : 300));
 
 async function processBuildQueueTick(): Promise<number> {
   return withTx(async (c) => {

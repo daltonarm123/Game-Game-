@@ -71,3 +71,4 @@ Modern, maintained, tick-based kingdom strategy game platform.
   - `scripts/smoke-test-demo.ps1`
 - Demo env quick setup:
   - `docs/DEMO_ENV_SETUP.md`
+  - includes automatic fast local mode for quick training/attack demos

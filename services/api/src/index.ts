@@ -10,6 +10,13 @@ app.use(express.json());
 
 const API_PORT = Number(process.env.API_PORT || 8080);
 const ATTACK_RETURN_MINUTES = Number(process.env.ATTACK_RETURN_MINUTES || 20);
+const LOCAL_DEMO_FAST = String(process.env.LOCAL_DEMO_FAST || "").trim() === "1";
+const FAST_BUILD_SECONDS = Math.max(1, Number(process.env.FAST_BUILD_SECONDS || 5));
+const FAST_TRAIN_SECONDS = Math.max(1, Number(process.env.FAST_TRAIN_SECONDS || 5));
+const ATTACK_RETURN_SECONDS = Math.max(
+  1,
+  Number(process.env.ATTACK_RETURN_SECONDS || (LOCAL_DEMO_FAST ? 20 : ATTACK_RETURN_MINUTES * 60)),
+);
 
 const registerBody = z.object({
   userId: z.string().min(1),
@@ -268,7 +275,7 @@ app.post("/api/kingdom/:name/build", async (req, res) => {
 
       await c.query(`UPDATE kingdoms SET wood = wood - $2, stone = stone - $3 WHERE id=$1`, [kingdom.id, woodCost, stoneCost]);
 
-      const seconds = Number(def.base_build_seconds) * nextLevel;
+      const seconds = LOCAL_DEMO_FAST ? FAST_BUILD_SECONDS : Number(def.base_build_seconds) * nextLevel;
       const ins = await c.query(
         `INSERT INTO build_queue(kingdom_id, building_code, target_level, started_at, completes_at, status)
          VALUES ($1,$2,$3, now(), now() + ($4 || ' seconds')::interval, 'queued')
@@ -313,7 +320,7 @@ app.post("/api/kingdom/:name/train", async (req, res) => {
 
       await c.query(`UPDATE kingdoms SET gold = gold - $2, food = food - $3 WHERE id=$1`, [kingdom.id, totalGold, totalFood]);
 
-      const totalSeconds = Math.max(1, Number(def.train_seconds) * qty);
+      const totalSeconds = LOCAL_DEMO_FAST ? FAST_TRAIN_SECONDS : Math.max(1, Number(def.train_seconds) * qty);
       const ins = await c.query(
         `INSERT INTO train_queue(kingdom_id, troop_code, quantity, started_at, completes_at, status)
          VALUES ($1,$2,$3, now(), now() + ($4 || ' seconds')::interval, 'queued')
@@ -442,8 +449,8 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
         if (Number(survivors) <= 0) continue;
         await c.query(
           `INSERT INTO troop_movements(owner_kingdom_id, owner_kingdom_name, target_kingdom_id, target_kingdom_name, troop_code, quantity, departed_at, returns_at, status, source_attack_report_id)
-           VALUES ($1,$2,$3,$4,$5,$6,now(), now() + ($7 || ' minutes')::interval, 'out', $8)`,
-          [atk.id, atk.name, def.id, def.name, code, Math.floor(survivors), ATTACK_RETURN_MINUTES, rep.rows[0].id],
+           VALUES ($1,$2,$3,$4,$5,$6,now(), now() + ($7 || ' seconds')::interval, 'out', $8)`,
+          [atk.id, atk.name, def.id, def.name, code, Math.floor(survivors), ATTACK_RETURN_SECONDS, rep.rows[0].id],
         );
       }
 
