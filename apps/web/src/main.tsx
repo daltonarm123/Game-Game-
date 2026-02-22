@@ -656,7 +656,29 @@ function App() {
     >
       <header style={{ borderBottom: "1px solid rgba(217,182,118,.22)", padding: "14px 26px", display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 16, background: "rgba(24,24,27,0.85)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ width: 56, height: 56, borderRadius: 12, border: "1px solid rgba(216,176,117,.5)", background: "linear-gradient(180deg, rgba(130,16,16,.75), rgba(80,12,12,.75))", display: "grid", placeItems: "center", fontWeight: 900, fontSize: 36, fontFamily: FONT_DISPLAY }}>K</div>
+          <div
+            style={{
+              width: 56,
+              height: 56,
+              borderRadius: 12,
+              border: "1px solid rgba(216,176,117,.5)",
+              background: "linear-gradient(180deg, rgba(130,16,16,.75), rgba(80,12,12,.75))",
+              display: "grid",
+              placeItems: "center",
+            }}
+          >
+            <svg viewBox="0 0 64 64" width="34" height="34" aria-hidden="true">
+              <path
+                d="M7 45h50v8H7zM12 43l4-20 16 10 16-10 4 20z"
+                fill="#f4d79e"
+                stroke="#5f451f"
+                strokeWidth="2"
+              />
+              <circle cx="16" cy="21" r="4" fill="#f4d79e" stroke="#5f451f" strokeWidth="2" />
+              <circle cx="32" cy="13" r="4" fill="#f4d79e" stroke="#5f451f" strokeWidth="2" />
+              <circle cx="48" cy="21" r="4" fill="#f4d79e" stroke="#5f451f" strokeWidth="2" />
+            </svg>
+          </div>
           <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY, letterSpacing: 0.8 }}>Crownforge</div>
         </div>
         <div style={{ display: "flex", gap: 26, alignItems: "center", color: "#f7eee0", fontFamily: FONT_DISPLAY, fontSize: 17 }}>
