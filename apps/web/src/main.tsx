@@ -93,8 +93,6 @@ function OverviewMock() {
           <div style={{ fontSize: 22, fontWeight: 700 }}>Gold: 117,267 / 4,822,440 <span style={{ color: "#9ddb8f" }}>(+145,500/h)</span></div>
           <div style={{ fontSize: 22, fontWeight: 700 }}>Stone: 30,359 / 328,755 <span style={{ color: "#ffab9c" }}>(-144/h)</span></div>
           <div style={{ fontSize: 22, fontWeight: 700 }}>Wood: 34,514 / 357,918 <span style={{ color: "#9ddb8f" }}>(+132/h)</span></div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>Blue Gems: 3</div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>Green Gems: 19</div>
         </div>
       </div>
 
