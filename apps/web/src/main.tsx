@@ -657,7 +657,7 @@ function App() {
       <header style={{ borderBottom: "1px solid rgba(217,182,118,.22)", padding: "14px 26px", display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 16, background: "rgba(24,24,27,0.85)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ width: 56, height: 56, borderRadius: 12, border: "1px solid rgba(216,176,117,.5)", background: "linear-gradient(180deg, rgba(130,16,16,.75), rgba(80,12,12,.75))", display: "grid", placeItems: "center", fontWeight: 900, fontSize: 36, fontFamily: FONT_DISPLAY }}>K</div>
-          <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY, letterSpacing: 0.8 }}>Kingdom Game</div>
+          <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY, letterSpacing: 0.8 }}>Crownforge</div>
         </div>
         <div style={{ display: "flex", gap: 26, alignItems: "center", color: "#f7eee0", fontFamily: FONT_DISPLAY, fontSize: 17 }}>
           <span>Home</span>
