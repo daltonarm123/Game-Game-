@@ -26,62 +26,77 @@ const NAV_ITEMS: NavItem[] = [
   { id: "logout", label: "Logout", group: "kingdom" },
 ];
 
+const TEXT_MAIN = "#f8efe2";
+const TEXT_MUTED = "#d5c4a9";
+const ACCENT = "#d8b075";
+
 const CARD: React.CSSProperties = {
-  background: "rgba(32, 20, 10, 0.75)",
-  border: "1px solid rgba(217, 182, 118, 0.35)",
+  background: "linear-gradient(180deg, rgba(39,24,12,0.92), rgba(26,16,9,0.92))",
+  border: "1px solid rgba(216, 176, 117, 0.42)",
   borderRadius: 12,
-  padding: 12,
+  padding: 14,
+  boxShadow: "0 10px 30px rgba(0,0,0,0.3)",
 };
 
 const API_BASE = (window as any).__GG_API_BASE || "http://localhost:8080";
 const INPUT_STYLE: React.CSSProperties = {
-  padding: "8px 10px",
+  padding: "10px 12px",
   borderRadius: 8,
-  border: "1px solid rgba(217,182,118,.35)",
-  background: "rgba(0,0,0,.2)",
-  color: "#f2e5cf",
+  border: "1px solid rgba(216,176,117,.55)",
+  background: "rgba(12, 9, 6, 0.9)",
+  color: TEXT_MAIN,
+  fontSize: 16,
 };
 
 const BTN_STYLE: React.CSSProperties = {
-  padding: "8px 12px",
+  padding: "10px 14px",
   borderRadius: 8,
-  border: "1px solid rgba(217,182,118,.35)",
-  background: "rgba(205,169,105,.28)",
-  color: "#f2e5cf",
+  border: "1px solid rgba(216,176,117,.65)",
+  background: "linear-gradient(180deg, rgba(216,176,117,.45), rgba(130,92,40,.45))",
+  color: TEXT_MAIN,
   cursor: "pointer",
+  fontWeight: 700,
+  fontSize: 15,
 };
 
 function OverviewMock() {
+  const metricCard = (label: string, value: string) => (
+    <div style={CARD}>
+      <div style={{ fontSize: 12, color: TEXT_MUTED, textTransform: "uppercase", letterSpacing: 0.7 }}>{label}</div>
+      <div style={{ marginTop: 6, fontSize: 34, lineHeight: 1.05, fontWeight: 800, color: "#fff7ec" }}>{value}</div>
+    </div>
+  );
+
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <div style={CARD}>
-        <div style={{ fontSize: 22, fontWeight: 700 }}>Overview - [KG] Elixer</div>
-        <div style={{ opacity: 0.8, marginTop: 4 }}>Rank #13 / Duke • Religion: Nastfuru • Spring season</div>
+        <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", lineHeight: 1.05 }}>Overview - [KG] Elixer</div>
+        <div style={{ color: TEXT_MUTED, marginTop: 8, fontSize: 18, fontWeight: 700 }}>Rank #13 / Duke • Religion: Nastfuru • Spring season</div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
-        <div style={CARD}>Networth: 39,049</div>
-        <div style={CARD}>Land: 43,459 / 43,460 Acres</div>
-        <div style={CARD}>Population: 280,233 / 409,865</div>
-        <div style={CARD}>Tax Rate: 24%</div>
+        {metricCard("Networth", "39,049")}
+        {metricCard("Land", "43,459 / 43,460")}
+        {metricCard("Population", "280,233 / 409,865")}
+        {metricCard("Tax Rate", "24%")}
       </div>
 
       <div style={CARD}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Resources (example layout)</div>
+        <div style={{ fontWeight: 800, fontSize: 24, color: "#fff7ec", marginBottom: 12 }}>Resources (example layout)</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8 }}>
-          <div>Food: 747,550 / 10,211,752 (+901,296/h)</div>
-          <div>Gold: 117,267 / 4,822,440 (+145,500/h)</div>
-          <div>Stone: 30,359 / 328,755 (-144/h)</div>
-          <div>Wood: 34,514 / 357,918 (+132/h)</div>
-          <div>Blue Gems: 3</div>
-          <div>Green Gems: 19</div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>Food: 747,550 / 10,211,752 <span style={{ color: "#9ddb8f" }}>(+901,296/h)</span></div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>Gold: 117,267 / 4,822,440 <span style={{ color: "#9ddb8f" }}>(+145,500/h)</span></div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>Stone: 30,359 / 328,755 <span style={{ color: "#ffab9c" }}>(-144/h)</span></div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>Wood: 34,514 / 357,918 <span style={{ color: "#9ddb8f" }}>(+132/h)</span></div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>Blue Gems: 3</div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>Green Gems: 19</div>
         </div>
       </div>
 
       <div style={CARD}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Queues</div>
-        <div>Training: 6,000 x Pikemen • 03:10:14</div>
-        <div>Building: 300 x Stone Quarries • 01:03:59</div>
+        <div style={{ fontWeight: 800, fontSize: 24, color: "#fff7ec", marginBottom: 10 }}>Queues</div>
+        <div style={{ fontSize: 22, fontWeight: 700 }}>Training: 6,000 x Pikemen • 03:10:14</div>
+        <div style={{ fontSize: 22, fontWeight: 700, marginTop: 6 }}>Building: 300 x Stone Quarries • 01:03:59</div>
       </div>
     </div>
   );
@@ -90,8 +105,8 @@ function OverviewMock() {
 function Placeholder({ label }: { label: string }) {
   return (
     <div style={CARD}>
-      <div style={{ fontSize: 18, fontWeight: 700 }}>{label}</div>
-      <div style={{ opacity: 0.8, marginTop: 8 }}>
+      <div style={{ fontSize: 28, fontWeight: 800, color: "#fff7ec" }}>{label}</div>
+      <div style={{ color: TEXT_MUTED, marginTop: 8, fontSize: 18, fontWeight: 600 }}>
         This tab is scaffolded and ready for feature implementation.
       </div>
     </div>
@@ -194,9 +209,9 @@ function WarRoomView() {
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      <div style={CARD}>
+      <div style={{ ...CARD, background: "linear-gradient(180deg, rgba(52,32,16,0.96), rgba(28,18,10,0.94))" }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>War Room</div>
+          <div style={{ fontSize: 32, fontWeight: 800, color: "#fff7ec" }}>War Room</div>
           <input
             value={kingdom}
             onChange={(e) => setKingdom(e.target.value)}
@@ -223,7 +238,7 @@ function WarRoomView() {
             Load
           </button>
         </div>
-        {loading ? <div style={{ marginTop: 8 }}>Loading...</div> : null}
+        {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading...</div> : null}
         {error ? <div style={{ marginTop: 8, color: "#ffae9a" }}>{error}</div> : null}
         {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
       </div>
@@ -231,37 +246,37 @@ function WarRoomView() {
       {k ? (
         <>
           <div style={CARD}>
-            <div style={{ fontSize: 20, fontWeight: 700 }}>War Room - {k.name}</div>
-            <div style={{ marginTop: 6, opacity: 0.9 }}>
+            <div style={{ fontSize: 30, fontWeight: 800, color: "#fff7ec" }}>War Room - {k.name}</div>
+            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 20, fontWeight: 700 }}>
               Rank: #{k.rank || "N/A"} • Networth: {Math.floor(Number(k.networth || 0)).toLocaleString()}
             </div>
-            <div style={{ marginTop: 6, opacity: 0.9 }}>
+            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 20, fontWeight: 700 }}>
               Population: {Number(k.populationHome || 0).toLocaleString()} / {Number((k.populationHome || 0) + (k.populationTrain || 0) + (k.populationAway || 0)).toLocaleString()}
             </div>
-            <div style={{ marginTop: 6, opacity: 0.9 }}>
+            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 20, fontWeight: 700 }}>
               Food: {Number(k.food || 0).toLocaleString()} • Gold: {Number(k.gold || 0).toLocaleString()}
             </div>
           </div>
 
           <div style={CARD}>
-            <div style={{ fontWeight: 700, marginBottom: 8 }}>Kingdom Troops</div>
+            <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 24 }}>Kingdom Troops</div>
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
-                    <th style={{ textAlign: "left", padding: 6 }}>Troop</th>
-                    <th style={{ textAlign: "right", padding: 6 }}>Home</th>
-                    <th style={{ textAlign: "right", padding: 6 }}>Train</th>
-                    <th style={{ textAlign: "right", padding: 6 }}>Away</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Troop</th>
+                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Home</th>
+                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Train</th>
+                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Away</th>
                   </tr>
                 </thead>
                 <tbody>
                   {troops.map((t) => (
                     <tr key={t.troopCode}>
-                      <td style={{ padding: 6 }}>{t.troopName}</td>
-                      <td style={{ padding: 6, textAlign: "right" }}>{Number(t.home || 0).toLocaleString()}</td>
-                      <td style={{ padding: 6, textAlign: "right" }}>{Number(t.train || 0).toLocaleString()}</td>
-                      <td style={{ padding: 6, textAlign: "right" }}>{Number(t.away || 0).toLocaleString()}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid rgba(216,176,117,.15)" }}>{t.troopName}</td>
+                      <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.home || 0).toLocaleString()}</td>
+                      <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.train || 0).toLocaleString()}</td>
+                      <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.away || 0).toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -626,18 +641,21 @@ function App() {
     <main
       style={{
         minHeight: "100vh",
-        color: "#f2e5cf",
-        background: "radial-gradient(circle at top, #3c2d18 0%, #1b1209 50%, #0c0804 100%)",
-        fontFamily: "Georgia, serif",
+        color: TEXT_MAIN,
+        background: "radial-gradient(1200px 600px at top right, #62411a 0%, #2c1b0d 35%, #110b06 100%)",
+        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
       }}
     >
-      <header style={{ borderBottom: "1px solid rgba(217,182,118,.35)", padding: "14px 18px" }}>
-        <div style={{ fontSize: 26, fontWeight: 700 }}>KingdomGame 2</div>
+      <header style={{ borderBottom: "1px solid rgba(217,182,118,.4)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ fontSize: 36, fontWeight: 800, color: "#fff7ec", fontFamily: "Georgia, serif" }}>KingdomGame 2</div>
+        <div style={{ padding: "8px 12px", borderRadius: 999, border: "1px solid rgba(216,176,117,.65)", background: "rgba(216,176,117,.2)", color: TEXT_MAIN, fontWeight: 700 }}>
+          Demo Preview • Month 1
+        </div>
       </header>
 
       <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 16, padding: 16 }}>
         <aside style={{ ...CARD, height: "fit-content", position: "sticky", top: 16 }}>
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>Top Menu</div>
+          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 32 }}>Top Menu</div>
           <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
             {topNav.map((item) => (
               <button
@@ -645,12 +663,14 @@ function App() {
                 onClick={() => setActiveId(item.id)}
                 style={{
                   textAlign: "left",
-                  padding: "8px 10px",
+                  padding: "10px 12px",
                   borderRadius: 8,
-                  border: "1px solid rgba(217,182,118,.35)",
-                  background: item.id === active.id ? "rgba(205,169,105,.28)" : "rgba(0,0,0,.2)",
-                  color: "#f2e5cf",
+                  border: "1px solid rgba(216,176,117,.5)",
+                  background: item.id === active.id ? "rgba(216,176,117,.35)" : "rgba(10,8,6,.65)",
+                  color: TEXT_MAIN,
                   cursor: "pointer",
+                  fontSize: 20,
+                  fontWeight: 700,
                 }}
               >
                 {item.label}
@@ -658,7 +678,7 @@ function App() {
             ))}
           </div>
 
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>Kingdom Menu</div>
+          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 32 }}>Kingdom Menu</div>
           <div style={{ display: "grid", gap: 6 }}>
             {kingdomNav.map((item) => (
               <button
@@ -666,12 +686,14 @@ function App() {
                 onClick={() => setActiveId(item.id)}
                 style={{
                   textAlign: "left",
-                  padding: "8px 10px",
+                  padding: "10px 12px",
                   borderRadius: 8,
-                  border: "1px solid rgba(217,182,118,.35)",
-                  background: item.id === active.id ? "rgba(205,169,105,.28)" : "rgba(0,0,0,.2)",
-                  color: "#f2e5cf",
+                  border: "1px solid rgba(216,176,117,.5)",
+                  background: item.id === active.id ? "rgba(216,176,117,.35)" : "rgba(10,8,6,.65)",
+                  color: TEXT_MAIN,
                   cursor: "pointer",
+                  fontSize: 20,
+                  fontWeight: 700,
                 }}
               >
                 {item.label}
