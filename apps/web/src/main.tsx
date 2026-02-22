@@ -29,34 +29,39 @@ const NAV_ITEMS: NavItem[] = [
 const TEXT_MAIN = "#f8efe2";
 const TEXT_MUTED = "#d5c4a9";
 const ACCENT = "#d8b075";
+const FONT_DISPLAY = "Georgia, 'Times New Roman', serif";
+const FONT_BODY = "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif";
 
 const CARD: React.CSSProperties = {
-  background: "linear-gradient(180deg, rgba(39,24,12,0.92), rgba(26,16,9,0.92))",
-  border: "1px solid rgba(216, 176, 117, 0.42)",
+  background: "linear-gradient(180deg, rgba(35, 35, 38, 0.74), rgba(20, 20, 22, 0.8))",
+  border: "1px solid rgba(216, 176, 117, 0.28)",
   borderRadius: 12,
   padding: 14,
-  boxShadow: "0 10px 30px rgba(0,0,0,0.3)",
+  boxShadow: "0 10px 28px rgba(0,0,0,0.35)",
+  backdropFilter: "blur(2px)",
 };
 
 const API_BASE = (window as any).__GG_API_BASE || "http://localhost:8080";
 const INPUT_STYLE: React.CSSProperties = {
   padding: "10px 12px",
   borderRadius: 8,
-  border: "1px solid rgba(216,176,117,.55)",
-  background: "rgba(12, 9, 6, 0.9)",
+  border: "1px solid rgba(216,176,117,.4)",
+  background: "rgba(14, 14, 17, 0.9)",
   color: TEXT_MAIN,
-  fontSize: 16,
+  fontSize: 15,
+  fontFamily: FONT_BODY,
 };
 
 const BTN_STYLE: React.CSSProperties = {
   padding: "10px 14px",
   borderRadius: 8,
-  border: "1px solid rgba(216,176,117,.65)",
-  background: "linear-gradient(180deg, rgba(216,176,117,.45), rgba(130,92,40,.45))",
+  border: "1px solid rgba(216,176,117,.5)",
+  background: "linear-gradient(180deg, rgba(216,176,117,.28), rgba(120,88,43,.28))",
   color: TEXT_MAIN,
   cursor: "pointer",
   fontWeight: 700,
-  fontSize: 15,
+  fontSize: 14,
+  fontFamily: FONT_BODY,
 };
 
 function OverviewMock() {
@@ -70,7 +75,7 @@ function OverviewMock() {
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <div style={CARD}>
-        <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", lineHeight: 1.05 }}>Overview - [KG] Elixer</div>
+        <div style={{ fontSize: 38, fontWeight: 800, color: "#fff7ec", lineHeight: 1.05, fontFamily: FONT_DISPLAY }}>Overview - [KG] Elixer</div>
         <div style={{ color: TEXT_MUTED, marginTop: 8, fontSize: 18, fontWeight: 700 }}>Rank #13 / Duke • Religion: Nastfuru • Spring season</div>
       </div>
 
@@ -246,7 +251,7 @@ function WarRoomView() {
       {k ? (
         <>
           <div style={CARD}>
-            <div style={{ fontSize: 30, fontWeight: 800, color: "#fff7ec" }}>War Room - {k.name}</div>
+            <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>War Room - {k.name}</div>
             <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 20, fontWeight: 700 }}>
               Rank: #{k.rank || "N/A"} • Networth: {Math.floor(Number(k.networth || 0)).toLocaleString()}
             </div>
@@ -642,20 +647,39 @@ function App() {
       style={{
         minHeight: "100vh",
         color: TEXT_MAIN,
-        background: "radial-gradient(1200px 600px at top right, #62411a 0%, #2c1b0d 35%, #110b06 100%)",
-        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
+        background: `
+          radial-gradient(1200px 700px at 85% 20%, rgba(92,76,58,0.45), rgba(23,23,25,0.92)),
+          linear-gradient(180deg, #2b2b2f 0%, #1a1a1d 48%, #161515 100%)
+        `,
+        fontFamily: FONT_BODY,
       }}
     >
-      <header style={{ borderBottom: "1px solid rgba(217,182,118,.4)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-        <div style={{ fontSize: 36, fontWeight: 800, color: "#fff7ec", fontFamily: "Georgia, serif" }}>KingdomGame 2</div>
-        <div style={{ padding: "8px 12px", borderRadius: 999, border: "1px solid rgba(216,176,117,.65)", background: "rgba(216,176,117,.2)", color: TEXT_MAIN, fontWeight: 700 }}>
-          Demo Preview • Month 1
+      <header style={{ borderBottom: "1px solid rgba(217,182,118,.22)", padding: "14px 26px", display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 16, background: "rgba(24,24,27,0.85)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ width: 56, height: 56, borderRadius: 12, border: "1px solid rgba(216,176,117,.5)", background: "linear-gradient(180deg, rgba(130,16,16,.75), rgba(80,12,12,.75))", display: "grid", placeItems: "center", fontWeight: 900, fontSize: 36, fontFamily: FONT_DISPLAY }}>K</div>
+          <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY, letterSpacing: 0.8 }}>Kingdom Game</div>
+        </div>
+        <div style={{ display: "flex", gap: 26, alignItems: "center", color: "#f7eee0", fontFamily: FONT_DISPLAY, fontSize: 17 }}>
+          <span>Home</span>
+          <span>Forums</span>
+          <span>How To Play</span>
+          <span>Overview</span>
+          <span>Logout</span>
         </div>
       </header>
 
-      <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 16, padding: 16 }}>
-        <aside style={{ ...CARD, height: "fit-content", position: "sticky", top: 16 }}>
-          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 32 }}>Top Menu</div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "300px 1fr",
+          gap: 16,
+          padding: 16,
+          background:
+            "linear-gradient(180deg, rgba(36,29,24,0.35), rgba(24,22,23,0.75))",
+        }}
+      >
+        <aside style={{ ...CARD, height: "fit-content", position: "sticky", top: 16, background: "linear-gradient(180deg, rgba(29,29,33,0.86), rgba(19,19,22,0.88))" }}>
+          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 28, fontFamily: FONT_DISPLAY }}>Top Menu</div>
           <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
             {topNav.map((item) => (
               <button
@@ -663,22 +687,26 @@ function App() {
                 onClick={() => setActiveId(item.id)}
                 style={{
                   textAlign: "left",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
                   padding: "10px 12px",
                   borderRadius: 8,
                   border: "1px solid rgba(216,176,117,.5)",
-                  background: item.id === active.id ? "rgba(216,176,117,.35)" : "rgba(10,8,6,.65)",
+                  background: item.id === active.id ? "rgba(216,176,117,.3)" : "rgba(8,8,10,.62)",
                   color: TEXT_MAIN,
                   cursor: "pointer",
-                  fontSize: 20,
+                  fontSize: 17,
                   fontWeight: 700,
                 }}
               >
+                <span style={{ width: 18, height: 18, border: "1px solid rgba(216,176,117,.55)", borderRadius: 4, background: "rgba(216,176,117,.18)" }} />
                 {item.label}
               </button>
             ))}
           </div>
 
-          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 32 }}>Kingdom Menu</div>
+          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 28, fontFamily: FONT_DISPLAY }}>Kingdom Menu</div>
           <div style={{ display: "grid", gap: 6 }}>
             {kingdomNav.map((item) => (
               <button
@@ -686,16 +714,20 @@ function App() {
                 onClick={() => setActiveId(item.id)}
                 style={{
                   textAlign: "left",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
                   padding: "10px 12px",
                   borderRadius: 8,
                   border: "1px solid rgba(216,176,117,.5)",
-                  background: item.id === active.id ? "rgba(216,176,117,.35)" : "rgba(10,8,6,.65)",
+                  background: item.id === active.id ? "rgba(216,176,117,.3)" : "rgba(8,8,10,.62)",
                   color: TEXT_MAIN,
                   cursor: "pointer",
-                  fontSize: 20,
+                  fontSize: 17,
                   fontWeight: 700,
                 }}
               >
+                <span style={{ width: 26, height: 26, border: "1px solid rgba(216,176,117,.6)", borderRadius: 4, background: "linear-gradient(180deg, rgba(216,176,117,.3), rgba(87,61,31,.3))" }} />
                 {item.label}
               </button>
             ))}
