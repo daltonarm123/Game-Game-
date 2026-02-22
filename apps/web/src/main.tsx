@@ -203,6 +203,198 @@ function OverviewView() {
   );
 }
 
+function BuildingsView() {
+  const [kingdom, setKingdom] = useState("Elixer");
+  const [details, setDetails] = useState<any>(null);
+  const [war, setWar] = useState<any>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [actionMsg, setActionMsg] = useState("");
+  const [buildCode, setBuildCode] = useState("farm");
+  const [buildQty, setBuildQty] = useState(1);
+  const [buildBusy, setBuildBusy] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    setError("");
+    try {
+      const [kRes, wRes] = await Promise.all([
+        fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}`),
+        fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`),
+      ]);
+      const kJson = await kRes.json();
+      const wJson = await wRes.json();
+      if (!kRes.ok || !kJson?.ok) throw new Error(kJson?.error || `Kingdom HTTP ${kRes.status}`);
+      if (!wRes.ok || !wJson?.ok) throw new Error(wJson?.error || `War Room HTTP ${wRes.status}`);
+      setDetails(kJson);
+      setWar(wJson);
+    } catch (e: any) {
+      setDetails(null);
+      setWar(null);
+      setError(String(e?.message || e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const k = details?.kingdom;
+  const buildings = (details?.buildings || []) as Array<any>;
+  const buildQueue = (details?.buildQueue || []).filter((x: any) => x.status === "queued") as Array<any>;
+  const econ = details?.economy?.perHour || {};
+
+  const queueCounts = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const q of buildQueue) {
+      const code = String(q.building_code || "");
+      m[code] = (m[code] || 0) + 1;
+    }
+    return m;
+  }, [buildQueue]);
+
+  const buildOptions = useMemo(() => {
+    if (!Array.isArray(buildings) || buildings.length === 0) return ["farm", "lumberyard", "quarry", "barracks", "stables", "castles"];
+    return buildings.map((b) => String(b.building_code));
+  }, [buildings]);
+
+  async function submitBuild(e: React.FormEvent) {
+    e.preventDefault();
+    if (!k) return;
+    setActionMsg("");
+    setBuildBusy(true);
+    try {
+      const qty = Math.max(1, Math.floor(Number(buildQty || 1)));
+      let success = 0;
+      for (let i = 0; i < qty; i += 1) {
+        const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/build`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ buildingCode: buildCode }),
+        });
+        const j = await r.json();
+        if (!r.ok || !j?.ok) {
+          if (success === 0) throw new Error(j?.error || `HTTP ${r.status}`);
+          setActionMsg(`Queued ${success} x ${buildCode}. Stopped: ${String(j?.error || `HTTP ${r.status}`)}`);
+          await load();
+          setBuildBusy(false);
+          return;
+        }
+        success += 1;
+      }
+      setActionMsg(`Queued ${success} x ${buildCode}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Build failed: ${String(e?.message || e)}`);
+    } finally {
+      setBuildBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <div style={CARD}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>
+              Buildings - {k ? k.name : kingdom}
+            </div>
+            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 18, fontWeight: 700 }}>
+              Rank #{war?.kingdom?.rank || "N/A"} • Land: {Number(k?.land || 0).toLocaleString()} Acres
+            </div>
+            <div style={{ marginTop: 4, color: TEXT_MUTED, fontSize: 17, fontWeight: 700 }}>
+              Stone: {Number(k?.stone || 0).toLocaleString()} ({Number(econ.stone || 0) >= 0 ? "+" : ""}{Number(econ.stone || 0).toLocaleString()}/h) • Wood: {Number(k?.wood || 0).toLocaleString()} ({Number(econ.wood || 0) >= 0 ? "+" : ""}{Number(econ.wood || 0).toLocaleString()}/h)
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={INPUT_STYLE} />
+            <button onClick={() => void load()} style={BTN_STYLE}>Load</button>
+          </div>
+        </div>
+        <div style={{ marginTop: 10, color: TEXT_MUTED }}>
+          Here you can see your kingdom buildings. It only shows what is built or queued in this game environment.
+        </div>
+        {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading buildings...</div> : null}
+        {error ? (
+          <div style={{ marginTop: 8, color: "#ffae9a", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span>{error}</span>
+            <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
+          </div>
+        ) : null}
+        {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
+      </div>
+
+      <div style={CARD}>
+        <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 24 }}>Kingdom Buildings</div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Building</th>
+                <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Built</th>
+                <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Bldg</th>
+                <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {buildings.map((b) => {
+                const code = String(b.building_code);
+                const built = Number(b.level || 0);
+                const bldg = Number(queueCounts[code] || 0);
+                const total = built + bldg;
+                return (
+                  <tr key={code}>
+                    <td style={{ padding: 8, borderBottom: "1px solid rgba(216,176,117,.15)" }}>{String(b.building_name || code)}</td>
+                    <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{built.toLocaleString()}</td>
+                    <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{bldg.toLocaleString()}</td>
+                    <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{total.toLocaleString()}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style={CARD}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>Actions</div>
+        <form onSubmit={submitBuild} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ minWidth: 110 }}>Build New</div>
+          <select value={buildCode} onChange={(e) => setBuildCode(e.target.value)} style={INPUT_STYLE}>
+            {buildOptions.map((code) => (
+              <option key={code} value={code}>{code}</option>
+            ))}
+          </select>
+          <input
+            type="number"
+            min={1}
+            max={500}
+            value={buildQty}
+            onChange={(e) => setBuildQty(Math.max(1, Number(e.target.value || 1)))}
+            style={{ ...INPUT_STYLE, width: 120 }}
+          />
+          <button type="submit" style={BTN_STYLE} disabled={buildBusy}>
+            {buildBusy ? "Queueing..." : "Queue Build"}
+          </button>
+        </form>
+      </div>
+
+      <div style={CARD}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>Building...</div>
+        {buildQueue.length === 0 ? <div style={{ color: TEXT_MUTED }}>No active building queue.</div> : null}
+        {buildQueue.map((q) => (
+          <div key={q.id} style={{ marginBottom: 6 }}>
+            {q.building_code} lvl {q.target_level} • {String(q.completes_at).replace("T", " ").slice(0, 19)}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Placeholder({ label }: { label: string }) {
   return (
     <div style={CARD}>
@@ -869,10 +1061,11 @@ function App() {
 
         <section style={{ display: "grid", gap: 12 }}>
           {active.id === "overview" ? <OverviewView /> : null}
+          {active.id === "buildings" ? <BuildingsView /> : null}
           {active.id === "war-room" ? <WarRoomView /> : null}
           {active.id === "train-troops" ? <TrainTroopsView /> : null}
           {active.id === "attack-kingdom" ? <AttackKingdomView /> : null}
-          {active.id !== "overview" && active.id !== "war-room" && active.id !== "train-troops" && active.id !== "attack-kingdom" ? <Placeholder label={active.label} /> : null}
+          {active.id !== "overview" && active.id !== "buildings" && active.id !== "war-room" && active.id !== "train-troops" && active.id !== "attack-kingdom" ? <Placeholder label={active.label} /> : null}
         </section>
       </div>
       <footer
