@@ -148,6 +148,16 @@ const SEASONS: Array<{
   },
 ];
 
+const TROOP_TRAIN_REQUIREMENTS: Record<string, { buildingCode: string; buildingName: string; minLevel: number }> = {
+  footmen: { buildingCode: "barracks", buildingName: "Barracks", minLevel: 1 },
+  pikemen: { buildingCode: "barracks", buildingName: "Barracks", minLevel: 1 },
+  light_cavalry: { buildingCode: "stables", buildingName: "Stables", minLevel: 1 },
+  heavy_cavalry: { buildingCode: "stables", buildingName: "Stables", minLevel: 1 },
+  knights: { buildingCode: "castles", buildingName: "Castles", minLevel: 1 },
+};
+
+const FOOTMAN_ELITE_PROMOTION_RATE = clamp(Number(process.env.FOOTMAN_ELITE_PROMOTION_RATE || 0.0025), 0, 0.05);
+
 function seasonByIndex(index: number) {
   return SEASONS[((index % SEASONS.length) + SEASONS.length) % SEASONS.length];
 }
@@ -954,6 +964,17 @@ app.post("/api/kingdom/:name/train", async (req, res) => {
       if (!tt.rowCount) throw new Error("unknown troop code");
       const def = tt.rows[0];
       if (!Boolean(def.is_trainable)) throw new Error(`${troopCode} is not trainable`);
+      const req = TROOP_TRAIN_REQUIREMENTS[troopCode];
+      if (req) {
+        const rq = await c.query(
+          `SELECT COALESCE(level,0) AS lvl FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code=$2 LIMIT 1`,
+          [kingdom.id, req.buildingCode],
+        );
+        const lvl = Number(rq.rows[0]?.lvl || 0);
+        if (lvl < req.minLevel) {
+          throw new Error(`${def.name} requires ${req.buildingName} level ${req.minLevel} (current ${lvl})`);
+        }
+      }
 
       const totalGold = Number(def.gold_cost) * qty;
       const totalFood = Number(def.food_cost) * qty;
@@ -1237,6 +1258,20 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
         const survivors = Math.max(0, Number(sent) - Number(attackerBattle.losses[code] || 0));
         attackerSurvivors[code] = survivors;
       }
+      let elitesPromoted = 0;
+      const footmenSurvivors = Number(attackerSurvivors.footmen || 0);
+      if (footmenSurvivors > 0) {
+        elitesPromoted = Math.floor(footmenSurvivors * FOOTMAN_ELITE_PROMOTION_RATE);
+        if (elitesPromoted <= 0) {
+          const oneEliteRoll = Math.random() < footmenSurvivors * FOOTMAN_ELITE_PROMOTION_RATE;
+          if (oneEliteRoll) elitesPromoted = 1;
+        }
+        elitesPromoted = clamp(elitesPromoted, 0, footmenSurvivors);
+        if (elitesPromoted > 0) {
+          attackerSurvivors.footmen = footmenSurvivors - elitesPromoted;
+          attackerSurvivors.elites = Number(attackerSurvivors.elites || 0) + elitesPromoted;
+        }
+      }
 
       const defenderBattle = applyLosses(defenderTroops, dLossPct);
 
@@ -1352,6 +1387,7 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
         attackerLosses: attackerBattle.losses,
         defenderLosses: defenderBattle.losses,
         attackerSurvivorsAway: attackerSurvivors,
+        elitesPromoted,
         capturedSettlement,
       };
     });
@@ -1458,31 +1494,48 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
        GROUP BY troop_code`,
       [row.id],
     );
+    const kingdomBuildings = await pool.query(
+      `SELECT building_code, level FROM kingdom_buildings WHERE kingdom_id=$1`,
+      [row.id],
+    );
 
     const trainMap = new Map<string, number>();
     const awayMap = new Map<string, number>();
+    const buildingLevelMap = new Map<string, number>();
     for (const tr of trainRows.rows) trainMap.set(String(tr.troop_code), Number(tr.qty || 0));
     for (const aw of awayRows.rows) awayMap.set(String(aw.troop_code), Number(aw.qty || 0));
+    for (const b of kingdomBuildings.rows) buildingLevelMap.set(String(b.building_code), Number(b.level || 0));
 
-    const troops = homeRows.rows.map((t) => ({
-      troopCode: t.code,
-      troopName: t.name,
-      goldCost: Number(t.gold_cost || 0),
-      foodCost: Number(t.food_cost || 0),
-      horseCost: Number(t.horse_cost || 0),
-      trainSeconds: Number(t.train_seconds || 0),
-      att: Number(t.att_rating || 0),
-      def: Number(t.def_rating || 0),
-      upkeepFood: Number(t.upkeep_food || 0),
-      upkeepGold: Number(t.upkeep_gold || 0),
-      nw: Number(t.nw_value || 0),
-      housing: String(t.housing || ""),
-      notes: String(t.notes || ""),
-      isTrainable: Boolean(t.is_trainable),
-      home: Number(t.home || 0),
-      train: Number(trainMap.get(String(t.code)) || 0),
-      away: Number(awayMap.get(String(t.code)) || 0),
-    }));
+    const troops = homeRows.rows.map((t) => {
+      const troopCode = String(t.code || "");
+      const req = TROOP_TRAIN_REQUIREMENTS[troopCode] || null;
+      const reqLevel = req ? Number(buildingLevelMap.get(req.buildingCode) || 0) : 0;
+      const trainable = Boolean(t.is_trainable);
+      return {
+        troopCode,
+        troopName: t.name,
+        goldCost: Number(t.gold_cost || 0),
+        foodCost: Number(t.food_cost || 0),
+        horseCost: Number(t.horse_cost || 0),
+        trainSeconds: Number(t.train_seconds || 0),
+        att: Number(t.att_rating || 0),
+        def: Number(t.def_rating || 0),
+        upkeepFood: Number(t.upkeep_food || 0),
+        upkeepGold: Number(t.upkeep_gold || 0),
+        nw: Number(t.nw_value || 0),
+        housing: String(t.housing || ""),
+        notes: String(t.notes || ""),
+        isTrainable: trainable,
+        requiredBuildingCode: req?.buildingCode || null,
+        requiredBuildingName: req?.buildingName || null,
+        requiredBuildingLevel: req?.minLevel || null,
+        currentRequiredBuildingLevel: req ? reqLevel : null,
+        canTrainNow: trainable && (!req || reqLevel >= req.minLevel),
+        home: Number(t.home || 0),
+        train: Number(trainMap.get(troopCode) || 0),
+        away: Number(awayMap.get(troopCode) || 0),
+      };
+    });
 
     const training = await pool.query(
       `SELECT id, troop_code, quantity, started_at, completes_at

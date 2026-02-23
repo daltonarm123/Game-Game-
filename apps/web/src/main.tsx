@@ -67,6 +67,38 @@ const BTN_STYLE: React.CSSProperties = {
   fontFamily: FONT_BODY,
 };
 
+const BUILDING_META: Record<string, { sigil: string; summary: string; unlocks: string }> = {
+  archery_ranges: { sigil: "AR", summary: "Ranges for precision military drills and ranged troop capacity.", unlocks: "Used to support archer-focused armies and ranged military growth." },
+  barns: { sigil: "BN", summary: "Storage barns that protect surplus grain from loss.", unlocks: "Raises food storage resilience and reduces waste risk." },
+  barracks: { sigil: "BK", summary: "Core infantry training grounds for disciplined foot troops.", unlocks: "Required to train Footmen and Pikemen." },
+  castles: { sigil: "CT", summary: "Fortified command structures that harden defense and authority.", unlocks: "Required to train Knights and boosts defensive posture." },
+  embassies: { sigil: "EM", summary: "Diplomatic hubs for foreign contacts and state relations.", unlocks: "Supports diplomatic units and alliance-facing strategy." },
+  farm: { sigil: "FM", summary: "Grain farms that sustain the kingdom's food economy.", unlocks: "Increases food production each tick." },
+  guildhalls: { sigil: "GH", summary: "Guild intelligence cells coordinating covert field reports.", unlocks: "Supports spy-oriented operations and utility units." },
+  horse_farms: { sigil: "HF", summary: "Breeding fields for war mounts and transport stock.", unlocks: "Increases horse generation for cavalry training." },
+  houses: { sigil: "HS", summary: "Civil housing blocks that stabilize growth and labor supply.", unlocks: "Expands peasant capacity and population support." },
+  lumberyard: { sigil: "LY", summary: "Timber mills turning forests into usable construction goods.", unlocks: "Increases wood production each tick." },
+  markets: { sigil: "MK", summary: "Trade plazas where coin, goods, and supply routes converge.", unlocks: "Improves kingdom-wide economy and logistics flow." },
+  quarry: { sigil: "QY", summary: "Stone extraction sites feeding fortification and expansion.", unlocks: "Increases stone production each tick." },
+  stables: { sigil: "ST", summary: "Cavalry stables for mounted tactics and horse handling.", unlocks: "Required to train Light Cavalry and Heavy Cavalry." },
+  temples: { sigil: "TP", summary: "Sacred institutions that anchor faith and ritual power.", unlocks: "Supports priest-focused progression paths." },
+};
+
+const TROOP_META: Record<string, { sigil: string; tint: string; role: string }> = {
+  archers: { sigil: "AR", tint: "linear-gradient(180deg, rgba(60,98,78,.7), rgba(30,49,40,.9))", role: "Ranged defenders specialized for holding lines." },
+  crossbowmen: { sigil: "XB", tint: "linear-gradient(180deg, rgba(68,90,117,.7), rgba(33,44,58,.9))", role: "Armor-piercing ranged troops with balanced pressure." },
+  diplomats: { sigil: "DP", tint: "linear-gradient(180deg, rgba(104,88,127,.68), rgba(44,36,56,.9))", role: "Low-combat agents for diplomatic missions." },
+  elites: { sigil: "EL", tint: "linear-gradient(180deg, rgba(124,82,40,.78), rgba(60,38,18,.92))", role: "Rare veteran shock troops earned in battle." },
+  footmen: { sigil: "FT", tint: "linear-gradient(180deg, rgba(115,76,66,.72), rgba(54,34,28,.9))", role: "Baseline infantry core used in most armies." },
+  heavy_cavalry: { sigil: "HC", tint: "linear-gradient(180deg, rgba(70,87,124,.75), rgba(32,40,58,.92))", role: "Armored cavalry for hard line breaks." },
+  knights: { sigil: "KN", tint: "linear-gradient(180deg, rgba(118,104,88,.75), rgba(53,47,40,.92))", role: "Castle-trained elite mounted nobles." },
+  light_cavalry: { sigil: "LC", tint: "linear-gradient(180deg, rgba(84,116,98,.75), rgba(36,55,45,.92))", role: "Fast cavalry used for mobile pressure." },
+  peasants: { sigil: "PE", tint: "linear-gradient(180deg, rgba(106,94,74,.72), rgba(52,44,34,.9))", role: "Civilians and labor force with minimal combat value." },
+  pikemen: { sigil: "PK", tint: "linear-gradient(180deg, rgba(99,84,112,.72), rgba(46,38,53,.9))", role: "Infantry anti-cavalry phalanx units." },
+  priests: { sigil: "PR", tint: "linear-gradient(180deg, rgba(116,92,62,.72), rgba(58,44,31,.9))", role: "Faith units with low direct combat impact." },
+  spies: { sigil: "SP", tint: "linear-gradient(180deg, rgba(86,86,96,.72), rgba(40,40,46,.9))", role: "Covert agents for intelligence and sabotage." },
+};
+
 function OverviewView() {
   const [kingdom, setKingdom] = useState("Elixer");
   const [details, setDetails] = useState<any>(null);
@@ -473,7 +505,7 @@ function BuildingsView() {
           </div>
         </div>
         <div style={{ marginTop: 10, color: TEXT_MUTED }}>
-          Here you can see your kingdom buildings. It only shows what is built or queued in this game environment.
+          Each building has its own role. Build order now matters because military unlocks depend on structure type.
         </div>
         {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading buildings...</div> : null}
         {error ? (
@@ -492,6 +524,7 @@ function BuildingsView() {
             <thead>
               <tr>
                 <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Building</th>
+                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Description</th>
                 <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Built</th>
                 <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Bldg</th>
                 <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Total</th>
@@ -500,12 +533,24 @@ function BuildingsView() {
             <tbody>
               {buildings.map((b) => {
                 const code = String(b.building_code);
+                const meta = BUILDING_META[code] || { sigil: code.slice(0, 2).toUpperCase(), summary: "Core kingdom infrastructure.", unlocks: "General growth and economy support." };
                 const built = Number(b.level || 0);
                 const bldg = Number(queueCounts[code] || 0);
                 const total = built + bldg;
                 return (
                   <tr key={code}>
-                    <td style={{ padding: 8, borderBottom: "1px solid rgba(216,176,117,.15)" }}>{String(b.building_name || code)}</td>
+                    <td style={{ padding: 8, borderBottom: "1px solid rgba(216,176,117,.15)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ width: 36, height: 36, borderRadius: 6, border: "1px solid rgba(216,176,117,.55)", background: "linear-gradient(180deg, rgba(89,67,37,.82), rgba(35,27,15,.92))", display: "grid", placeItems: "center", fontWeight: 800, color: "#f2dfbf" }}>
+                          {meta.sigil}
+                        </div>
+                        <div>{String(b.building_name || code)}</div>
+                      </div>
+                    </td>
+                    <td style={{ padding: 8, borderBottom: "1px solid rgba(216,176,117,.15)", maxWidth: 520 }}>
+                      <div style={{ fontSize: 14 }}>{meta.summary}</div>
+                      <div style={{ marginTop: 2, fontSize: 13, color: "#d9c8ad" }}>{meta.unlocks}</div>
+                    </td>
                     <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{built.toLocaleString()}</td>
                     <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{bldg.toLocaleString()}</td>
                     <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{total.toLocaleString()}</td>
@@ -542,6 +587,10 @@ function BuildingsView() {
           <div style={{ marginTop: 8, color: TEXT_MUTED }}>
             {buildingMap[buildCode].building_name || buildCode} • Time: {Math.floor(Number(buildingMap[buildCode].base_build_seconds || 0) / 3600)}h •
             Cost: Land {Number(buildingMap[buildCode].land_cost || 0)}, Stone {Number(buildingMap[buildCode].stone_cost || 0)}, Wood {Number(buildingMap[buildCode].wood_cost || 0)}
+            <br />
+            {BUILDING_META[String(buildCode)]?.summary || "Core kingdom infrastructure."}
+            <br />
+            {BUILDING_META[String(buildCode)]?.unlocks || "General growth and economy support."}
           </div>
         ) : null}
       </div>
@@ -1401,6 +1450,10 @@ function WarRoomView() {
   const training = (data?.training || []) as Array<any>;
   const troopCodeOptions = troops.filter((t) => Boolean(t.isTrainable)).map((t) => String(t.troopCode || ""));
   const trainTroopData = troops.find((t) => String(t.troopCode || "") === String(trainTroop));
+  const trainQtySafe = Math.max(1, Number(trainQty || 1));
+  const reqText = trainTroopData?.requiredBuildingName
+    ? `${String(trainTroopData.requiredBuildingName)} ${Number(trainTroopData.requiredBuildingLevel || 1)}`
+    : "None";
 
   async function submitTrain(e: React.FormEvent) {
     e.preventDefault();
@@ -1479,9 +1532,8 @@ function WarRoomView() {
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setActionMsg(
-        `Attack result: ${j.result} | Ratio ${Number(j.ratio || 0).toFixed(2)} | Land ${Number(j.landTaken || 0).toLocaleString()}`,
-      );
+      const eliteMsg = Number(j.elitesPromoted || 0) > 0 ? ` | Elites promoted ${Number(j.elitesPromoted || 0).toLocaleString()}` : "";
+      setActionMsg(`Attack result: ${j.result} | Ratio ${Number(j.ratio || 0).toFixed(2)} | Land ${Number(j.landTaken || 0).toLocaleString()}${eliteMsg}`);
       await load();
     } catch (e: any) {
       setActionMsg(`Attack failed: ${String(e?.message || e)}`);
@@ -1529,19 +1581,55 @@ function WarRoomView() {
           <div style={{ ...CARD, display: "grid", gridTemplateColumns: "1.05fr 1fr", gap: 16 }}>
             <div>
               <div style={{ fontWeight: 800, marginBottom: 10, fontSize: 24, fontFamily: FONT_DISPLAY }}>Kingdom Troops</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 90px 90px 52px", gap: 8, color: TEXT_MUTED, marginBottom: 6 }}>
-                <div>Troop</div><div style={{ textAlign: "right" }}>Home</div><div style={{ textAlign: "right" }}>Train</div><div style={{ textAlign: "right" }}>Away</div><div />
-              </div>
-              <div style={{ display: "grid", gap: 8 }}>
-                {troops.map((t) => (
-                  <div key={t.troopCode} style={{ display: "grid", gridTemplateColumns: "1fr 110px 90px 90px 52px", gap: 8, alignItems: "center", borderBottom: "1px solid rgba(216,176,117,.18)", paddingBottom: 6 }}>
-                    <div style={{ fontSize: 31, fontFamily: FONT_DISPLAY }}>{t.troopName}</div>
-                    <div style={{ textAlign: "right", fontSize: 26, fontFamily: FONT_DISPLAY }}>{Number(t.home || 0).toLocaleString()}</div>
-                    <div style={{ textAlign: "right", fontSize: 22 }}>{Number(t.train || 0).toLocaleString()}</div>
-                    <div style={{ textAlign: "right", fontSize: 22 }}>{Number(t.away || 0).toLocaleString()}</div>
-                    <button style={{ ...BTN_STYLE, padding: "6px 8px" }} onClick={() => void disbandTroop(String(t.troopCode), Number(t.home || 0))}>Del</button>
-                  </div>
-                ))}
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Troop</th>
+                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Att</th>
+                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Def</th>
+                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Food</th>
+                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Gold</th>
+                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>NW</th>
+                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Home</th>
+                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Train</th>
+                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Away</th>
+                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Disband</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {troops.map((t) => {
+                      const code = String(t.troopCode || "");
+                      const meta = TROOP_META[code] || { sigil: code.slice(0, 2).toUpperCase(), tint: "linear-gradient(180deg, rgba(86,70,48,.72), rgba(42,32,22,.9))", role: "Kingdom military unit." };
+                      return (
+                        <tr key={code}>
+                          <td style={{ padding: 6, borderBottom: "1px solid rgba(216,176,117,.16)" }}>
+                            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                              <div style={{ width: 34, height: 34, borderRadius: 6, border: "1px solid rgba(216,176,117,.58)", background: meta.tint, display: "grid", placeItems: "center", color: "#f5e4c9", fontWeight: 800 }}>
+                                {meta.sigil}
+                              </div>
+                              <div>
+                                <div style={{ fontSize: 29, fontFamily: FONT_DISPLAY, lineHeight: 1.02 }}>{t.troopName}</div>
+                                <div style={{ fontSize: 12, color: "#d8c9b2" }}>{meta.role}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)" }}>{Number(t.att || 0).toLocaleString()}</td>
+                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)" }}>{Number(t.def || 0).toLocaleString()}</td>
+                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)" }}>{Number(t.upkeepFood || 0).toLocaleString()}</td>
+                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)" }}>{Number(t.upkeepGold || 0).toLocaleString()}</td>
+                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)" }}>{Number(t.nw || 0).toLocaleString()}</td>
+                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)", fontFamily: FONT_DISPLAY, fontSize: 25 }}>{Number(t.home || 0).toLocaleString()}</td>
+                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)" }}>{Number(t.train || 0).toLocaleString()}</td>
+                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)" }}>{Number(t.away || 0).toLocaleString()}</td>
+                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)" }}>
+                            <button style={{ ...BTN_STYLE, padding: "5px 9px" }} onClick={() => void disbandTroop(code, Number(t.home || 0))}>Trash</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </div>
 
@@ -1556,7 +1644,10 @@ function WarRoomView() {
                     <div style={{ display: "grid", gridTemplateColumns: "170px 1fr", gap: 8 }}>
                       <div style={{ ...INPUT_STYLE }}>Population Types</div>
                       <select value={trainTroop} onChange={(e) => setTrainTroop(e.target.value)} style={INPUT_STYLE}>
-                        {troopCodeOptions.map((code) => <option key={code} value={code}>{code}</option>)}
+                        {troopCodeOptions.map((code) => {
+                          const tr = troops.find((t) => String(t.troopCode || "") === code);
+                          return <option key={code} value={code}>{String(tr?.troopName || code)}</option>;
+                        })}
                       </select>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "170px 1fr", gap: 8 }}>
@@ -1565,14 +1656,24 @@ function WarRoomView() {
                     </div>
                     {trainTroopData ? (
                       <div style={{ color: TEXT_MUTED }}>
-                        {trainTroopData.troopName} • Training Time: {formatDuration(Number(trainTroopData.trainSeconds || 0) * Math.max(1, Number(trainQty || 1)))}
+                        {trainTroopData.troopName} • Training Time: {formatDuration(Number(trainTroopData.trainSeconds || 0) * trainQtySafe)}
                         <br />
-                        Costs: Gold {(Number(trainTroopData.goldCost || 0) * Math.max(1, Number(trainQty || 1))).toLocaleString()} • Food {(Number(trainTroopData.foodCost || 0) * Math.max(1, Number(trainQty || 1))).toLocaleString()} • Horses {(Number(trainTroopData.horseCost || 0) * Math.max(1, Number(trainQty || 1))).toLocaleString()}
+                        Stats: Att {Number(trainTroopData.att || 0)} • Def {Number(trainTroopData.def || 0)} • NW {Number(trainTroopData.nw || 0)}
+                        <br />
+                        Costs: Gold {(Number(trainTroopData.goldCost || 0) * trainQtySafe).toLocaleString()} • Food {(Number(trainTroopData.foodCost || 0) * trainQtySafe).toLocaleString()} • Horses {(Number(trainTroopData.horseCost || 0) * trainQtySafe).toLocaleString()}
                         <br />
                         Upkeep/h each: Gold {Number(trainTroopData.upkeepGold || 0)} • Food {Number(trainTroopData.upkeepFood || 0)}
+                        <br />
+                        Requirement: {reqText}
+                        {trainTroopData.requiredBuildingName ? ` (you have ${Number(trainTroopData.currentRequiredBuildingLevel || 0)})` : ""}
+                        {!Boolean(trainTroopData.canTrainNow) ? " - requirement not met." : ""}
+                        <br />
+                        {String(trainTroopData.notes || TROOP_META[String(trainTroopData.troopCode || "")]?.role || "")}
                       </div>
                     ) : null}
-                    <button type="submit" style={BTN_STYLE}>Train Now</button>
+                    <button type="submit" style={BTN_STYLE} disabled={trainTroopData && !Boolean(trainTroopData.canTrainNow)}>
+                      {trainTroopData && !Boolean(trainTroopData.canTrainNow) ? "Requirement Missing" : "Train Now"}
+                    </button>
                   </form>
                 ) : null}
 
