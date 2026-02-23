@@ -710,6 +710,9 @@ function SettlementsView() {
   const [error, setError] = useState("");
   const [actionMsg, setActionMsg] = useState("");
   const [settlementId, setSettlementId] = useState<number>(0);
+  const [showDetail, setShowDetail] = useState(false);
+  const [renameId, setRenameId] = useState<number>(0);
+  const [renameName, setRenameName] = useState("");
   const [buildingCode, setBuildingCode] = useState("housing");
   const [busy, setBusy] = useState(false);
 
@@ -758,12 +761,46 @@ function SettlementsView() {
     }
   }
 
+  async function renameSettlement() {
+    if (!renameId || !renameName.trim()) return;
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/settlements/${encodeURIComponent(kingdom)}/rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settlementId: renameId, name: renameName.trim() }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Renamed settlement to "${String(j?.settlement?.name || renameName)}" (wellbeing -100).`);
+      setRenameId(0);
+      setRenameName("");
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Rename failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const settlements = (data?.settlements || []) as Array<any>;
   const queue = (data?.queue || []) as Array<any>;
   const catalog = (data?.catalog || []) as Array<any>;
   const buildings = (data?.buildings || []) as Array<any>;
   const selected = settlements.find((s) => Number(s.id) === Number(settlementId));
   const selectedBuildings = buildings.filter((b) => Number(b.settlement_id) === Number(settlementId));
+  const avgWellbeing = Number(data?.averageWellbeing || 0);
+  const totalSettlementRank = Number(data?.totalSettlementRank || 0);
+  const totalMaintenance = settlements.reduce(
+    (acc, s) => {
+      acc.gold += Number(s?.maintenance?.gold || 0);
+      acc.stone += Number(s?.maintenance?.stone || 0);
+      acc.wood += Number(s?.maintenance?.wood || 0);
+      return acc;
+    },
+    { gold: 0, stone: 0, wood: 0 },
+  );
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
@@ -774,7 +811,7 @@ function SettlementsView() {
               Settlements - {data?.kingdom?.name || kingdom}
             </div>
             <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 18, fontWeight: 700 }}>
-              Unlocked by land: {Number(data?.unlockedByLand || 0)} • Owned: {settlements.length}
+              Number of settlements: {settlements.length} ({Number(data?.unlockedByLand || 0)}) • Average Wellbeing: {avgWellbeing.toLocaleString()} • Total settlement rank: {totalSettlementRank}
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -793,7 +830,15 @@ function SettlementsView() {
       </div>
 
       <div style={CARD}>
-        <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Owned Settlements</div>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
+          <div style={{ fontWeight: 800, fontSize: 22 }}>Owned Settlements</div>
+          <div style={{ color: TEXT_MUTED }}>
+            Maintenance/h: Gold {totalMaintenance.gold.toLocaleString()} Wood {totalMaintenance.wood.toLocaleString()} Stone {totalMaintenance.stone.toLocaleString()}
+          </div>
+        </div>
+        <div style={{ marginBottom: 10, color: TEXT_MUTED }}>
+          Settlements are part of your kingdom. Open one to manage buildings, or rename it with the edit icon.
+        </div>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
@@ -801,18 +846,42 @@ function SettlementsView() {
                 <th style={{ textAlign: "left", padding: 8 }}>Name</th>
                 <th style={{ textAlign: "left", padding: 8 }}>Type</th>
                 <th style={{ textAlign: "right", padding: 8 }}>Level</th>
-                <th style={{ textAlign: "right", padding: 8 }}>Slots</th>
-                <th style={{ textAlign: "right", padding: 8 }}>Walls</th>
+                <th style={{ textAlign: "right", padding: 8 }}>Wellbeing</th>
+                <th style={{ textAlign: "right", padding: 8 }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {settlements.map((s) => (
-                <tr key={s.id} onClick={() => setSettlementId(Number(s.id))} style={{ cursor: "pointer", background: Number(s.id) === Number(settlementId) ? "rgba(216,176,117,.12)" : "transparent" }}>
-                  <td style={{ padding: 8 }}>{s.name}</td>
-                  <td style={{ padding: 8 }}>{s.settlement_type}</td>
+                <tr key={s.id} style={{ background: Number(s.id) === Number(settlementId) ? "rgba(216,176,117,.12)" : "transparent" }}>
+                  <td style={{ padding: 8 }}>
+                    <div style={{ fontWeight: 800, fontSize: 28, fontFamily: FONT_DISPLAY }}>{s.name}</div>
+                    <div style={{ color: TEXT_MUTED, marginTop: 4, fontSize: 18 }}>
+                      Maintenance - Gold: {Number(s?.maintenance?.gold || 0).toLocaleString()} Wood: {Number(s?.maintenance?.wood || 0).toLocaleString()} Stone: {Number(s?.maintenance?.stone || 0).toLocaleString()}
+                    </div>
+                  </td>
+                  <td style={{ padding: 8 }}>{String(s.settlement_type || "").replaceAll("_", " ")}</td>
                   <td style={{ padding: 8, textAlign: "right" }}>{Number(s.level || 0)}</td>
-                  <td style={{ padding: 8, textAlign: "right" }}>{Number(s.slots_total || 0)}</td>
-                  <td style={{ padding: 8, textAlign: "right" }}>{Number(s.wall_level || 0)}</td>
+                  <td style={{ padding: 8, textAlign: "right" }}>{Number(s.wellbeing || 0).toLocaleString()}</td>
+                  <td style={{ padding: 8, textAlign: "right" }}>
+                    <button
+                      onClick={() => {
+                        setSettlementId(Number(s.id));
+                        setShowDetail(true);
+                      }}
+                      style={{ ...BTN_STYLE, padding: "6px 10px", marginRight: 8 }}
+                    >
+                      Open
+                    </button>
+                    <button
+                      onClick={() => {
+                        setRenameId(Number(s.id));
+                        setRenameName(String(s.name || ""));
+                      }}
+                      style={{ ...BTN_STYLE, padding: "6px 10px" }}
+                    >
+                      Rename
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -820,41 +889,71 @@ function SettlementsView() {
         </div>
       </div>
 
-      <div style={CARD}>
-        <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Settlement Buildings {selected ? `- ${selected.name}` : ""}</div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
-          <select value={buildingCode} onChange={(e) => setBuildingCode(e.target.value)} style={INPUT_STYLE}>
-            {catalog.map((c) => (
-              <option key={c.code} value={c.code}>{c.name}</option>
-            ))}
-          </select>
-          <button onClick={() => void upgrade()} style={BTN_STYLE} disabled={busy || !settlementId}>
-            {busy ? "Queueing..." : "Upgrade Building"}
-          </button>
+      {renameId ? (
+        <div style={CARD}>
+          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Rename Settlement</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <input value={renameName} onChange={(e) => setRenameName(e.target.value)} style={INPUT_STYLE} />
+            <button onClick={() => void renameSettlement()} style={BTN_STYLE} disabled={busy || !renameName.trim()}>
+              {busy ? "Saving..." : "Save Name"}
+            </button>
+            <button onClick={() => { setRenameId(0); setRenameName(""); }} style={BTN_STYLE}>
+              Cancel
+            </button>
+          </div>
         </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left", padding: 8 }}>Building</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Effect</th>
-                <th style={{ textAlign: "right", padding: 8 }}>Level</th>
-                <th style={{ textAlign: "right", padding: 8 }}>Max</th>
-              </tr>
-            </thead>
-            <tbody>
-              {selectedBuildings.map((b) => (
-                <tr key={`${b.settlement_id}-${b.building_code}`}>
-                  <td style={{ padding: 8 }}>{b.name}</td>
-                  <td style={{ padding: 8, color: TEXT_MUTED }}>{b.effect_text}</td>
-                  <td style={{ padding: 8, textAlign: "right" }}>{Number(b.level || 0)}</td>
-                  <td style={{ padding: 8, textAlign: "right" }}>{Number(b.max_level || 0)}</td>
-                </tr>
+      ) : null}
+
+      {showDetail && selected ? (
+        <div style={CARD}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+            <div>
+              <div style={{ fontSize: 40, fontWeight: 800, fontFamily: FONT_DISPLAY }}>{selected.name}</div>
+              <div style={{ marginTop: 4, fontSize: 22 }}>
+                {String(selected.settlement_type || "").replaceAll("_", " ")} / Level: {Number(selected.level || 0)} / Slots: {Number(selected.slots_total || 0)}
+              </div>
+              <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 18 }}>
+                Wellbeing: {Number(selected.wellbeing || 0).toLocaleString()} • Maintenance - Gold: {Number(selected?.maintenance?.gold || 0).toLocaleString()} Wood: {Number(selected?.maintenance?.wood || 0).toLocaleString()} Stone: {Number(selected?.maintenance?.stone || 0).toLocaleString()}
+              </div>
+            </div>
+            <button onClick={() => setShowDetail(false)} style={BTN_STYLE}>Back To List</button>
+          </div>
+
+          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 26 }}>Buildings</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+            <select value={buildingCode} onChange={(e) => setBuildingCode(e.target.value)} style={INPUT_STYLE}>
+              {catalog.map((c) => (
+                <option key={c.code} value={c.code}>{c.name}</option>
               ))}
-            </tbody>
-          </table>
+            </select>
+            <button onClick={() => void upgrade()} style={BTN_STYLE} disabled={busy || !settlementId}>
+              {busy ? "Queueing..." : "Upgrade Building"}
+            </button>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: 8 }}>Building Type</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Effect</th>
+                  <th style={{ textAlign: "right", padding: 8 }}>Level</th>
+                  <th style={{ textAlign: "right", padding: 8 }}>Cap</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedBuildings.map((b) => (
+                  <tr key={`${b.settlement_id}-${b.building_code}`}>
+                    <td style={{ padding: 8 }}>{b.name}</td>
+                    <td style={{ padding: 8, color: TEXT_MUTED }}>{b.effect_text}</td>
+                    <td style={{ padding: 8, textAlign: "right" }}>{Number(b.level || 0)}</td>
+                    <td style={{ padding: 8, textAlign: "right" }}>{Math.min(Number(b.max_level || 0), Number(selected.level || 1))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      ) : null}
 
       <div style={CARD}>
         <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Settlement Build Queue</div>
