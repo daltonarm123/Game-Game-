@@ -67,6 +67,30 @@ const settlementUpgradeBody = z.object({
   buildingCode: z.string().min(1),
 });
 
+const allianceCreateBody = z.object({
+  slug: z.string().min(2),
+  name: z.string().min(2),
+  description: z.string().optional().default(""),
+  imageUrl: z.string().optional().default(""),
+});
+
+const allianceJoinBody = z.object({
+  allianceId: z.number().int().positive(),
+});
+
+const allianceRelationBody = z.object({
+  relationType: z.enum(["ally", "nap", "enemy", "cease_fire", "joint_ops"]),
+  targetName: z.string().min(2),
+  note: z.string().optional().default(""),
+});
+
+const allianceContribBody = z.object({
+  buildingCode: z.string().min(1),
+  gold: z.number().int().min(0).optional().default(0),
+  stone: z.number().int().min(0).optional().default(0),
+  wood: z.number().int().min(0).optional().default(0),
+});
+
 const ECON_BUILDING_HOURLY = {
   farmFood: 120,
   lumberWood: 80,
@@ -229,6 +253,24 @@ async function ensureSettlementsForKingdom(c: PoolClient, kingdomId: number, kin
   }
 }
 
+function sanitizeAllianceSlug(input: string) {
+  const normalized = String(input || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (normalized.length < 2 || normalized.length > 32) throw new Error("slug must be 2-32 chars (a-z, 0-9, -, _)");
+  return normalized;
+}
+
+function allianceProjectTarget(base: number, level: number) {
+  return Math.max(1, Math.floor(Number(base || 0) * Math.max(1, Number(level || 0) + 1)));
+}
+
+function allianceMemberCap(hallLevel: number) {
+  return 15 + Math.max(0, Math.floor(Number(hallLevel || 0)));
+}
+
 async function seedKingdom(c: PoolClient, opts: {
   userId: string;
   username: string;
@@ -314,7 +356,7 @@ app.post("/api/dev/demo-reset", async (req, res) => {
 
   try {
     const out = await withTx(async (c) => {
-      await c.query(`TRUNCATE troop_movements, attack_reports, research_queue, kingdom_research, train_queue, build_queue, kingdom_troops, kingdom_buildings, kingdoms, app_users RESTART IDENTITY CASCADE`);
+      await c.query(`TRUNCATE troop_movements, attack_reports, alliance_buildings, alliance_relations, alliance_members, alliances, settlement_capture_log, settlement_build_queue, settlement_buildings, settlements, research_queue, kingdom_research, train_queue, build_queue, kingdom_troops, kingdom_buildings, kingdoms, app_users RESTART IDENTITY CASCADE`);
 
       const attacker = await seedKingdom(c, {
         userId: body.attackerUserId,
@@ -394,7 +436,27 @@ app.post("/api/dev/demo-reset", async (req, res) => {
         },
       });
 
-      return { attacker, defender };
+      const alliance = await c.query(
+        `INSERT INTO alliances(slug, name, description, created_by_kingdom_id)
+         VALUES ('kga', 'Kingdom Game Addicts', 'Demo alliance for testing.', $1)
+         RETURNING id`,
+        [attacker.id],
+      );
+      await c.query(
+        `INSERT INTO alliance_members(alliance_id, kingdom_id, role)
+         VALUES ($1,$2,'owner'), ($1,$3,'member')`,
+        [alliance.rows[0].id, attacker.id, defender.id],
+      );
+      await c.query(
+        `
+        INSERT INTO alliance_buildings(alliance_id, building_code, level, progress_gold, progress_stone, progress_wood)
+        SELECT $1::bigint, code, 0, 0, 0, 0 FROM alliance_building_types
+        ON CONFLICT (alliance_id, building_code) DO NOTHING
+        `,
+        [alliance.rows[0].id],
+      );
+
+      return { attacker, defender, alliance: alliance.rows[0] };
     });
 
     return res.json({ ok: true, ...out });
@@ -1280,6 +1342,420 @@ app.post("/api/settlements/:kingdom/upgrade-building", async (req, res) => {
 
       return { queue: ins.rows[0], costs: { gold: costGold, stone: costStone, wood: costWood } };
     });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/alliance/:kingdom", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+
+  try {
+    const k = await pool.query(`SELECT id, name, gold, stone, wood, land FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const kr = k.rows[0];
+
+    const membership = await pool.query(
+      `
+      SELECT am.role, a.id AS alliance_id, a.slug, a.name, a.description, a.image_url, a.created_by_kingdom_id, a.created_at
+      FROM alliance_members am
+      JOIN alliances a ON a.id = am.alliance_id
+      WHERE am.kingdom_id=$1
+      LIMIT 1
+      `,
+      [kr.id],
+    );
+
+    if (!membership.rowCount) {
+      const alliances = await pool.query(
+        `
+        SELECT a.id, a.slug, a.name, a.description, a.image_url, a.created_at, COUNT(am.kingdom_id)::int AS members
+        FROM alliances a
+        LEFT JOIN alliance_members am ON am.alliance_id = a.id
+        GROUP BY a.id
+        ORDER BY members DESC, a.created_at DESC
+        LIMIT 40
+        `,
+      );
+      return res.json({
+        ok: true,
+        kingdom: {
+          id: kr.id,
+          name: kr.name,
+          land: Number(kr.land || 0),
+          gold: Number(kr.gold || 0),
+          stone: Number(kr.stone || 0),
+          wood: Number(kr.wood || 0),
+        },
+        member: null,
+        alliance: null,
+        alliances: alliances.rows,
+      });
+    }
+
+    const m = membership.rows[0];
+    const allianceId = Number(m.alliance_id);
+    const members = await pool.query(
+      `
+      SELECT am.kingdom_id, am.role, am.joined_at, k.name AS kingdom_name, k.land
+      FROM alliance_members am
+      JOIN kingdoms k ON k.id = am.kingdom_id
+      WHERE am.alliance_id=$1
+      ORDER BY CASE am.role WHEN 'owner' THEN 0 WHEN 'officer' THEN 1 ELSE 2 END, k.land DESC, k.name ASC
+      `,
+      [allianceId],
+    );
+    const relations = await pool.query(
+      `
+      SELECT id, relation_type, target_name, note
+      FROM alliance_relations
+      WHERE alliance_id=$1
+      ORDER BY relation_type ASC, target_name ASC
+      `,
+      [allianceId],
+    );
+    const projects = await pool.query(
+      `
+      SELECT ab.building_code, bt.name, bt.effect_text, bt.target_gold, bt.target_stone, bt.target_wood,
+             ab.level, ab.progress_gold, ab.progress_stone, ab.progress_wood
+      FROM alliance_buildings ab
+      JOIN alliance_building_types bt ON bt.code = ab.building_code
+      WHERE ab.alliance_id=$1
+      ORDER BY bt.name ASC
+      `,
+      [allianceId],
+    );
+
+    let hallLevel = 0;
+    const normalizedProjects = projects.rows.map((p) => {
+      const level = Number(p.level || 0);
+      const targetGold = allianceProjectTarget(Number(p.target_gold || 0), level);
+      const targetStone = allianceProjectTarget(Number(p.target_stone || 0), level);
+      const targetWood = allianceProjectTarget(Number(p.target_wood || 0), level);
+      if (String(p.building_code) === "alliance_hall") hallLevel = level;
+      return {
+        buildingCode: p.building_code,
+        name: p.name,
+        effectText: p.effect_text,
+        level,
+        targetGold,
+        targetStone,
+        targetWood,
+        progressGold: Number(p.progress_gold || 0),
+        progressStone: Number(p.progress_stone || 0),
+        progressWood: Number(p.progress_wood || 0),
+        remainingGold: Math.max(0, targetGold - Number(p.progress_gold || 0)),
+        remainingStone: Math.max(0, targetStone - Number(p.progress_stone || 0)),
+        remainingWood: Math.max(0, targetWood - Number(p.progress_wood || 0)),
+      };
+    });
+
+    return res.json({
+      ok: true,
+      kingdom: {
+        id: kr.id,
+        name: kr.name,
+        land: Number(kr.land || 0),
+        gold: Number(kr.gold || 0),
+        stone: Number(kr.stone || 0),
+        wood: Number(kr.wood || 0),
+      },
+      member: {
+        role: String(m.role || "member"),
+      },
+      alliance: {
+        id: allianceId,
+        slug: m.slug,
+        name: m.name,
+        description: m.description,
+        imageUrl: m.image_url,
+        createdByKingdomId: m.created_by_kingdom_id,
+        createdAt: m.created_at,
+        memberCap: allianceMemberCap(hallLevel),
+      },
+      members: members.rows.map((row) => ({
+        kingdomId: Number(row.kingdom_id),
+        kingdomName: row.kingdom_name,
+        role: row.role,
+        land: Number(row.land || 0),
+        joinedAt: row.joined_at,
+      })),
+      relations: relations.rows,
+      projects: normalizedProjects,
+    });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/alliance/:kingdom/create", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = allianceCreateBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(k.rows[0].id);
+
+      const inAlliance = await c.query(`SELECT alliance_id FROM alliance_members WHERE kingdom_id=$1 LIMIT 1`, [kingdomId]);
+      if (inAlliance.rowCount) throw new Error("kingdom already in an alliance");
+
+      const slug = sanitizeAllianceSlug(parsed.data.slug);
+      const name = String(parsed.data.name || "").trim();
+      if (name.length < 2 || name.length > 64) throw new Error("name must be 2-64 chars");
+      const description = String(parsed.data.description || "").trim().slice(0, 240);
+      const imageUrl = String(parsed.data.imageUrl || "").trim().slice(0, 260);
+
+      const ins = await c.query(
+        `
+        INSERT INTO alliances(slug, name, description, image_url, created_by_kingdom_id)
+        VALUES ($1,$2,$3,$4,$5)
+        RETURNING id, slug, name, description, image_url, created_at
+        `,
+        [slug, name, description, imageUrl, kingdomId],
+      );
+      const alliance = ins.rows[0];
+
+      await c.query(
+        `INSERT INTO alliance_members(alliance_id, kingdom_id, role) VALUES ($1,$2,'owner')`,
+        [alliance.id, kingdomId],
+      );
+      await c.query(
+        `
+        INSERT INTO alliance_buildings(alliance_id, building_code, level, progress_gold, progress_stone, progress_wood)
+        SELECT $1::bigint, code, 0, 0, 0, 0
+        FROM alliance_building_types
+        ON CONFLICT (alliance_id, building_code) DO NOTHING
+        `,
+        [alliance.id],
+      );
+
+      return alliance;
+    });
+
+    return res.json({ ok: true, alliance: out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/alliance/:kingdom/join", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = allianceJoinBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(k.rows[0].id);
+      const allianceId = Number(parsed.data.allianceId);
+
+      const existing = await c.query(`SELECT alliance_id FROM alliance_members WHERE kingdom_id=$1 LIMIT 1`, [kingdomId]);
+      if (existing.rowCount) throw new Error("kingdom already in an alliance");
+
+      const a = await c.query(`SELECT id, name FROM alliances WHERE id=$1 LIMIT 1`, [allianceId]);
+      if (!a.rowCount) throw new Error("alliance not found");
+
+      const hall = await c.query(
+        `SELECT level FROM alliance_buildings WHERE alliance_id=$1 AND building_code='alliance_hall' LIMIT 1`,
+        [allianceId],
+      );
+      const memberCountQ = await c.query(`SELECT COUNT(*)::int AS n FROM alliance_members WHERE alliance_id=$1`, [allianceId]);
+      const cap = allianceMemberCap(Number(hall.rows[0]?.level || 0));
+      const memberCount = Number(memberCountQ.rows[0]?.n || 0);
+      if (memberCount >= cap) throw new Error(`alliance member cap reached (${memberCount}/${cap})`);
+
+      await c.query(`INSERT INTO alliance_members(alliance_id, kingdom_id, role) VALUES ($1,$2,'member')`, [allianceId, kingdomId]);
+      return { allianceId, allianceName: a.rows[0].name, memberCount: memberCount + 1, memberCap: cap };
+    });
+
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/alliance/:kingdom/leave", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(k.rows[0].id);
+
+      const m = await c.query(`SELECT alliance_id, role FROM alliance_members WHERE kingdom_id=$1 LIMIT 1`, [kingdomId]);
+      if (!m.rowCount) throw new Error("kingdom is not in an alliance");
+      const allianceId = Number(m.rows[0].alliance_id);
+      const role = String(m.rows[0].role || "member");
+      let disbanded = false;
+
+      if (role === "owner") {
+        const others = await c.query(`SELECT kingdom_id FROM alliance_members WHERE alliance_id=$1 AND kingdom_id<>$2 ORDER BY joined_at ASC`, [allianceId, kingdomId]);
+        if (others.rowCount) throw new Error("owner cannot leave while members remain (promote another leader first)");
+        await c.query(`DELETE FROM alliances WHERE id=$1`, [allianceId]);
+        disbanded = true;
+      } else {
+        await c.query(`DELETE FROM alliance_members WHERE alliance_id=$1 AND kingdom_id=$2`, [allianceId, kingdomId]);
+      }
+      return { allianceId, disbanded };
+    });
+
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/alliance/:kingdom/relation", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = allianceRelationBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(k.rows[0].id);
+
+      const m = await c.query(`SELECT alliance_id, role FROM alliance_members WHERE kingdom_id=$1 LIMIT 1`, [kingdomId]);
+      if (!m.rowCount) throw new Error("kingdom is not in an alliance");
+      const allianceId = Number(m.rows[0].alliance_id);
+      const role = String(m.rows[0].role || "member");
+      if (role !== "owner" && role !== "officer") throw new Error("only owner/officers can update relations");
+
+      const targetName = String(parsed.data.targetName || "").trim();
+      if (!targetName) throw new Error("targetName required");
+      const relationType = parsed.data.relationType;
+      const note = String(parsed.data.note || "").trim().slice(0, 180);
+
+      await c.query(
+        `DELETE FROM alliance_relations WHERE alliance_id=$1 AND relation_type=$2 AND LOWER(target_name)=LOWER($3)`,
+        [allianceId, relationType, targetName],
+      );
+      const ins = await c.query(
+        `
+        INSERT INTO alliance_relations(alliance_id, relation_type, target_name, note)
+        VALUES ($1,$2,$3,$4)
+        RETURNING id, relation_type, target_name, note
+        `,
+        [allianceId, relationType, targetName, note],
+      );
+      return ins.rows[0];
+    });
+
+    return res.json({ ok: true, relation: out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/alliance/:kingdom/contribute", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = allianceContribBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id, gold, stone, wood FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kr = k.rows[0];
+
+      const m = await c.query(`SELECT alliance_id FROM alliance_members WHERE kingdom_id=$1 LIMIT 1`, [kr.id]);
+      if (!m.rowCount) throw new Error("kingdom is not in an alliance");
+      const allianceId = Number(m.rows[0].alliance_id);
+      const buildingCode = String(parsed.data.buildingCode || "").toLowerCase().trim();
+      if (!buildingCode) throw new Error("buildingCode required");
+
+      const reqGold = Math.max(0, Math.floor(Number(parsed.data.gold || 0)));
+      const reqStone = Math.max(0, Math.floor(Number(parsed.data.stone || 0)));
+      const reqWood = Math.max(0, Math.floor(Number(parsed.data.wood || 0)));
+      if (reqGold <= 0 && reqStone <= 0 && reqWood <= 0) throw new Error("set at least one contribution amount > 0");
+
+      const project = await c.query(
+        `
+        SELECT ab.level, ab.progress_gold, ab.progress_stone, ab.progress_wood, bt.target_gold, bt.target_stone, bt.target_wood
+        FROM alliance_buildings ab
+        JOIN alliance_building_types bt ON bt.code = ab.building_code
+        WHERE ab.alliance_id=$1 AND ab.building_code=$2
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [allianceId, buildingCode],
+      );
+      if (!project.rowCount) throw new Error("alliance project not found");
+      const p = project.rows[0];
+
+      const level = Number(p.level || 0);
+      const targetGold = allianceProjectTarget(Number(p.target_gold || 0), level);
+      const targetStone = allianceProjectTarget(Number(p.target_stone || 0), level);
+      const targetWood = allianceProjectTarget(Number(p.target_wood || 0), level);
+
+      const progressGold = Number(p.progress_gold || 0);
+      const progressStone = Number(p.progress_stone || 0);
+      const progressWood = Number(p.progress_wood || 0);
+
+      const remGold = Math.max(0, targetGold - progressGold);
+      const remStone = Math.max(0, targetStone - progressStone);
+      const remWood = Math.max(0, targetWood - progressWood);
+
+      const spendGold = Math.min(reqGold, remGold, Number(kr.gold || 0));
+      const spendStone = Math.min(reqStone, remStone, Number(kr.stone || 0));
+      const spendWood = Math.min(reqWood, remWood, Number(kr.wood || 0));
+      if (spendGold <= 0 && spendStone <= 0 && spendWood <= 0) throw new Error("nothing to contribute (insufficient resources or project already complete)");
+
+      await c.query(`UPDATE kingdoms SET gold=gold-$2, stone=stone-$3, wood=wood-$4 WHERE id=$1`, [kr.id, spendGold, spendStone, spendWood]);
+
+      let nextLevel = level;
+      let nextProgressGold = progressGold + spendGold;
+      let nextProgressStone = progressStone + spendStone;
+      let nextProgressWood = progressWood + spendWood;
+      let leveledUp = false;
+
+      if (nextProgressGold >= targetGold && nextProgressStone >= targetStone && nextProgressWood >= targetWood) {
+        nextLevel = level + 1;
+        nextProgressGold = 0;
+        nextProgressStone = 0;
+        nextProgressWood = 0;
+        leveledUp = true;
+      }
+
+      await c.query(
+        `
+        UPDATE alliance_buildings
+        SET level=$3, progress_gold=$4, progress_stone=$5, progress_wood=$6
+        WHERE alliance_id=$1 AND building_code=$2
+        `,
+        [allianceId, buildingCode, nextLevel, nextProgressGold, nextProgressStone, nextProgressWood],
+      );
+
+      return {
+        allianceId,
+        buildingCode,
+        contribution: { gold: spendGold, stone: spendStone, wood: spendWood },
+        project: {
+          level: nextLevel,
+          progressGold: nextProgressGold,
+          progressStone: nextProgressStone,
+          progressWood: nextProgressWood,
+          targetGold: leveledUp ? allianceProjectTarget(Number(p.target_gold || 0), nextLevel) : targetGold,
+          targetStone: leveledUp ? allianceProjectTarget(Number(p.target_stone || 0), nextLevel) : targetStone,
+          targetWood: leveledUp ? allianceProjectTarget(Number(p.target_wood || 0), nextLevel) : targetWood,
+          leveledUp,
+        },
+      };
+    });
+
     return res.json({ ok: true, ...out });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });

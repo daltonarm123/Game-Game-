@@ -733,6 +733,382 @@ function SettlementsView() {
   );
 }
 
+function AllianceView() {
+  const [kingdom, setKingdom] = useState("Elixer");
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [actionMsg, setActionMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const [createSlug, setCreateSlug] = useState("my-alliance");
+  const [createName, setCreateName] = useState("My Alliance");
+  const [createDesc, setCreateDesc] = useState("");
+
+  const [joinAllianceId, setJoinAllianceId] = useState<number>(0);
+
+  const [relationType, setRelationType] = useState("ally");
+  const [relationTarget, setRelationTarget] = useState("");
+  const [relationNote, setRelationNote] = useState("");
+
+  const [contribCode, setContribCode] = useState("alliance_hall");
+  const [contribGold, setContribGold] = useState(0);
+  const [contribStone, setContribStone] = useState(0);
+  const [contribWood, setContribWood] = useState(0);
+
+  async function load() {
+    setLoading(true);
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}`);
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setData(j);
+      if (!joinAllianceId && Array.isArray(j.alliances) && j.alliances.length > 0) {
+        setJoinAllianceId(Number(j.alliances[0].id));
+      }
+      if (Array.isArray(j.projects) && j.projects.length > 0 && !j.projects.find((p: any) => String(p.buildingCode || "") === contribCode)) {
+        setContribCode(String(j.projects[0].buildingCode || "alliance_hall"));
+      }
+    } catch (e: any) {
+      setData(null);
+      setError(String(e?.message || e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function createAlliance() {
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slug: createSlug,
+          name: createName,
+          description: createDesc,
+          imageUrl: "",
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Alliance created: ${String(j?.alliance?.name || createName)}`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Create failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function joinAlliance() {
+    if (!joinAllianceId) return;
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/join`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ allianceId: joinAllianceId }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Joined alliance #${joinAllianceId}`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Join failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function leaveAlliance() {
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/leave`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(Boolean(j?.disbanded) ? "Alliance disbanded." : "Left alliance.");
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Leave failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveRelation() {
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/relation`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          relationType,
+          targetName: relationTarget,
+          note: relationNote,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Relation saved: ${relationType} -> ${relationTarget}`);
+      setRelationTarget("");
+      setRelationNote("");
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Relation failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function contribute() {
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/contribute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          buildingCode: contribCode,
+          gold: Math.max(0, Math.floor(Number(contribGold || 0))),
+          stone: Math.max(0, Math.floor(Number(contribStone || 0))),
+          wood: Math.max(0, Math.floor(Number(contribWood || 0))),
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(j?.project?.leveledUp ? `${contribCode} leveled up.` : `Contribution sent to ${contribCode}.`);
+      setContribGold(0);
+      setContribStone(0);
+      setContribWood(0);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Contribution failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const alliance = data?.alliance;
+  const member = data?.member;
+  const members = (data?.members || []) as Array<any>;
+  const projects = (data?.projects || []) as Array<any>;
+  const relations = (data?.relations || []) as Array<any>;
+  const alliances = (data?.alliances || []) as Array<any>;
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <div style={CARD}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>
+              Alliance - {data?.kingdom?.name || kingdom}
+            </div>
+            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 18, fontWeight: 700 }}>
+              Gold: {Number(data?.kingdom?.gold || 0).toLocaleString()} • Stone: {Number(data?.kingdom?.stone || 0).toLocaleString()} • Wood: {Number(data?.kingdom?.wood || 0).toLocaleString()}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={INPUT_STYLE} />
+            <button onClick={() => void load()} style={BTN_STYLE}>Load</button>
+          </div>
+        </div>
+        {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading alliance...</div> : null}
+        {error ? (
+          <div style={{ marginTop: 8, color: "#ffae9a", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span>{error}</span>
+            <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
+          </div>
+        ) : null}
+        {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
+      </div>
+
+      {!alliance ? (
+        <>
+          <div style={CARD}>
+            <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Create Alliance</div>
+            <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))" }}>
+              <input value={createSlug} onChange={(e) => setCreateSlug(e.target.value)} style={INPUT_STYLE} placeholder="slug" />
+              <input value={createName} onChange={(e) => setCreateName(e.target.value)} style={INPUT_STYLE} placeholder="name" />
+              <input value={createDesc} onChange={(e) => setCreateDesc(e.target.value)} style={INPUT_STYLE} placeholder="description" />
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <button onClick={() => void createAlliance()} style={BTN_STYLE} disabled={busy}>
+                {busy ? "Working..." : "Create"}
+              </button>
+            </div>
+          </div>
+
+          <div style={CARD}>
+            <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Join Existing Alliance</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+              <select value={String(joinAllianceId)} onChange={(e) => setJoinAllianceId(Number(e.target.value) || 0)} style={INPUT_STYLE}>
+                {alliances.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    #{a.id} {a.name} ({Number(a.members || 0)} members)
+                  </option>
+                ))}
+              </select>
+              <button onClick={() => void joinAlliance()} style={BTN_STYLE} disabled={busy || !joinAllianceId}>
+                {busy ? "Working..." : "Join"}
+              </button>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: 8 }}>ID</th>
+                    <th style={{ textAlign: "left", padding: 8 }}>Name</th>
+                    <th style={{ textAlign: "left", padding: 8 }}>Slug</th>
+                    <th style={{ textAlign: "right", padding: 8 }}>Members</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {alliances.map((a) => (
+                    <tr key={a.id} onClick={() => setJoinAllianceId(Number(a.id))} style={{ cursor: "pointer", background: Number(a.id) === Number(joinAllianceId) ? "rgba(216,176,117,.12)" : "transparent" }}>
+                      <td style={{ padding: 8 }}>{a.id}</td>
+                      <td style={{ padding: 8 }}>{a.name}</td>
+                      <td style={{ padding: 8 }}>{a.slug}</td>
+                      <td style={{ padding: 8, textAlign: "right" }}>{Number(a.members || 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      ) : null}
+
+      {alliance ? (
+        <>
+          <div style={CARD}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 24 }}>{alliance.name} [{alliance.slug}]</div>
+                <div style={{ color: TEXT_MUTED, marginTop: 4 }}>
+                  Role: {member?.role || "member"} • Members: {members.length}/{Number(alliance.memberCap || 15)}
+                </div>
+                {alliance.description ? <div style={{ color: TEXT_MUTED, marginTop: 4 }}>{alliance.description}</div> : null}
+              </div>
+              <button onClick={() => void leaveAlliance()} style={BTN_STYLE} disabled={busy}>
+                {busy ? "Working..." : "Leave Alliance"}
+              </button>
+            </div>
+          </div>
+
+          <div style={CARD}>
+            <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Alliance Members</div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: 8 }}>Kingdom</th>
+                    <th style={{ textAlign: "left", padding: 8 }}>Role</th>
+                    <th style={{ textAlign: "right", padding: 8 }}>Land</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {members.map((m) => (
+                    <tr key={`${m.kingdomId}-${m.kingdomName}`}>
+                      <td style={{ padding: 8 }}>{m.kingdomName}</td>
+                      <td style={{ padding: 8 }}>{m.role}</td>
+                      <td style={{ padding: 8, textAlign: "right" }}>{Number(m.land || 0).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div style={CARD}>
+            <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Alliance Projects</div>
+            <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", marginBottom: 10 }}>
+              <select value={contribCode} onChange={(e) => setContribCode(e.target.value)} style={INPUT_STYLE}>
+                {projects.map((p) => (
+                  <option key={p.buildingCode} value={p.buildingCode}>{p.name}</option>
+                ))}
+              </select>
+              <input type="number" min={0} value={contribGold} onChange={(e) => setContribGold(Number(e.target.value) || 0)} style={INPUT_STYLE} placeholder="gold" />
+              <input type="number" min={0} value={contribStone} onChange={(e) => setContribStone(Number(e.target.value) || 0)} style={INPUT_STYLE} placeholder="stone" />
+              <input type="number" min={0} value={contribWood} onChange={(e) => setContribWood(Number(e.target.value) || 0)} style={INPUT_STYLE} placeholder="wood" />
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <button onClick={() => void contribute()} style={BTN_STYLE} disabled={busy}>
+                {busy ? "Working..." : "Contribute"}
+              </button>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: 8 }}>Project</th>
+                    <th style={{ textAlign: "left", padding: 8 }}>Effect</th>
+                    <th style={{ textAlign: "right", padding: 8 }}>Level</th>
+                    <th style={{ textAlign: "right", padding: 8 }}>Gold</th>
+                    <th style={{ textAlign: "right", padding: 8 }}>Stone</th>
+                    <th style={{ textAlign: "right", padding: 8 }}>Wood</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {projects.map((p) => (
+                    <tr key={p.buildingCode}>
+                      <td style={{ padding: 8 }}>{p.name}</td>
+                      <td style={{ padding: 8, color: TEXT_MUTED }}>{p.effectText}</td>
+                      <td style={{ padding: 8, textAlign: "right" }}>{Number(p.level || 0)}</td>
+                      <td style={{ padding: 8, textAlign: "right" }}>{Number(p.progressGold || 0).toLocaleString()} / {Number(p.targetGold || 0).toLocaleString()}</td>
+                      <td style={{ padding: 8, textAlign: "right" }}>{Number(p.progressStone || 0).toLocaleString()} / {Number(p.targetStone || 0).toLocaleString()}</td>
+                      <td style={{ padding: 8, textAlign: "right" }}>{Number(p.progressWood || 0).toLocaleString()} / {Number(p.targetWood || 0).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div style={CARD}>
+            <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Diplomacy Relations</div>
+            <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", marginBottom: 10 }}>
+              <select value={relationType} onChange={(e) => setRelationType(e.target.value)} style={INPUT_STYLE}>
+                <option value="ally">ally</option>
+                <option value="nap">nap</option>
+                <option value="enemy">enemy</option>
+                <option value="cease_fire">cease_fire</option>
+                <option value="joint_ops">joint_ops</option>
+              </select>
+              <input value={relationTarget} onChange={(e) => setRelationTarget(e.target.value)} style={INPUT_STYLE} placeholder="target kingdom/alliance" />
+              <input value={relationNote} onChange={(e) => setRelationNote(e.target.value)} style={INPUT_STYLE} placeholder="note" />
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <button onClick={() => void saveRelation()} style={BTN_STYLE} disabled={busy || !relationTarget.trim()}>
+                {busy ? "Working..." : "Save Relation"}
+              </button>
+            </div>
+            {relations.length === 0 ? <div style={{ color: TEXT_MUTED }}>No relations set.</div> : null}
+            {relations.map((r) => (
+              <div key={r.id} style={{ marginBottom: 6 }}>
+                {r.relation_type} - {r.target_name}{r.note ? ` (${r.note})` : ""}
+              </div>
+            ))}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function Placeholder({ label }: { label: string }) {
   return (
     <div style={CARD}>
@@ -1410,12 +1786,13 @@ function App() {
         <section style={{ display: "grid", gap: 12 }}>
           {active.id === "overview" ? <OverviewView /> : null}
           {active.id === "buildings" ? <BuildingsView /> : null}
+          {active.id === "alliance" ? <AllianceView /> : null}
           {active.id === "research" ? <ResearchView /> : null}
           {active.id === "settlements" ? <SettlementsView /> : null}
           {active.id === "war-room" ? <WarRoomView /> : null}
           {active.id === "train-troops" ? <TrainTroopsView /> : null}
           {active.id === "attack-kingdom" ? <AttackKingdomView /> : null}
-          {active.id !== "overview" && active.id !== "buildings" && active.id !== "research" && active.id !== "settlements" && active.id !== "war-room" && active.id !== "train-troops" && active.id !== "attack-kingdom" ? <Placeholder label={active.label} /> : null}
+          {active.id !== "overview" && active.id !== "buildings" && active.id !== "alliance" && active.id !== "research" && active.id !== "settlements" && active.id !== "war-room" && active.id !== "train-troops" && active.id !== "attack-kingdom" ? <Placeholder label={active.label} /> : null}
         </section>
       </div>
       <footer
