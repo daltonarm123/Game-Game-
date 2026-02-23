@@ -26,6 +26,7 @@ const ATTACK_RETURN_SECONDS = Math.max(
   1,
   Number(process.env.ATTACK_RETURN_SECONDS || (LOCAL_DEMO_FAST ? 20 : ATTACK_RETURN_MINUTES * 60)),
 );
+const SEASON_LENGTH_SECONDS = Math.max(30, Number(process.env.SEASON_LENGTH_SECONDS || (LOCAL_DEMO_FAST ? 60 : 7 * 24 * 3600)));
 
 const registerBody = z.object({
   userId: z.string().min(1),
@@ -99,6 +100,99 @@ const ECON_BUILDING_HOURLY = {
   baseFoodPerLand: 2,
 };
 
+type SeasonCode = "spring" | "summer" | "autumn" | "winter";
+
+const SEASONS: Array<{
+  code: SeasonCode;
+  name: string;
+  flavor: string;
+  modifiers: { food: number; gold: number; wood: number; stone: number };
+}> = [
+  {
+    code: "spring",
+    name: "Spring",
+    flavor: "A new year dawns. Food growth increases and armies recover momentum.",
+    modifiers: { food: 1.25, gold: 1.0, wood: 1.0, stone: 1.0 },
+  },
+  {
+    code: "summer",
+    name: "Summer",
+    flavor: "Trade roads are clear. Gold, food, and wood all gain momentum.",
+    modifiers: { food: 1.1, gold: 1.05, wood: 1.05, stone: 1.0 },
+  },
+  {
+    code: "autumn",
+    name: "Autumn",
+    flavor: "Harvest season peaks. Food and wood stocks climb quickly.",
+    modifiers: { food: 1.2, gold: 1.0, wood: 1.1, stone: 1.0 },
+  },
+  {
+    code: "winter",
+    name: "Winter",
+    flavor: "Cold strains supply lines. Food and gold soften while stone output rises.",
+    modifiers: { food: 0.85, gold: 0.95, wood: 0.95, stone: 1.05 },
+  },
+];
+
+function seasonByIndex(index: number) {
+  return SEASONS[((index % SEASONS.length) + SEASONS.length) % SEASONS.length];
+}
+
+async function getSeasonSnapshot() {
+  return withTx(async (c) => {
+    await c.query(
+      `
+      INSERT INTO game_state(id, season_index, season_code, season_started_at, season_ends_at, updated_at)
+      VALUES (1, 0, 'spring', now(), now() + ($1 || ' seconds')::interval, now())
+      ON CONFLICT (id) DO NOTHING
+      `,
+      [SEASON_LENGTH_SECONDS],
+    );
+    const q = await c.query(`SELECT season_index, season_started_at, season_ends_at FROM game_state WHERE id=1 FOR UPDATE`);
+    const row = q.rows[0];
+
+    let index = Math.max(0, Number(row?.season_index || 0));
+    let startsAt = new Date(row?.season_started_at || Date.now());
+    let endsAt = new Date(row?.season_ends_at || Date.now() + SEASON_LENGTH_SECONDS * 1000);
+    const now = new Date();
+    let changed = false;
+
+    while (endsAt.getTime() <= now.getTime()) {
+      index += 1;
+      startsAt = endsAt;
+      endsAt = new Date(startsAt.getTime() + SEASON_LENGTH_SECONDS * 1000);
+      changed = true;
+    }
+
+    if (changed) {
+      const s = seasonByIndex(index);
+      await c.query(
+        `
+        UPDATE game_state
+        SET season_index=$2, season_code=$3, season_started_at=$4, season_ends_at=$5, updated_at=now()
+        WHERE id=$1
+        `,
+        [1, index, s.code, startsAt.toISOString(), endsAt.toISOString()],
+      );
+    } else {
+      await c.query(`UPDATE game_state SET updated_at=now() WHERE id=1`);
+    }
+
+    const season = seasonByIndex(index);
+    const remainingSeconds = Math.max(0, Math.floor((endsAt.getTime() - now.getTime()) / 1000));
+    return {
+      index,
+      code: season.code,
+      name: season.name,
+      flavor: season.flavor,
+      modifiers: season.modifiers,
+      startsAt: startsAt.toISOString(),
+      endsAt: endsAt.toISOString(),
+      remainingSeconds,
+    };
+  });
+}
+
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
@@ -166,15 +260,25 @@ function toLevelMap(rows: any[]): Record<string, number> {
   return out;
 }
 
-function computeEconomyHourly(land: number, buildingLevels: Record<string, number>, troopRows: any[]) {
+function computeEconomyHourly(
+  land: number,
+  buildingLevels: Record<string, number>,
+  troopRows: any[],
+  modifiers?: { food?: number; gold?: number; wood?: number; stone?: number },
+) {
   const farm = Number(buildingLevels.farm || 0);
   const lumber = Number(buildingLevels.lumberyard || 0);
   const quarry = Number(buildingLevels.quarry || 0);
 
-  const foodIncome = land * ECON_BUILDING_HOURLY.baseFoodPerLand + farm * ECON_BUILDING_HOURLY.farmFood;
-  const goldIncome = land * ECON_BUILDING_HOURLY.baseGoldPerLand;
-  const woodIncome = lumber * ECON_BUILDING_HOURLY.lumberWood;
-  const stoneIncome = quarry * ECON_BUILDING_HOURLY.quarryStone;
+  const foodIncomeRaw = land * ECON_BUILDING_HOURLY.baseFoodPerLand + farm * ECON_BUILDING_HOURLY.farmFood;
+  const goldIncomeRaw = land * ECON_BUILDING_HOURLY.baseGoldPerLand;
+  const woodIncomeRaw = lumber * ECON_BUILDING_HOURLY.lumberWood;
+  const stoneIncomeRaw = quarry * ECON_BUILDING_HOURLY.quarryStone;
+
+  const foodIncome = foodIncomeRaw * Number(modifiers?.food ?? 1);
+  const goldIncome = goldIncomeRaw * Number(modifiers?.gold ?? 1);
+  const woodIncome = woodIncomeRaw * Number(modifiers?.wood ?? 1);
+  const stoneIncome = stoneIncomeRaw * Number(modifiers?.stone ?? 1);
 
   let foodUpkeep = 0;
   let goldUpkeep = 0;
@@ -192,6 +296,10 @@ function computeEconomyHourly(land: number, buildingLevels: Record<string, numbe
       stone: stoneIncome,
     },
     raw: {
+      foodIncomeRaw,
+      goldIncomeRaw,
+      woodIncomeRaw,
+      stoneIncomeRaw,
       foodIncome,
       foodUpkeep,
       goldIncome,
@@ -581,8 +689,34 @@ app.get("/api/kingdom/:name", async (req, res) => {
       [kingdom.id],
     );
 
+    const season = await getSeasonSnapshot();
     const buildingLevels = toLevelMap(buildings.rows);
-    const economy = computeEconomyHourly(Number(kingdom.land || 0), buildingLevels, troops.rows);
+    const queuedTroops = await pool.query(
+      `SELECT troop_code, COALESCE(SUM(quantity),0) AS qty
+       FROM train_queue
+       WHERE kingdom_id=$1 AND status='queued'
+       GROUP BY troop_code`,
+      [kingdom.id],
+    );
+    const awayTroops = await pool.query(
+      `SELECT troop_code, COALESCE(SUM(quantity),0) AS qty
+       FROM troop_movements
+       WHERE owner_kingdom_id=$1 AND status='out' AND returns_at > now()
+       GROUP BY troop_code`,
+      [kingdom.id],
+    );
+    const queuedMap = new Map<string, number>();
+    const awayMap = new Map<string, number>();
+    for (const r of queuedTroops.rows) queuedMap.set(String(r.troop_code), Number(r.qty || 0));
+    for (const r of awayTroops.rows) awayMap.set(String(r.troop_code), Number(r.qty || 0));
+    const economyTroops = troops.rows.map((t) => {
+      const code = String(t.troop_code || "");
+      const home = Number(t.amount || 0);
+      const train = Number(queuedMap.get(code) || 0);
+      const away = Number(awayMap.get(code) || 0);
+      return { ...t, amount: home + train + away };
+    });
+    const economy = computeEconomyHourly(Number(kingdom.land || 0), buildingLevels, economyTroops, season.modifiers);
 
     return res.json({
       ok: true,
@@ -592,6 +726,7 @@ app.get("/api/kingdom/:name", async (req, res) => {
       buildQueue: buildQueue.rows,
       trainQueue: trainQueue.rows,
       economy,
+      season,
     });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
@@ -940,6 +1075,7 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
 
   try {
+    const season = await getSeasonSnapshot();
     const k = await pool.query(
       `SELECT id, name, land, food, gold, created_at FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`,
       [kingdom],
@@ -949,9 +1085,46 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
 
     const rankQ = await pool.query(
       `WITH nw AS (
-         SELECT id,
-                (land * 0.04 + food * 0.0001 + gold * 0.0005 + stone * 0.0002 + wood * 0.0002) AS networth
-         FROM kingdoms
+         WITH home AS (
+           SELECT kingdom_id, troop_code, COALESCE(SUM(amount),0) AS qty
+           FROM kingdom_troops
+           GROUP BY kingdom_id, troop_code
+         ),
+         train AS (
+           SELECT kingdom_id, troop_code, COALESCE(SUM(quantity),0) AS qty
+           FROM train_queue
+           WHERE status='queued'
+           GROUP BY kingdom_id, troop_code
+         ),
+         away AS (
+           SELECT owner_kingdom_id AS kingdom_id, troop_code, COALESCE(SUM(quantity),0) AS qty
+           FROM troop_movements
+           WHERE status='out' AND returns_at > now()
+           GROUP BY owner_kingdom_id, troop_code
+         ),
+         troop_totals AS (
+           SELECT
+             COALESCE(h.kingdom_id, t.kingdom_id, a.kingdom_id) AS kingdom_id,
+             COALESCE(h.troop_code, t.troop_code, a.troop_code) AS troop_code,
+             COALESCE(h.qty,0) + COALESCE(t.qty,0) + COALESCE(a.qty,0) AS qty
+           FROM home h
+           FULL OUTER JOIN train t
+             ON t.kingdom_id = h.kingdom_id
+            AND t.troop_code = h.troop_code
+           FULL OUTER JOIN away a
+             ON a.kingdom_id = COALESCE(h.kingdom_id, t.kingdom_id)
+            AND a.troop_code = COALESCE(h.troop_code, t.troop_code)
+         ),
+         troop_nw AS (
+           SELECT tt.kingdom_id, COALESCE(SUM(tt.qty * ty.nw_value),0) AS troop_nw
+           FROM troop_totals tt
+           JOIN troop_types ty ON ty.code = tt.troop_code
+           GROUP BY tt.kingdom_id
+         )
+         SELECT k.id,
+                (k.land * 0.04 + k.food * 0.0001 + k.gold * 0.0005 + k.stone * 0.0002 + k.wood * 0.0002 + COALESCE(tn.troop_nw, 0)) AS networth
+         FROM kingdoms k
+         LEFT JOIN troop_nw tn ON tn.kingdom_id = k.id
        ),
        r AS (
          SELECT id, networth, ROW_NUMBER() OVER (ORDER BY networth DESC) AS rank
@@ -1030,6 +1203,7 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
       },
       troops,
       training: training.rows,
+      season,
       actions: ["Train Troops", "Attack Kingdom"],
     });
   } catch (e: any) {

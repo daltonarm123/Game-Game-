@@ -155,6 +155,12 @@ const SETTLEMENT_BUILDING_TYPES = [
   { code: "town_walls", name: "Town/City Walls", effectText: "Reduced chance to lose settlement", baseGold: 25000, baseStone: 1000, baseWood: 300, maxLevel: 12, cityOnly: false },
 ] as const;
 
+const ALLIANCE_BUILDING_TYPES = [
+  { code: "alliance_hall", name: "Alliance Hall", effectText: "Increases member cap by 1 per level (max 15)", goldCost: 20000000, stoneCost: 1250000, woodCost: 1250000 },
+  { code: "grand_library", name: "Grand Library", effectText: "Reduces research time by 3% per level", goldCost: 2000000, stoneCost: 1000000, woodCost: 1000000 },
+  { code: "cathedral", name: "Cathedral", effectText: "Reduces prayer mana costs by 3% per level", goldCost: 16000000, stoneCost: 1100000, woodCost: 900000 },
+] as const;
+
 export async function withTx<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
@@ -189,6 +195,15 @@ export async function ensureSchema(): Promise<void> {
       land BIGINT NOT NULL DEFAULT 1000,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       last_tick_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS game_state (
+      id INT PRIMARY KEY,
+      season_index INT NOT NULL DEFAULT 0,
+      season_code TEXT NOT NULL DEFAULT 'spring',
+      season_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      season_ends_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '7 days'),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS building_types (
@@ -343,6 +358,51 @@ export async function ensureSchema(): Promise<void> {
       captured_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS alliances (
+      id BIGSERIAL PRIMARY KEY,
+      slug TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT NOT NULL DEFAULT '',
+      image_url TEXT NOT NULL DEFAULT '',
+      created_by_kingdom_id BIGINT REFERENCES kingdoms(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS alliance_members (
+      alliance_id BIGINT NOT NULL REFERENCES alliances(id) ON DELETE CASCADE,
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      role TEXT NOT NULL DEFAULT 'member',
+      joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (alliance_id, kingdom_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS alliance_relations (
+      id BIGSERIAL PRIMARY KEY,
+      alliance_id BIGINT NOT NULL REFERENCES alliances(id) ON DELETE CASCADE,
+      relation_type TEXT NOT NULL,
+      target_name TEXT NOT NULL,
+      note TEXT NOT NULL DEFAULT ''
+    );
+
+    CREATE TABLE IF NOT EXISTS alliance_building_types (
+      code TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      effect_text TEXT NOT NULL DEFAULT '',
+      target_gold BIGINT NOT NULL DEFAULT 0,
+      target_stone BIGINT NOT NULL DEFAULT 0,
+      target_wood BIGINT NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS alliance_buildings (
+      alliance_id BIGINT NOT NULL REFERENCES alliances(id) ON DELETE CASCADE,
+      building_code TEXT NOT NULL REFERENCES alliance_building_types(code) ON DELETE CASCADE,
+      level INT NOT NULL DEFAULT 0,
+      progress_gold BIGINT NOT NULL DEFAULT 0,
+      progress_stone BIGINT NOT NULL DEFAULT 0,
+      progress_wood BIGINT NOT NULL DEFAULT 0,
+      PRIMARY KEY (alliance_id, building_code)
+    );
+
     CREATE TABLE IF NOT EXISTS attack_reports (
       id BIGSERIAL PRIMARY KEY,
       attacker_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
@@ -385,6 +445,7 @@ export async function ensureSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS settlements_kingdom_idx ON settlements(kingdom_id);
     CREATE INDEX IF NOT EXISTS settlement_build_queue_due_idx ON settlement_build_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS settlement_capture_log_def_idx ON settlement_capture_log(defender_kingdom_id, captured_at DESC);
+    CREATE INDEX IF NOT EXISTS alliance_members_kingdom_idx ON alliance_members(kingdom_id);
   `);
 
   await pool.query(`
@@ -406,6 +467,18 @@ export async function ensureSchema(): Promise<void> {
   await pool.query(`ALTER TABLE research_types ADD COLUMN IF NOT EXISTS base_gold BIGINT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE research_types ADD COLUMN IF NOT EXISTS base_seconds INT NOT NULL DEFAULT 3600`);
   await pool.query(`ALTER TABLE research_types ADD COLUMN IF NOT EXISTS max_level INT NOT NULL DEFAULT 10`);
+  await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_index INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_code TEXT NOT NULL DEFAULT 'spring'`);
+  await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_started_at TIMESTAMPTZ NOT NULL DEFAULT now()`);
+  await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_ends_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '7 days')`);
+  await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`);
+  await pool.query(
+    `
+    INSERT INTO game_state(id, season_index, season_code, season_started_at, season_ends_at, updated_at)
+    VALUES (1, 0, 'spring', now(), now() + interval '7 days', now())
+    ON CONFLICT (id) DO NOTHING
+    `,
+  );
 
   for (const b of BUILDINGS) {
     await pool.query(
@@ -492,6 +565,22 @@ export async function ensureSchema(): Promise<void> {
           city_only = EXCLUDED.city_only
       `,
       [s.code, s.name, s.effectText, s.baseGold, s.baseStone, s.baseWood, s.maxLevel, s.cityOnly],
+    );
+  }
+
+  for (const a of ALLIANCE_BUILDING_TYPES) {
+    await pool.query(
+      `
+      INSERT INTO alliance_building_types(code, name, effect_text, target_gold, target_stone, target_wood)
+      VALUES ($1,$2,$3,$4,$5,$6)
+      ON CONFLICT (code) DO UPDATE
+      SET name = EXCLUDED.name,
+          effect_text = EXCLUDED.effect_text,
+          target_gold = EXCLUDED.target_gold,
+          target_stone = EXCLUDED.target_stone,
+          target_wood = EXCLUDED.target_wood
+      `,
+      [a.code, a.name, a.effectText, a.goldCost, a.stoneCost, a.woodCost],
     );
   }
 }

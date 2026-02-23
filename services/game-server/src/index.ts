@@ -7,6 +7,7 @@ const LOCAL_DEMO_FAST = String(process.env.LOCAL_DEMO_FAST || "").trim() === "1"
 const TICK_INTERVAL_SECONDS = Number(process.env.TICK_INTERVAL_SECONDS || (LOCAL_DEMO_FAST ? 5 : 300));
 const TICK_ALIGN_SECONDS = Number(process.env.TICK_ALIGN_SECONDS || (LOCAL_DEMO_FAST ? 5 : 300));
 const TICK_HOURS = Math.max(1, TICK_INTERVAL_SECONDS) / 3600;
+const SEASON_LENGTH_SECONDS = Math.max(30, Number(process.env.SEASON_LENGTH_SECONDS || (LOCAL_DEMO_FAST ? 60 : 7 * 24 * 3600)));
 
 const ECON_BUILDING_HOURLY = {
   farmFood: 120,
@@ -15,6 +16,95 @@ const ECON_BUILDING_HOURLY = {
   baseGoldPerLand: 3,
   baseFoodPerLand: 2,
 };
+
+type SeasonCode = "spring" | "summer" | "autumn" | "winter";
+type SeasonState = {
+  index: number;
+  code: SeasonCode;
+  startedAt: Date;
+  endsAt: Date;
+  remainingSeconds: number;
+  modifiers: {
+    food: number;
+    gold: number;
+    wood: number;
+    stone: number;
+  };
+};
+
+const SEASONS: Array<{
+  code: SeasonCode;
+  name: string;
+  modifiers: { food: number; gold: number; wood: number; stone: number };
+}> = [
+  { code: "spring", name: "Spring", modifiers: { food: 1.25, gold: 1.0, wood: 1.0, stone: 1.0 } },
+  { code: "summer", name: "Summer", modifiers: { food: 1.1, gold: 1.05, wood: 1.05, stone: 1.0 } },
+  { code: "autumn", name: "Autumn", modifiers: { food: 1.2, gold: 1.0, wood: 1.1, stone: 1.0 } },
+  { code: "winter", name: "Winter", modifiers: { food: 0.85, gold: 0.95, wood: 0.95, stone: 1.05 } },
+];
+
+function seasonByIndex(index: number) {
+  return SEASONS[((index % SEASONS.length) + SEASONS.length) % SEASONS.length];
+}
+
+function toSeasonState(row: any, now = new Date()): SeasonState {
+  const index = Math.max(0, Number(row.season_index || 0));
+  const season = seasonByIndex(index);
+  const startedAt = new Date(row.season_started_at);
+  const endsAt = new Date(row.season_ends_at);
+  const remainingSeconds = Math.max(0, Math.floor((endsAt.getTime() - now.getTime()) / 1000));
+  return {
+    index,
+    code: season.code,
+    startedAt,
+    endsAt,
+    remainingSeconds,
+    modifiers: { ...season.modifiers },
+  };
+}
+
+async function processSeasonTick(): Promise<SeasonState> {
+  return withTx(async (c) => {
+    await c.query(
+      `
+      INSERT INTO game_state(id, season_index, season_code, season_started_at, season_ends_at, updated_at)
+      VALUES (1, 0, 'spring', now(), now() + ($1 || ' seconds')::interval, now())
+      ON CONFLICT (id) DO NOTHING
+      `,
+      [SEASON_LENGTH_SECONDS],
+    );
+    const q = await c.query(`SELECT season_index, season_started_at, season_ends_at FROM game_state WHERE id=1 FOR UPDATE`);
+    const row = q.rows[0];
+    let index = Math.max(0, Number(row.season_index || 0));
+    let startedAt = new Date(row.season_started_at);
+    let endsAt = new Date(row.season_ends_at);
+    const now = new Date();
+    let changed = false;
+
+    while (endsAt.getTime() <= now.getTime()) {
+      index += 1;
+      startedAt = endsAt;
+      endsAt = new Date(startedAt.getTime() + SEASON_LENGTH_SECONDS * 1000);
+      changed = true;
+    }
+
+    if (changed) {
+      const season = seasonByIndex(index);
+      await c.query(
+        `
+        UPDATE game_state
+        SET season_index=$2, season_code=$3, season_started_at=$4, season_ends_at=$5, updated_at=now()
+        WHERE id=$1
+        `,
+        [1, index, season.code, startedAt.toISOString(), endsAt.toISOString()],
+      );
+    } else {
+      await c.query(`UPDATE game_state SET updated_at=now() WHERE id=1`);
+    }
+
+    return toSeasonState({ season_index: index, season_started_at: startedAt, season_ends_at: endsAt }, now);
+  });
+}
 
 async function processBuildQueueTick(): Promise<number> {
   return withTx(async (c) => {
@@ -178,7 +268,7 @@ async function processSettlementBuildQueueTick(): Promise<number> {
   });
 }
 
-async function processEconomyTick(): Promise<number> {
+async function processEconomyTick(season: SeasonState): Promise<number> {
   return withTx(async (c) => {
     const kingdoms = await c.query(`SELECT id, land, gold, food, wood, stone FROM kingdoms ORDER BY id ASC`);
     if (!kingdoms.rowCount) return 0;
@@ -198,10 +288,35 @@ async function processEconomyTick(): Promise<number> {
       );
       const t = await c.query(
         `
-        SELECT kt.troop_code, kt.amount, tt.upkeep_food, tt.upkeep_gold
-        FROM kingdom_troops kt
-        JOIN troop_types tt ON tt.code = kt.troop_code
-        WHERE kingdom_id = $1
+        WITH home AS (
+          SELECT troop_code, COALESCE(SUM(amount),0) AS qty
+          FROM kingdom_troops
+          WHERE kingdom_id = $1
+          GROUP BY troop_code
+        ),
+        train AS (
+          SELECT troop_code, COALESCE(SUM(quantity),0) AS qty
+          FROM train_queue
+          WHERE kingdom_id = $1 AND status='queued'
+          GROUP BY troop_code
+        ),
+        away AS (
+          SELECT troop_code, COALESCE(SUM(quantity),0) AS qty
+          FROM troop_movements
+          WHERE owner_kingdom_id = $1 AND status='out' AND returns_at > now()
+          GROUP BY troop_code
+        ),
+        totals AS (
+          SELECT
+            COALESCE(h.troop_code, t.troop_code, a.troop_code) AS troop_code,
+            COALESCE(h.qty,0) + COALESCE(t.qty,0) + COALESCE(a.qty,0) AS amount
+          FROM home h
+          FULL OUTER JOIN train t ON t.troop_code = h.troop_code
+          FULL OUTER JOIN away a ON a.troop_code = COALESCE(h.troop_code, t.troop_code)
+        )
+        SELECT totals.troop_code, totals.amount, tt.upkeep_food, tt.upkeep_gold
+        FROM totals
+        JOIN troop_types tt ON tt.code = totals.troop_code
         `,
         [k.id],
       );
@@ -223,10 +338,15 @@ async function processEconomyTick(): Promise<number> {
         goldUpkeepPerHour += amount * Number(row.upkeep_gold || 0);
       }
 
-      const foodDelta = Math.floor((foodIncomePerHour - foodUpkeepPerHour) * TICK_HOURS);
-      const goldDelta = Math.floor((goldIncomePerHour - goldUpkeepPerHour) * TICK_HOURS);
-      const woodDelta = Math.floor(woodIncomePerHour * TICK_HOURS);
-      const stoneDelta = Math.floor(stoneIncomePerHour * TICK_HOURS);
+      const seasonFoodIncome = foodIncomePerHour * Number(season.modifiers.food || 1);
+      const seasonGoldIncome = goldIncomePerHour * Number(season.modifiers.gold || 1);
+      const seasonWoodIncome = woodIncomePerHour * Number(season.modifiers.wood || 1);
+      const seasonStoneIncome = stoneIncomePerHour * Number(season.modifiers.stone || 1);
+
+      const foodDelta = Math.floor((seasonFoodIncome - foodUpkeepPerHour) * TICK_HOURS);
+      const goldDelta = Math.floor((seasonGoldIncome - goldUpkeepPerHour) * TICK_HOURS);
+      const woodDelta = Math.floor(seasonWoodIncome * TICK_HOURS);
+      const stoneDelta = Math.floor(seasonStoneIncome * TICK_HOURS);
 
       await c.query(
         `
@@ -256,15 +376,16 @@ function nextAlignedDelayMs(nowMs: number, alignSeconds: number): number {
 
 async function runTick() {
   try {
+    const season = await processSeasonTick();
     const builds = await processBuildQueueTick();
     const trains = await processTrainQueueTick();
     const research = await processResearchQueueTick();
     const settlementBuilds = await processSettlementBuildQueueTick();
     const returns = await processTroopReturnsTick();
-    const economies = await processEconomyTick();
+    const economies = await processEconomyTick(season);
     if (builds > 0 || trains > 0 || research > 0 || settlementBuilds > 0 || returns > 0 || economies > 0) {
       console.log(
-        `[tick] ${new Date().toISOString()} completed builds=${builds}, trainings=${trains}, research=${research}, settlement_builds=${settlementBuilds}, returns=${returns}, economy=${economies}`,
+        `[tick] ${new Date().toISOString()} season=${season.code}(${season.remainingSeconds}s) completed builds=${builds}, trainings=${trains}, research=${research}, settlement_builds=${settlementBuilds}, returns=${returns}, economy=${economies}`,
       );
     }
   } catch (e) {

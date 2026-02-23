@@ -37,6 +37,15 @@ export async function ensureSchemaLite(): Promise<void> {
       last_tick_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS game_state (
+      id INT PRIMARY KEY,
+      season_index INT NOT NULL DEFAULT 0,
+      season_code TEXT NOT NULL DEFAULT 'spring',
+      season_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      season_ends_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '7 days'),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS build_queue (
       id BIGSERIAL PRIMARY KEY,
       kingdom_id BIGINT NOT NULL,
@@ -163,4 +172,16 @@ export async function ensureSchemaLite(): Promise<void> {
 
   await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS upkeep_food INT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS upkeep_gold INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_index INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_code TEXT NOT NULL DEFAULT 'spring'`);
+  await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_started_at TIMESTAMPTZ NOT NULL DEFAULT now()`);
+  await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_ends_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '7 days')`);
+  await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`);
+  await pool.query(
+    `
+    INSERT INTO game_state(id, season_index, season_code, season_started_at, season_ends_at, updated_at)
+    VALUES (1, 0, 'spring', now(), now() + interval '7 days', now())
+    ON CONFLICT (id) DO NOTHING
+    `,
+  );
 }

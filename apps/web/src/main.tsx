@@ -73,13 +73,8 @@ function OverviewView() {
   const [war, setWar] = useState<any>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-
-  const metricCard = (label: string, value: string) => (
-    <div style={CARD}>
-      <div style={{ fontSize: 12, color: TEXT_MUTED, textTransform: "uppercase", letterSpacing: 0.7 }}>{label}</div>
-      <div style={{ marginTop: 6, fontSize: 34, lineHeight: 1.05, fontWeight: 800, color: "#fff7ec" }}>{value}</div>
-    </div>
-  );
+  const [taxRate, setTaxRate] = useState(26);
+  const [seasonRemainingSec, setSeasonRemainingSec] = useState(0);
 
   async function load() {
     setLoading(true);
@@ -109,32 +104,72 @@ function OverviewView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    setSeasonRemainingSec(Math.max(0, Number(details?.season?.remainingSeconds || 0)));
+  }, [details?.season?.remainingSeconds]);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      setSeasonRemainingSec((s) => Math.max(0, s - 1));
+    }, 1000);
+    return () => clearInterval(t);
+  }, []);
+
   const k = details?.kingdom;
   const econ = details?.economy?.perHour || {};
   const bq = (details?.buildQueue || []).filter((x: any) => x.status === "queued").slice(0, 8);
   const tq = (details?.trainQueue || []).filter((x: any) => x.status === "queued").slice(0, 8);
   const populationTotal = Number(war?.kingdom?.populationHome || 0) + Number(war?.kingdom?.populationTrain || 0) + Number(war?.kingdom?.populationAway || 0);
   const fmtRate = (v: number) => `${v >= 0 ? "+" : ""}${Number(v || 0).toLocaleString()}/h`;
+  const season = details?.season;
+  const seasonRemaining = seasonRemainingSec;
+  const seasonDays = Math.floor(seasonRemaining / 86400);
+  const seasonHours = Math.floor((seasonRemaining % 86400) / 3600);
+  const seasonMins = Math.floor((seasonRemaining % 3600) / 60);
+  const seasonLabel = String(season?.name || "Spring");
+  const daysPlayed = Math.max(1, Math.floor((Date.now() - new Date(String(k?.created_at || Date.now())).getTime()) / 86400000));
+  const rankNum = Number(war?.kingdom?.rank || 0);
+  const rankTitle = rankNum <= 3 ? "Prince" : rankNum <= 10 ? "Duke" : rankNum <= 25 ? "Count" : "Lord";
+  const buildingPreview = ((details?.buildings || []) as Array<any>)
+    .slice()
+    .sort((a: any, b: any) => Number(b.level || 0) - Number(a.level || 0))
+    .slice(0, 6);
+
+  const statRows = [
+    { icon: "RK", label: "Rank", value: `#${rankNum || "N/A"} / ${rankTitle}` },
+    { icon: "RL", label: "Religion", value: "N/A" },
+    { icon: "NW", label: "Networth", value: `${Math.floor(Number(war?.kingdom?.networth || 0)).toLocaleString()}` },
+    { icon: "LD", label: "Land", value: `${Number(k?.land || 0).toLocaleString()} / ${Number(k?.land || 0).toLocaleString()} Acres` },
+    { icon: "PP", label: "Population", value: `${Number(war?.kingdom?.populationHome || 0).toLocaleString()} / ${populationTotal.toLocaleString()}` },
+    { icon: "SW", label: "Settlement Wellbeing", value: `${Math.floor(Number(k?.land || 0) * 12.5).toLocaleString()}` },
+    { icon: "CD", label: "Consecutive Days", value: `${daysPlayed.toLocaleString()}` },
+  ];
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
-      <div style={CARD}>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
-          <div>
-            <div style={{ fontSize: 38, fontWeight: 800, color: "#fff7ec", lineHeight: 1.05, fontFamily: FONT_DISPLAY }}>
-              Overview - {k ? k.name : kingdom}
-            </div>
-            <div style={{ color: TEXT_MUTED, marginTop: 8, fontSize: 18, fontWeight: 700 }}>
-              Rank #{war?.kingdom?.rank || "N/A"} • Networth {Math.floor(Number(war?.kingdom?.networth || 0)).toLocaleString()}
-            </div>
+    <div
+      style={{
+        borderRadius: 14,
+        border: "1px solid rgba(216,176,117,.24)",
+        overflow: "hidden",
+        background: `
+          linear-gradient(90deg, rgba(18,18,21,.92) 0%, rgba(24,24,27,.83) 46%, rgba(20,20,22,.74) 100%),
+          radial-gradient(900px 600px at 76% 50%, rgba(117,83,35,.3), rgba(0,0,0,0)),
+          linear-gradient(170deg, #2d2a28, #171719 58%, #111114)
+        `,
+        boxShadow: "0 22px 50px rgba(0,0,0,.45)",
+      }}
+    >
+      <div style={{ padding: "18px clamp(14px,3vw,28px) 20px" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <div style={{ fontSize: "clamp(32px,4vw,52px)", fontWeight: 700, color: "#f7efe1", lineHeight: 1.05, fontFamily: FONT_DISPLAY }}>
+            Overview - <span style={{ color: "#67b95f" }}>+</span> {k ? k.name : kingdom}
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={INPUT_STYLE} />
-            <button onClick={() => void load()} style={BTN_STYLE}>
-              Load
-            </button>
+            <button onClick={() => void load()} style={BTN_STYLE}>Load</button>
           </div>
         </div>
+
         {loading ? <div style={{ marginTop: 10, color: TEXT_MUTED }}>Loading overview...</div> : null}
         {error ? (
           <div style={{ marginTop: 10, color: "#ffae9a", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -142,61 +177,103 @@ function OverviewView() {
             <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
           </div>
         ) : null}
-      </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
-        {metricCard("Networth", Math.floor(Number(war?.kingdom?.networth || 0)).toLocaleString())}
-        {metricCard("Land", `${Number(k?.land || 0).toLocaleString()}`)}
-        {metricCard("Population", `${Number(war?.kingdom?.populationHome || 0).toLocaleString()} / ${populationTotal.toLocaleString()}`)}
-        {metricCard("Gold", `${Number(k?.gold || 0).toLocaleString()}`)}
-      </div>
-
-      <div style={CARD}>
-        <div style={{ fontWeight: 800, fontSize: 24, color: "#fff7ec", marginBottom: 12 }}>Resources</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8 }}>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>
-            Food: {Number(k?.food || 0).toLocaleString()}{" "}
-            <span style={{ color: Number(econ.food || 0) >= 0 ? "#9ddb8f" : "#ffab9c", fontSize: 18 }}>
-              ({fmtRate(Number(econ.food || 0))})
-            </span>
-          </div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>
-            Gold: {Number(k?.gold || 0).toLocaleString()}{" "}
-            <span style={{ color: Number(econ.gold || 0) >= 0 ? "#9ddb8f" : "#ffab9c", fontSize: 18 }}>
-              ({fmtRate(Number(econ.gold || 0))})
-            </span>
-          </div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>
-            Stone: {Number(k?.stone || 0).toLocaleString()}{" "}
-            <span style={{ color: "#9ddb8f", fontSize: 18 }}>({fmtRate(Number(econ.stone || 0))})</span>
-          </div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>
-            Wood: {Number(k?.wood || 0).toLocaleString()}{" "}
-            <span style={{ color: "#9ddb8f", fontSize: 18 }}>({fmtRate(Number(econ.wood || 0))})</span>
-          </div>
-        </div>
-      </div>
-
-      <div style={{ ...CARD, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-        <div style={{ fontWeight: 800, fontSize: 24, color: "#fff7ec", marginBottom: 10 }}>Queues</div>
-        <div style={{ fontWeight: 800, fontSize: 20, color: "#fff7ec" }}> </div>
-        <div>
-          <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Training</div>
-          {tq.length === 0 ? <div style={{ color: TEXT_MUTED }}>No active training queue.</div> : null}
-          {tq.map((q: any) => (
-            <div key={`tq-${q.id}`} style={{ marginBottom: 6, fontSize: 16 }}>
-              {Number(q.quantity || 0).toLocaleString()} x {q.troop_code} • {String(q.completes_at).replace("T", " ").slice(0, 19)}
+        <div style={{ display: "grid", gap: 10, maxWidth: 760, marginTop: 12 }}>
+          {statRows.map((row) => (
+            <div key={row.label} style={{ display: "grid", gridTemplateColumns: "40px auto", gap: 12, alignItems: "center" }}>
+              <div
+                style={{
+                  width: 36,
+                  height: 36,
+                  border: "1px solid rgba(216,176,117,.55)",
+                  background: "linear-gradient(180deg, rgba(93,66,28,.85), rgba(40,30,16,.86))",
+                  color: "#f4dfb8",
+                  fontWeight: 800,
+                  borderRadius: 2,
+                  display: "grid",
+                  placeItems: "center",
+                  fontSize: 12,
+                }}
+              >
+                {row.icon}
+              </div>
+              <div style={{ fontSize: "clamp(24px,2.5vw,43px)", lineHeight: 1.08, fontFamily: FONT_DISPLAY, color: "#f5ebdc" }}>
+                {row.label}: <span style={{ marginLeft: 8 }}>{row.value}</span>
+              </div>
             </div>
           ))}
         </div>
-        <div>
-          <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Building</div>
-          {bq.length === 0 ? <div style={{ color: TEXT_MUTED }}>No active building queue.</div> : null}
-          {bq.map((q: any) => (
-            <div key={`bq-${q.id}`} style={{ marginBottom: 6, fontSize: 16 }}>
-              {q.building_code} lvl {q.target_level} • {String(q.completes_at).replace("T", " ").slice(0, 19)}
+
+        <div style={{ marginTop: 16, maxWidth: 760 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "40px auto", gap: 12, alignItems: "center", marginBottom: 8 }}>
+            <div style={{ width: 36, height: 36, border: "1px solid rgba(216,176,117,.55)", background: "linear-gradient(180deg, rgba(93,66,28,.85), rgba(40,30,16,.86))", color: "#f4dfb8", fontWeight: 800, borderRadius: 2, display: "grid", placeItems: "center", fontSize: 12 }}>SH</div>
+            <div style={{ fontSize: "clamp(24px,2.4vw,41px)", fontFamily: FONT_DISPLAY }}>
+              Shield: <button style={{ ...BTN_STYLE, marginLeft: 10, padding: "8px 14px" }}>Activate</button>
             </div>
-          ))}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "40px auto", gap: 12, alignItems: "center", marginBottom: 8 }}>
+            <div style={{ width: 36, height: 36, border: "1px solid rgba(216,176,117,.55)", background: "linear-gradient(180deg, rgba(93,66,28,.85), rgba(40,30,16,.86))", color: "#f4dfb8", fontWeight: 800, borderRadius: 2, display: "grid", placeItems: "center", fontSize: 12 }}>TX</div>
+            <div style={{ fontSize: "clamp(24px,2.4vw,41px)", fontFamily: FONT_DISPLAY }}>
+              Tax Rate: {taxRate}%{" "}
+              <button onClick={() => setTaxRate((v) => Math.min(40, v + 1))} style={{ ...BTN_STYLE, marginLeft: 10, padding: "2px 10px" }}>+</button>
+              <button onClick={() => setTaxRate((v) => Math.max(0, v - 1))} style={{ ...BTN_STYLE, marginLeft: 6, padding: "2px 10px" }}>-</button>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "40px auto", gap: 12 }}>
+            <div style={{ width: 36, height: 36, border: "1px solid rgba(216,176,117,.55)", background: "linear-gradient(180deg, rgba(93,66,28,.85), rgba(40,30,16,.86))", color: "#f4dfb8", fontWeight: 800, borderRadius: 2, display: "grid", placeItems: "center", fontSize: 12 }}>SP</div>
+            <div>
+              <div style={{ fontSize: "clamp(24px,2.2vw,39px)", fontFamily: FONT_DISPLAY, lineHeight: 1.1 }}>
+                {seasonLabel} ({seasonDays} days {seasonHours} hours {seasonMins} minutes remaining)
+              </div>
+              <div style={{ marginTop: 5, fontSize: "clamp(23px,2vw,35px)", lineHeight: 1.28, fontStyle: "italic", color: "#f0e3ce" }}>
+                {String(season?.flavor || "Season effects are active and will rotate on tick.")}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(320px,1fr))", gap: 16, marginTop: 20 }}>
+          <div style={{ borderTop: "1px solid rgba(216,176,117,.32)", paddingTop: 10 }}>
+            <div style={{ fontSize: "clamp(30px,2.9vw,54px)", fontFamily: FONT_DISPLAY, marginBottom: 8 }}>Resources</div>
+            <div style={{ display: "grid", gap: 6, fontSize: "clamp(22px,1.9vw,33px)", fontFamily: FONT_DISPLAY, lineHeight: 1.2 }}>
+              <div>Food: {Number(k?.food || 0).toLocaleString()} <span style={{ color: Number(econ.food || 0) >= 0 ? "#9ddb8f" : "#ffab9c" }}>({fmtRate(Number(econ.food || 0))})</span></div>
+              <div>Gold: {Number(k?.gold || 0).toLocaleString()} <span style={{ color: Number(econ.gold || 0) >= 0 ? "#9ddb8f" : "#ffab9c" }}>({fmtRate(Number(econ.gold || 0))})</span></div>
+              <div>Stone: {Number(k?.stone || 0).toLocaleString()} <span style={{ color: "#9ddb8f" }}>({fmtRate(Number(econ.stone || 0))})</span></div>
+              <div>Wood: {Number(k?.wood || 0).toLocaleString()} <span style={{ color: "#9ddb8f" }}>({fmtRate(Number(econ.wood || 0))})</span></div>
+            </div>
+          </div>
+          <div style={{ borderTop: "1px solid rgba(216,176,117,.32)", paddingTop: 10 }}>
+            <div style={{ fontSize: "clamp(30px,2.9vw,54px)", fontFamily: FONT_DISPLAY, marginBottom: 8 }}>Settlement Buildings</div>
+            <div style={{ display: "grid", gap: 6, fontSize: "clamp(20px,1.7vw,31px)", fontFamily: FONT_DISPLAY, lineHeight: 1.2 }}>
+              {buildingPreview.length === 0 ? <div style={{ color: TEXT_MUTED }}>No building snapshot available.</div> : null}
+              {buildingPreview.map((b: any) => (
+                <div key={String(b.building_code)}>
+                  {String(b.building_name || b.building_code)} {Number(b.level || 0).toLocaleString()}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 16, borderTop: "1px solid rgba(216,176,117,.22)", paddingTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(320px,1fr))", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 19, fontWeight: 700, marginBottom: 6 }}>Training Queue</div>
+            {tq.length === 0 ? <div style={{ color: TEXT_MUTED }}>No active training queue.</div> : null}
+            {tq.map((q: any) => (
+              <div key={`tq-${q.id}`} style={{ marginBottom: 4, fontSize: 15 }}>
+                {Number(q.quantity || 0).toLocaleString()} x {q.troop_code} • {String(q.completes_at).replace("T", " ").slice(0, 19)}
+              </div>
+            ))}
+          </div>
+          <div>
+            <div style={{ fontSize: 19, fontWeight: 700, marginBottom: 6 }}>Building Queue</div>
+            {bq.length === 0 ? <div style={{ color: TEXT_MUTED }}>No active building queue.</div> : null}
+            {bq.map((q: any) => (
+              <div key={`bq-${q.id}`} style={{ marginBottom: 4, fontSize: 15 }}>
+                {q.building_code} lvl {q.target_level} • {String(q.completes_at).replace("T", " ").slice(0, 19)}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
