@@ -1664,10 +1664,19 @@ function AttackKingdomView() {
 
 function App() {
   const [activeId, setActiveId] = useState("overview");
+  const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
 
   const active = useMemo(() => NAV_ITEMS.find((x) => x.id === activeId) || NAV_ITEMS[0], [activeId]);
   const topNav = NAV_ITEMS.filter((x) => x.group === "top");
   const kingdomNav = NAV_ITEMS.filter((x) => x.group === "kingdom");
+  const headerQuickNav = [topNav[0], topNav[1], topNav[2], NAV_ITEMS.find((x) => x.id === "overview"), NAV_ITEMS.find((x) => x.id === "logout")].filter(Boolean) as NavItem[];
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 980);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   return (
     <main
@@ -1681,7 +1690,7 @@ function App() {
         fontFamily: FONT_BODY,
       }}
     >
-      <header style={{ borderBottom: "1px solid rgba(217,182,118,.22)", padding: "14px 26px", display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 16, background: "rgba(24,24,27,0.85)" }}>
+      <header style={{ borderBottom: "1px solid rgba(217,182,118,.22)", padding: isMobile ? "12px 14px" : "14px 26px", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr auto", alignItems: "center", gap: 14, background: "rgba(24,24,27,0.85)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div
             style={{
@@ -1706,29 +1715,44 @@ function App() {
               <circle cx="48" cy="21" r="4" fill="#f4d79e" stroke="#5f451f" strokeWidth="2" />
             </svg>
           </div>
-          <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY, letterSpacing: 0.8 }}>Crownforge</div>
+          <button onClick={() => setActiveId("overview")} style={{ fontSize: isMobile ? 28 : 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY, letterSpacing: 0.8, background: "transparent", border: "none", cursor: "pointer", padding: 0, textAlign: "left" }}>
+            Crownforge
+          </button>
         </div>
-        <div style={{ display: "flex", gap: 26, alignItems: "center", color: "#f7eee0", fontFamily: FONT_DISPLAY, fontSize: 17 }}>
-          <span>Home</span>
-          <span>Forums</span>
-          <span>How To Play</span>
-          <span>Overview</span>
-          <span>Logout</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", color: "#f7eee0", fontFamily: FONT_DISPLAY, fontSize: 16, flexWrap: "wrap", justifyContent: isMobile ? "flex-start" : "flex-end" }}>
+          {headerQuickNav.map((item) => (
+            <button
+              key={`quick-${item.id}`}
+              onClick={() => setActiveId(item.id)}
+              style={{
+                border: "1px solid rgba(216,176,117,.45)",
+                borderRadius: 999,
+                background: item.id === active.id ? "rgba(216,176,117,.26)" : "rgba(8,8,10,.45)",
+                color: TEXT_MAIN,
+                fontFamily: FONT_DISPLAY,
+                fontSize: 15,
+                padding: "6px 12px",
+                cursor: "pointer",
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
       </header>
 
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "300px 1fr",
+          gridTemplateColumns: isMobile ? "1fr" : "300px 1fr",
           gap: 16,
-          padding: 16,
+          padding: isMobile ? 10 : 16,
           background:
             "linear-gradient(180deg, rgba(36,29,24,0.35), rgba(24,22,23,0.75))",
         }}
       >
-        <aside style={{ ...CARD, height: "fit-content", position: "sticky", top: 16, background: "linear-gradient(180deg, rgba(29,29,33,0.86), rgba(19,19,22,0.88))" }}>
-          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 28, fontFamily: FONT_DISPLAY }}>Top Menu</div>
+        <aside style={{ ...CARD, height: "fit-content", position: isMobile ? "relative" : "sticky", top: 16, background: "linear-gradient(180deg, rgba(29,29,33,0.86), rgba(19,19,22,0.88))" }}>
+          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: isMobile ? 24 : 28, fontFamily: FONT_DISPLAY }}>Top Menu</div>
           <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
             {topNav.map((item) => (
               <button
@@ -1755,8 +1779,8 @@ function App() {
             ))}
           </div>
 
-          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 28, fontFamily: FONT_DISPLAY }}>Kingdom Menu</div>
-          <div style={{ display: "grid", gap: 6 }}>
+          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: isMobile ? 24 : 28, fontFamily: FONT_DISPLAY }}>Kingdom Menu</div>
+          <div style={{ display: "grid", gap: 6, gridTemplateColumns: isMobile ? "repeat(auto-fit,minmax(145px,1fr))" : "1fr" }}>
             {kingdomNav.map((item) => (
               <button
                 key={item.id}
