@@ -57,28 +57,12 @@ const demoResetBody = z.object({
   defenderUsername: z.string().min(1).optional().default("zoo"),
 });
 
-const TROOP_STATS: Record<string, { att: number; def: number }> = {
-  footmen: { att: 1, def: 1 },
-  pikemen: { att: 2, def: 2 },
-  archers: { att: 1, def: 4 },
-  light_cavalry: { att: 5, def: 4 },
-  heavy_cavalry: { att: 7, def: 5 },
-};
-
 const ECON_BUILDING_HOURLY = {
   farmFood: 120,
   lumberWood: 80,
   quarryStone: 80,
   baseGoldPerLand: 3,
   baseFoodPerLand: 2,
-};
-
-const TROOP_UPKEEP_HOURLY: Record<string, { food: number; gold: number }> = {
-  footmen: { food: 2, gold: 3 },
-  pikemen: { food: 3, gold: 4 },
-  archers: { food: 3, gold: 4 },
-  light_cavalry: { food: 4, gold: 6 },
-  heavy_cavalry: { food: 5, gold: 8 },
 };
 
 function clamp(v: number, min: number, max: number): number {
@@ -148,13 +132,7 @@ function toLevelMap(rows: any[]): Record<string, number> {
   return out;
 }
 
-function toTroopMap(rows: any[]): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const r of rows) out[String(r.troop_code)] = Number(r.amount || 0);
-  return out;
-}
-
-function computeEconomyHourly(land: number, buildingLevels: Record<string, number>, troopAmounts: Record<string, number>) {
+function computeEconomyHourly(land: number, buildingLevels: Record<string, number>, troopRows: any[]) {
   const farm = Number(buildingLevels.farm || 0);
   const lumber = Number(buildingLevels.lumberyard || 0);
   const quarry = Number(buildingLevels.quarry || 0);
@@ -166,11 +144,10 @@ function computeEconomyHourly(land: number, buildingLevels: Record<string, numbe
 
   let foodUpkeep = 0;
   let goldUpkeep = 0;
-  for (const [code, amount] of Object.entries(troopAmounts)) {
-    const u = TROOP_UPKEEP_HOURLY[code];
-    if (!u) continue;
-    foodUpkeep += Number(amount) * u.food;
-    goldUpkeep += Number(amount) * u.gold;
+  for (const row of troopRows) {
+    const amount = Number(row.amount || 0);
+    foodUpkeep += amount * Number(row.upkeep_food || 0);
+    goldUpkeep += amount * Number(row.upkeep_gold || 0);
   }
 
   return {
@@ -404,7 +381,8 @@ app.get("/api/kingdom/:name", async (req, res) => {
 
     const troops = await pool.query(
       `
-      SELECT kt.troop_code, tt.name AS troop_name, kt.amount, tt.gold_cost, tt.food_cost, tt.train_seconds
+      SELECT kt.troop_code, tt.name AS troop_name, kt.amount, tt.gold_cost, tt.food_cost, tt.train_seconds,
+             tt.upkeep_food, tt.upkeep_gold, tt.att_rating, tt.def_rating, tt.nw_value, tt.housing, tt.notes, tt.is_trainable
       FROM kingdom_troops kt
       JOIN troop_types tt ON tt.code = kt.troop_code
       WHERE kt.kingdom_id = $1
@@ -436,8 +414,7 @@ app.get("/api/kingdom/:name", async (req, res) => {
     );
 
     const buildingLevels = toLevelMap(buildings.rows);
-    const troopAmounts = toTroopMap(troops.rows);
-    const economy = computeEconomyHourly(Number(kingdom.land || 0), buildingLevels, troopAmounts);
+    const economy = computeEconomyHourly(Number(kingdom.land || 0), buildingLevels, troops.rows);
 
     return res.json({
       ok: true,
@@ -541,9 +518,10 @@ app.post("/api/kingdom/:name/train", async (req, res) => {
       if (!k.rowCount) throw new Error("kingdom not found");
       const kingdom = k.rows[0];
 
-      const tt = await c.query(`SELECT code, name, gold_cost, food_cost, train_seconds FROM troop_types WHERE code=$1 LIMIT 1`, [troopCode]);
+      const tt = await c.query(`SELECT code, name, gold_cost, food_cost, train_seconds, is_trainable FROM troop_types WHERE code=$1 LIMIT 1`, [troopCode]);
       if (!tt.rowCount) throw new Error("unknown troop code");
       const def = tt.rows[0];
+      if (!Boolean(def.is_trainable)) throw new Error(`${troopCode} is not trainable`);
 
       const totalGold = Number(def.gold_cost) * qty;
       const totalFood = Number(def.food_cost) * qty;
@@ -593,8 +571,20 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
       const def = d.rows[0];
       if (Number(atk.id) === Number(def.id)) throw new Error("cannot attack self");
 
-      const atkRows = await c.query(`SELECT troop_code, amount FROM kingdom_troops WHERE kingdom_id=$1`, [atk.id]);
-      const defRows = await c.query(`SELECT troop_code, amount FROM kingdom_troops WHERE kingdom_id=$1`, [def.id]);
+      const atkRows = await c.query(
+        `SELECT kt.troop_code, kt.amount, tt.att_rating, tt.def_rating
+         FROM kingdom_troops kt
+         JOIN troop_types tt ON tt.code = kt.troop_code
+         WHERE kt.kingdom_id=$1`,
+        [atk.id],
+      );
+      const defRows = await c.query(
+        `SELECT kt.troop_code, kt.amount, tt.att_rating, tt.def_rating
+         FROM kingdom_troops kt
+         JOIN troop_types tt ON tt.code = kt.troop_code
+         WHERE kt.kingdom_id=$1`,
+        [def.id],
+      );
       const defCastle = await c.query(
         `SELECT COALESCE(level,0) AS lvl FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='castles' LIMIT 1`,
         [def.id],
@@ -602,8 +592,18 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
 
       const attackerTroops: Record<string, number> = {};
       const defenderTroops: Record<string, number> = {};
+      const troopAtt: Record<string, number> = {};
+      const troopDef: Record<string, number> = {};
       for (const r of atkRows.rows) attackerTroops[String(r.troop_code)] = Number(r.amount || 0);
+      for (const r of atkRows.rows) {
+        troopAtt[String(r.troop_code)] = Number(r.att_rating || 0);
+        troopDef[String(r.troop_code)] = Number(r.def_rating || 0);
+      }
       for (const r of defRows.rows) defenderTroops[String(r.troop_code)] = Number(r.amount || 0);
+      for (const r of defRows.rows) {
+        troopAtt[String(r.troop_code)] = Number(r.att_rating || troopAtt[String(r.troop_code)] || 0);
+        troopDef[String(r.troop_code)] = Number(r.def_rating || troopDef[String(r.troop_code)] || 0);
+      }
 
       for (const [code, sent] of Object.entries(sentTroopsRaw)) {
         if (sent <= 0) continue;
@@ -614,12 +614,12 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
       let attackerPower = 0;
       for (const [code, sent] of Object.entries(sentTroopsRaw)) {
         if (sent <= 0) continue;
-        attackerPower += Number(sent) * Number(TROOP_STATS[code]?.att || 0);
+        attackerPower += Number(sent) * Number(troopAtt[code] || 0);
       }
 
       let defenderPowerRaw = 0;
       for (const [code, amount] of Object.entries(defenderTroops)) {
-        defenderPowerRaw += Number(amount) * Number(TROOP_STATS[code]?.def || 0);
+        defenderPowerRaw += Number(amount) * Number(troopDef[code] || 0);
       }
       const castles = Number(defCastle.rows[0]?.lvl || 0);
       const castleBonus = castles > 0 ? Math.sqrt(castles) / 100 : 0;
@@ -734,7 +734,8 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
     );
 
     const homeRows = await pool.query(
-      `SELECT tt.code, tt.name, COALESCE(kt.amount,0) AS home
+      `SELECT tt.code, tt.name, tt.att_rating, tt.def_rating, tt.upkeep_food, tt.upkeep_gold, tt.nw_value, tt.housing, tt.notes, tt.is_trainable,
+              COALESCE(kt.amount,0) AS home
        FROM troop_types tt
        LEFT JOIN kingdom_troops kt ON kt.troop_code = tt.code AND kt.kingdom_id = $1
        ORDER BY tt.code`,
@@ -764,6 +765,14 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
     const troops = homeRows.rows.map((t) => ({
       troopCode: t.code,
       troopName: t.name,
+      att: Number(t.att_rating || 0),
+      def: Number(t.def_rating || 0),
+      upkeepFood: Number(t.upkeep_food || 0),
+      upkeepGold: Number(t.upkeep_gold || 0),
+      nw: Number(t.nw_value || 0),
+      housing: String(t.housing || ""),
+      notes: String(t.notes || ""),
+      isTrainable: Boolean(t.is_trainable),
       home: Number(t.home || 0),
       train: Number(trainMap.get(String(t.code)) || 0),
       away: Number(awayMap.get(String(t.code)) || 0),

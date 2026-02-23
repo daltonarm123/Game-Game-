@@ -25,11 +25,18 @@ const BUILDINGS = [
 ] as const;
 
 const TROOPS = [
-  { code: "footmen", name: "Footmen", goldCost: 30, foodCost: 20, trainSeconds: 45 },
-  { code: "pikemen", name: "Pikemen", goldCost: 45, foodCost: 35, trainSeconds: 55 },
-  { code: "archers", name: "Archers", goldCost: 50, foodCost: 40, trainSeconds: 60 },
-  { code: "light_cavalry", name: "Light Cavalry", goldCost: 80, foodCost: 70, trainSeconds: 75 },
-  { code: "heavy_cavalry", name: "Heavy Cavalry", goldCost: 120, foodCost: 100, trainSeconds: 90 },
+  { code: "peasants", name: "Peasants", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 2, upkeepGold: 0, att: 0.1, def: 0.1, nw: 0.0, housing: "Infantry, Barracks", notes: "", isTrainable: false },
+  { code: "footmen", name: "Footmen", trainGoldCost: 30, trainFoodCost: 20, trainSeconds: 45, upkeepFood: 10, upkeepGold: 4, att: 1, def: 1, nw: 0.38, housing: "Infantry, Barracks", notes: "", isTrainable: true },
+  { code: "pikemen", name: "Pikemen", trainGoldCost: 45, trainFoodCost: 35, trainSeconds: 55, upkeepFood: 25, upkeepGold: 6, att: 2, def: 2, nw: 0.5, housing: "Infantry, Barracks", notes: "", isTrainable: true },
+  { code: "elites", name: "Elites", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 25, upkeepGold: 13, att: 10, def: 10, nw: 0.8, housing: "Infantry, Barracks", notes: "Only gained in battle.", isTrainable: false },
+  { code: "archers", name: "Archers", trainGoldCost: 50, trainFoodCost: 40, trainSeconds: 60, upkeepFood: 38, upkeepGold: 6, att: 1, def: 4, nw: 0.5, housing: "Archers, Archery Ranges", notes: "", isTrainable: true },
+  { code: "crossbowmen", name: "Crossbowmen", trainGoldCost: 70, trainFoodCost: 50, trainSeconds: 70, upkeepFood: 30, upkeepGold: 4, att: 3, def: 2, nw: 0.38, housing: "Archers, Archery Ranges", notes: "", isTrainable: false },
+  { code: "light_cavalry", name: "Light Cavalry", trainGoldCost: 80, trainFoodCost: 70, trainSeconds: 75, upkeepFood: 50, upkeepGold: 8, att: 5, def: 4, nw: 0.5, housing: "Cavalry, Stables", notes: "", isTrainable: true },
+  { code: "heavy_cavalry", name: "Heavy Cavalry", trainGoldCost: 120, trainFoodCost: 100, trainSeconds: 90, upkeepFood: 70, upkeepGold: 14, att: 7, def: 5, nw: 0.63, housing: "Cavalry, Stables", notes: "", isTrainable: true },
+  { code: "knights", name: "Knights", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 90, upkeepGold: 50, att: 15, def: 10, nw: 1.63, housing: "Cavalry, Castles", notes: "", isTrainable: false },
+  { code: "diplomats", name: "Diplomats", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 15, upkeepGold: 15, att: 0.1, def: 0.1, nw: 0.88, housing: "N/A, Embassies", notes: "", isTrainable: false },
+  { code: "priests", name: "Priests", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 30, upkeepGold: 20, att: 0.1, def: 0.1, nw: 0.5, housing: "N/A, Temples", notes: "", isTrainable: false },
+  { code: "spies", name: "Spies", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 18, upkeepGold: 10, att: 0.1, def: 0.1, nw: 0.38, housing: "N/A, Guildhalls", notes: "", isTrainable: false },
 ] as const;
 
 export async function withTx<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
@@ -82,7 +89,15 @@ export async function ensureSchema(): Promise<void> {
       name TEXT NOT NULL,
       gold_cost INT NOT NULL,
       food_cost INT NOT NULL,
-      train_seconds INT NOT NULL
+      train_seconds INT NOT NULL,
+      upkeep_food INT NOT NULL DEFAULT 0,
+      upkeep_gold INT NOT NULL DEFAULT 0,
+      att_rating NUMERIC(8,2) NOT NULL DEFAULT 0,
+      def_rating NUMERIC(8,2) NOT NULL DEFAULT 0,
+      nw_value NUMERIC(8,2) NOT NULL DEFAULT 0,
+      housing TEXT NOT NULL DEFAULT '',
+      notes TEXT NOT NULL DEFAULT '',
+      is_trainable BOOLEAN NOT NULL DEFAULT TRUE
     );
 
     CREATE TABLE IF NOT EXISTS kingdom_buildings (
@@ -167,6 +182,14 @@ export async function ensureSchema(): Promise<void> {
     ALTER TABLE building_types
     ADD COLUMN IF NOT EXISTS land_cost INT NOT NULL DEFAULT 0
   `);
+  await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS upkeep_food INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS upkeep_gold INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS att_rating NUMERIC(8,2) NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS def_rating NUMERIC(8,2) NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS nw_value NUMERIC(8,2) NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS housing TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS is_trainable BOOLEAN NOT NULL DEFAULT TRUE`);
 
   for (const b of BUILDINGS) {
     await pool.query(
@@ -187,15 +210,23 @@ export async function ensureSchema(): Promise<void> {
   for (const t of TROOPS) {
     await pool.query(
       `
-      INSERT INTO troop_types (code, name, gold_cost, food_cost, train_seconds)
-      VALUES ($1,$2,$3,$4,$5)
+      INSERT INTO troop_types (code, name, gold_cost, food_cost, train_seconds, upkeep_food, upkeep_gold, att_rating, def_rating, nw_value, housing, notes, is_trainable)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
       ON CONFLICT (code) DO UPDATE
       SET name = EXCLUDED.name,
           gold_cost = EXCLUDED.gold_cost,
           food_cost = EXCLUDED.food_cost,
-          train_seconds = EXCLUDED.train_seconds;
+          train_seconds = EXCLUDED.train_seconds,
+          upkeep_food = EXCLUDED.upkeep_food,
+          upkeep_gold = EXCLUDED.upkeep_gold,
+          att_rating = EXCLUDED.att_rating,
+          def_rating = EXCLUDED.def_rating,
+          nw_value = EXCLUDED.nw_value,
+          housing = EXCLUDED.housing,
+          notes = EXCLUDED.notes,
+          is_trainable = EXCLUDED.is_trainable;
       `,
-      [t.code, t.name, t.goldCost, t.foodCost, t.trainSeconds],
+      [t.code, t.name, t.trainGoldCost, t.trainFoodCost, t.trainSeconds, t.upkeepFood, t.upkeepGold, t.att, t.def, t.nw, t.housing, t.notes, t.isTrainable],
     );
   }
 }

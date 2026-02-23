@@ -475,7 +475,7 @@ function WarRoomView() {
   const k = data?.kingdom;
   const troops = (data?.troops || []) as Array<any>;
   const training = (data?.training || []) as Array<any>;
-  const troopCodeOptions = troops.map((t) => String(t.troopCode || ""));
+  const troopCodeOptions = troops.filter((t) => Boolean(t.isTrainable)).map((t) => String(t.troopCode || ""));
 
   async function submitTrain(e: React.FormEvent) {
     e.preventDefault();
@@ -591,6 +591,11 @@ function WarRoomView() {
                 <thead>
                   <tr>
                     <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Troop</th>
+                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Att</th>
+                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Def</th>
+                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Food</th>
+                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Gold</th>
+                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>NW</th>
                     <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Home</th>
                     <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Train</th>
                     <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Away</th>
@@ -600,6 +605,11 @@ function WarRoomView() {
                   {troops.map((t) => (
                     <tr key={t.troopCode}>
                       <td style={{ padding: 8, borderBottom: "1px solid rgba(216,176,117,.15)" }}>{t.troopName}</td>
+                      <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.att || 0).toLocaleString()}</td>
+                      <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.def || 0).toLocaleString()}</td>
+                      <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.upkeepFood || 0).toLocaleString()}</td>
+                      <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.upkeepGold || 0).toLocaleString()}</td>
+                      <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.nw || 0).toLocaleString()}</td>
                       <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.home || 0).toLocaleString()}</td>
                       <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.train || 0).toLocaleString()}</td>
                       <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.away || 0).toLocaleString()}</td>
@@ -733,7 +743,7 @@ function TrainTroopsView() {
   const k = data?.kingdom;
   const troops = (data?.troops || []) as Array<any>;
   const training = (data?.training || []) as Array<any>;
-  const troopCodeOptions = troops.map((t) => String(t.troopCode || ""));
+  const troopCodeOptions = troops.filter((t) => Boolean(t.isTrainable)).map((t) => String(t.troopCode || ""));
 
   async function submitTrain(e: React.FormEvent) {
     e.preventDefault();

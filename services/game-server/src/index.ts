@@ -16,14 +16,6 @@ const ECON_BUILDING_HOURLY = {
   baseFoodPerLand: 2,
 };
 
-const TROOP_UPKEEP_HOURLY: Record<string, { food: number; gold: number }> = {
-  footmen: { food: 2, gold: 3 },
-  pikemen: { food: 3, gold: 4 },
-  archers: { food: 3, gold: 4 },
-  light_cavalry: { food: 4, gold: 6 },
-  heavy_cavalry: { food: 5, gold: 8 },
-};
-
 async function processBuildQueueTick(): Promise<number> {
   return withTx(async (c) => {
     const due = await c.query(
@@ -140,8 +132,9 @@ async function processEconomyTick(): Promise<number> {
       );
       const t = await c.query(
         `
-        SELECT troop_code, amount
-        FROM kingdom_troops
+        SELECT kt.troop_code, kt.amount, tt.upkeep_food, tt.upkeep_gold
+        FROM kingdom_troops kt
+        JOIN troop_types tt ON tt.code = kt.troop_code
         WHERE kingdom_id = $1
         `,
         [k.id],
@@ -159,12 +152,9 @@ async function processEconomyTick(): Promise<number> {
       let foodUpkeepPerHour = 0;
       let goldUpkeepPerHour = 0;
       for (const row of t.rows) {
-        const troopCode = String(row.troop_code);
         const amount = Number(row.amount || 0);
-        const upkeep = TROOP_UPKEEP_HOURLY[troopCode];
-        if (!upkeep) continue;
-        foodUpkeepPerHour += amount * upkeep.food;
-        goldUpkeepPerHour += amount * upkeep.gold;
+        foodUpkeepPerHour += amount * Number(row.upkeep_food || 0);
+        goldUpkeepPerHour += amount * Number(row.upkeep_gold || 0);
       }
 
       const foodDelta = Math.floor((foodIncomePerHour - foodUpkeepPerHour) * TICK_HOURS);

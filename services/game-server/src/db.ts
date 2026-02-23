@@ -90,8 +90,18 @@ export async function ensureSchemaLite(): Promise<void> {
       PRIMARY KEY (kingdom_id, troop_code)
     );
 
+    CREATE TABLE IF NOT EXISTS troop_types (
+      code TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      upkeep_food INT NOT NULL DEFAULT 0,
+      upkeep_gold INT NOT NULL DEFAULT 0
+    );
+
     CREATE INDEX IF NOT EXISTS build_queue_due_idx ON build_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS train_queue_due_idx ON train_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS troop_movements_due_idx ON troop_movements(status, returns_at);
   `);
+
+  await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS upkeep_food INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS upkeep_gold INT NOT NULL DEFAULT 0`);
 }
