@@ -112,6 +112,40 @@ async function processTroopReturnsTick(): Promise<number> {
   });
 }
 
+async function processResearchQueueTick(): Promise<number> {
+  return withTx(async (c) => {
+    const due = await c.query(
+      `
+      SELECT id, kingdom_id, research_code, target_level
+      FROM research_queue
+      WHERE status = 'queued'
+        AND completes_at <= now()
+      ORDER BY completes_at ASC
+      FOR UPDATE SKIP LOCKED
+      LIMIT 200
+      `,
+    );
+
+    if (!due.rowCount) return 0;
+
+    for (const row of due.rows) {
+      await c.query(
+        `
+        INSERT INTO kingdom_research(kingdom_id, research_code, level)
+        VALUES ($1,$2,$3)
+        ON CONFLICT (kingdom_id, research_code) DO UPDATE
+        SET level = GREATEST(kingdom_research.level, EXCLUDED.level)
+        `,
+        [row.kingdom_id, row.research_code, row.target_level],
+      );
+      await c.query(`UPDATE research_queue SET status='completed', completed_at=now() WHERE id=$1`, [row.id]);
+      await c.query(`UPDATE kingdoms SET last_tick_at = now() WHERE id = $1`, [row.kingdom_id]);
+    }
+
+    return due.rowCount;
+  });
+}
+
 async function processEconomyTick(): Promise<number> {
   return withTx(async (c) => {
     const kingdoms = await c.query(`SELECT id, land, gold, food, wood, stone FROM kingdoms ORDER BY id ASC`);
@@ -192,11 +226,12 @@ async function runTick() {
   try {
     const builds = await processBuildQueueTick();
     const trains = await processTrainQueueTick();
+    const research = await processResearchQueueTick();
     const returns = await processTroopReturnsTick();
     const economies = await processEconomyTick();
-    if (builds > 0 || trains > 0 || returns > 0 || economies > 0) {
+    if (builds > 0 || trains > 0 || research > 0 || returns > 0 || economies > 0) {
       console.log(
-        `[tick] ${new Date().toISOString()} completed builds=${builds}, trainings=${trains}, returns=${returns}, economy=${economies}`,
+        `[tick] ${new Date().toISOString()} completed builds=${builds}, trainings=${trains}, research=${research}, returns=${returns}, economy=${economies}`,
       );
     }
   } catch (e) {

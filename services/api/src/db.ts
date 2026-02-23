@@ -39,6 +39,105 @@ const TROOPS = [
   { code: "spies", name: "Spies", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 18, upkeepGold: 10, att: 0.1, def: 0.1, nw: 0.38, housing: "N/A, Guildhalls", notes: "", isTrainable: false },
 ] as const;
 
+const RESEARCH_SKILLS = [
+  { code: "animal_breeding", name: "Animal Breeding", category: "Agriculture", effectText: "Enables the Breeding of Animal Types", effectPerLevel: 1, baseGold: 375000, baseSeconds: 9 * 24 * 3600, maxLevel: 10 },
+  { code: "animal_husbandry", name: "Animal Husbandry", category: "Agriculture", effectText: "Increased Animal Reproduction Rate", effectPerLevel: 0.5, baseGold: 80000, baseSeconds: 2 * 24 * 3600, maxLevel: 10 },
+  { code: "better_farming_methods", name: "Better Farming Methods", category: "Agriculture", effectText: "Increased Grain Production", effectPerLevel: 0.5, baseGold: 130000, baseSeconds: 3 * 24 * 3600, maxLevel: 10 },
+  { code: "crop_rotation", name: "Crop Rotation", category: "Agriculture", effectText: "Increased Grain Production", effectPerLevel: 0.5, baseGold: 140000, baseSeconds: 2 * 24 * 3600, maxLevel: 10 },
+  { code: "horse_breeding", name: "Horse Breeding", category: "Agriculture", effectText: "Increased Cavalry Attack Stats", effectPerLevel: 0.5, baseGold: 58000, baseSeconds: 38 * 3600, maxLevel: 10 },
+  { code: "irrigation", name: "Irrigation", category: "Agriculture", effectText: "Increased Grain Production", effectPerLevel: 0.5, baseGold: 120000, baseSeconds: 3 * 24 * 3600, maxLevel: 10 },
+  { code: "manure", name: "Manure", category: "Agriculture", effectText: "Increased Grain Production", effectPerLevel: 0.5, baseGold: 82000, baseSeconds: 36 * 3600, maxLevel: 10 },
+  { code: "war_horse", name: "War Horse", category: "Agriculture", effectText: "Increased Cavalry Attack Stats", effectPerLevel: 0.5, baseGold: 105000, baseSeconds: 50 * 3600, maxLevel: 10 },
+  { code: "winter_crops", name: "Winter Crops", category: "Agriculture", effectText: "Increased Crop Production During Winter", effectPerLevel: 2, baseGold: 200000, baseSeconds: 4 * 24 * 3600, maxLevel: 10 },
+
+  { code: "advanced_building_maintenance", name: "Advanced Building Maintenance", category: "Construction", effectText: "Decreased Maintenance Costs", effectPerLevel: -1, baseGold: 150000, baseSeconds: 48 * 3600, maxLevel: 10 },
+  { code: "better_barns", name: "Better Barns", category: "Construction", effectText: "Increased Food Storage", effectPerLevel: 0.25, baseGold: 152303, baseSeconds: 42 * 3600, maxLevel: 10 },
+  { code: "better_building_maintenance", name: "Better Building Maintenance", category: "Construction", effectText: "Decreased Maintenance Costs", effectPerLevel: -1, baseGold: 200000, baseSeconds: 72 * 3600, maxLevel: 10 },
+  { code: "better_construction_methods", name: "Better Construction Methods", category: "Construction", effectText: "Decreased Building Construction Time", effectPerLevel: -0.5, baseGold: 64000, baseSeconds: 36 * 3600, maxLevel: 10 },
+  { code: "engineering", name: "Engineering", category: "Construction", effectText: "Decreased Building Construction Time", effectPerLevel: -0.25, baseGold: 100000, baseSeconds: 3 * 24 * 3600, maxLevel: 10 },
+  { code: "improved_metal_working", name: "Improved Metal Working", category: "Construction", effectText: "Accesses Other Improvements", effectPerLevel: 1, baseGold: 102885, baseSeconds: 82 * 3600, maxLevel: 10 },
+  { code: "improved_tools", name: "Improved Tools", category: "Construction", effectText: "Decreased Building Construction Time", effectPerLevel: -0.25, baseGold: 109200, baseSeconds: 82 * 3600, maxLevel: 10 },
+  { code: "improved_defences", name: "Improved Defences", category: "Construction", effectText: "Increased Castle Defence Rate", effectPerLevel: 1, baseGold: 24000, baseSeconds: 22 * 3600, maxLevel: 10 },
+  { code: "improved_castles_motte_bailey", name: "Improved Castles (Motte and Bailey)", category: "Construction", effectText: "Increased Castle Defence Rate", effectPerLevel: 1, baseGold: 32000, baseSeconds: 33 * 3600, maxLevel: 10 },
+  { code: "city_walls", name: "City Walls", category: "Construction", effectText: "Increased Defence Rating of Troops", effectPerLevel: 0.25, baseGold: 31000, baseSeconds: 48 * 3600, maxLevel: 10 },
+  { code: "palisades", name: "Palisades", category: "Construction", effectText: "Increased Defence Rating of Troops", effectPerLevel: 0.25, baseGold: 22000, baseSeconds: 24 * 3600, maxLevel: 10 },
+  { code: "improved_market_wagons", name: "Improved Market Wagons", category: "Construction", effectText: "Increased Market Wagon Speed", effectPerLevel: -1, baseGold: 54743, baseSeconds: 60 * 3600, maxLevel: 10 },
+  { code: "roads", name: "Roads", category: "Construction", effectText: "Decreased Troop Return Time", effectPerLevel: -0.5, baseGold: 48000, baseSeconds: 29 * 3600, maxLevel: 10 },
+  { code: "larger_archery_ranges", name: "Larger Archery Ranges", category: "Construction", effectText: "Increased Space Inside Archery Ranges", effectPerLevel: 1, baseGold: 160000, baseSeconds: 4 * 24 * 3600, maxLevel: 10 },
+  { code: "larger_barracks", name: "Larger Barracks", category: "Construction", effectText: "Increased Space in Barracks", effectPerLevel: 1, baseGold: 140000, baseSeconds: 3 * 24 * 3600, maxLevel: 10 },
+  { code: "larger_stables", name: "Larger Stables", category: "Construction", effectText: "Increased Space in Stables", effectPerLevel: 1, baseGold: 40000, baseSeconds: 22 * 3600, maxLevel: 10 },
+  { code: "spy_glass", name: "Spy Glass", category: "Construction", effectText: "Increased Spy Effectiveness", effectPerLevel: 1, baseGold: 136000, baseSeconds: 50 * 3600, maxLevel: 10 },
+
+  { code: "mathematics", name: "Mathematics", category: "Economics", effectText: "Increased Tax Revenue", effectPerLevel: 0.5, baseGold: 939343, baseSeconds: 5 * 24 * 3600, maxLevel: 10 },
+  { code: "accounting", name: "Accounting", category: "Economics", effectText: "Increased Tax Revenue", effectPerLevel: 1, baseGold: 419904, baseSeconds: 4 * 24 * 3600, maxLevel: 10 },
+
+  { code: "monastery", name: "Monastery", category: "Religion", effectText: "Increased Mana Generation Rate", effectPerLevel: 1, baseGold: 250000, baseSeconds: 3 * 24 * 3600, maxLevel: 10 },
+  { code: "herbalism", name: "Herbalism", category: "Religion", effectText: "Decreased Casualty Rates", effectPerLevel: 0.5, baseGold: 180000, baseSeconds: 3 * 24 * 3600, maxLevel: 10 },
+  { code: "medicine", name: "Medicine", category: "Religion", effectText: "Decreased Casualty Rates", effectPerLevel: 0.5, baseGold: 261950, baseSeconds: 3 * 24 * 3600, maxLevel: 10 },
+  { code: "supplication", name: "Supplication", category: "Religion", effectText: "Decreased Mana Cost", effectPerLevel: -1, baseGold: 89000, baseSeconds: 28 * 3600, maxLevel: 10 },
+  { code: "clergy", name: "Clergy", category: "Religion", effectText: "Increased Mana Generation Rate", effectPerLevel: 1, baseGold: 125000, baseSeconds: 36 * 3600, maxLevel: 10 },
+  { code: "good_medical_practice", name: "Good Medical Practice", category: "Religion", effectText: "Decreased Casualty Rates", effectPerLevel: 0.5, baseGold: 200000, baseSeconds: 54 * 3600, maxLevel: 10 },
+  { code: "hospitals", name: "Hospitals", category: "Religion", effectText: "Decreased Casualty Rates", effectPerLevel: 0.5, baseGold: 220000, baseSeconds: 68 * 3600, maxLevel: 10 },
+  { code: "basilica", name: "Basilica", category: "Religion", effectText: "Decreased Mana Cost and Increased Mana Generation", effectPerLevel: 1, baseGold: 140000, baseSeconds: 36 * 3600, maxLevel: 10 },
+
+  { code: "better_training_methods", name: "Better Training Methods", category: "Warfare", effectText: "Increased Attack / Defence Ratings", effectPerLevel: 0.25, baseGold: 170000, baseSeconds: 4 * 24 * 3600, maxLevel: 10 },
+  { code: "tactics", name: "Tactics", category: "Warfare", effectText: "Increased Attack Rating of Troops", effectPerLevel: 0.25, baseGold: 200000, baseSeconds: 4 * 24 * 3600, maxLevel: 10 },
+  { code: "leadership_training", name: "Leadership Training", category: "Warfare", effectText: "Increased Defence Rating of Troops", effectPerLevel: 0.25, baseGold: 180000, baseSeconds: 4 * 24 * 3600, maxLevel: 10 },
+  { code: "phalanx", name: "Phalanx", category: "Warfare", effectText: "Increased Defence Rating of Infantry", effectPerLevel: 1, baseGold: 220000, baseSeconds: 5 * 24 * 3600, maxLevel: 10 },
+  { code: "sharpshooter", name: "Sharpshooter", category: "Warfare", effectText: "Increased Archers Rating", effectPerLevel: 1, baseGold: 220000, baseSeconds: 4 * 24 * 3600, maxLevel: 10 },
+  { code: "lance_formation", name: "Lance Formation", category: "Warfare", effectText: "Increased Cavalry Defence Stats", effectPerLevel: 1, baseGold: 65000, baseSeconds: 20 * 3600, maxLevel: 10 },
+  { code: "loose_order_formation", name: "Loose Order Formation", category: "Warfare", effectText: "Increased Defence Rating of Troops", effectPerLevel: 1, baseGold: 190000, baseSeconds: 4 * 24 * 3600, maxLevel: 10 },
+] as const;
+
+const RESEARCH_PREREQS = [
+  { code: "animal_breeding", prereqCode: "animal_husbandry", requiredLevel: 3 },
+  { code: "crop_rotation", prereqCode: "better_farming_methods", requiredLevel: 6 },
+  { code: "horse_breeding", prereqCode: "animal_breeding", requiredLevel: 3 },
+  { code: "manure", prereqCode: "better_farming_methods", requiredLevel: 7 },
+  { code: "war_horse", prereqCode: "animal_husbandry", requiredLevel: 5 },
+  { code: "war_horse", prereqCode: "horse_breeding", requiredLevel: 5 },
+  { code: "winter_crops", prereqCode: "crop_rotation", requiredLevel: 5 },
+
+  { code: "engineering", prereqCode: "improved_metal_working", requiredLevel: 2 },
+  { code: "improved_tools", prereqCode: "improved_metal_working", requiredLevel: 3 },
+  { code: "improved_defences", prereqCode: "better_training_methods", requiredLevel: 5 },
+  { code: "improved_castles_motte_bailey", prereqCode: "improved_defences", requiredLevel: 5 },
+  { code: "city_walls", prereqCode: "improved_defences", requiredLevel: 1 },
+  { code: "city_walls", prereqCode: "palisades", requiredLevel: 1 },
+  { code: "advanced_building_maintenance", prereqCode: "engineering", requiredLevel: 4 },
+  { code: "advanced_building_maintenance", prereqCode: "better_building_maintenance", requiredLevel: 4 },
+  { code: "improved_market_wagons", prereqCode: "improved_metal_working", requiredLevel: 2 },
+  { code: "roads", prereqCode: "improved_tools", requiredLevel: 1 },
+  { code: "roads", prereqCode: "better_construction_methods", requiredLevel: 1 },
+  { code: "larger_archery_ranges", prereqCode: "better_training_methods", requiredLevel: 4 },
+  { code: "larger_barracks", prereqCode: "better_training_methods", requiredLevel: 2 },
+  { code: "larger_stables", prereqCode: "better_training_methods", requiredLevel: 5 },
+  { code: "spy_glass", prereqCode: "engineering", requiredLevel: 4 },
+  { code: "spy_glass", prereqCode: "mathematics", requiredLevel: 2 },
+
+  { code: "accounting", prereqCode: "mathematics", requiredLevel: 5 },
+
+  { code: "herbalism", prereqCode: "monastery", requiredLevel: 5 },
+  { code: "medicine", prereqCode: "herbalism", requiredLevel: 5 },
+  { code: "supplication", prereqCode: "monastery", requiredLevel: 5 },
+  { code: "clergy", prereqCode: "monastery", requiredLevel: 5 },
+  { code: "good_medical_practice", prereqCode: "medicine", requiredLevel: 2 },
+  { code: "hospitals", prereqCode: "good_medical_practice", requiredLevel: 1 },
+  { code: "basilica", prereqCode: "clergy", requiredLevel: 1 },
+  { code: "basilica", prereqCode: "supplication", requiredLevel: 1 },
+
+  { code: "tactics", prereqCode: "mathematics", requiredLevel: 3 },
+  { code: "tactics", prereqCode: "leadership_training", requiredLevel: 2 },
+  { code: "leadership_training", prereqCode: "better_training_methods", requiredLevel: 1 },
+  { code: "phalanx", prereqCode: "tactics", requiredLevel: 4 },
+  { code: "phalanx", prereqCode: "better_training_methods", requiredLevel: 5 },
+  { code: "sharpshooter", prereqCode: "better_training_methods", requiredLevel: 5 },
+  { code: "lance_formation", prereqCode: "tactics", requiredLevel: 5 },
+  { code: "lance_formation", prereqCode: "better_training_methods", requiredLevel: 5 },
+  { code: "loose_order_formation", prereqCode: "tactics", requiredLevel: 3 },
+  { code: "loose_order_formation", prereqCode: "better_training_methods", requiredLevel: 3 },
+] as const;
+
 export async function withTx<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
@@ -138,6 +237,43 @@ export async function ensureSchema(): Promise<void> {
       CHECK (status IN ('queued','completed','cancelled'))
     );
 
+    CREATE TABLE IF NOT EXISTS research_types (
+      code TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL,
+      effect_text TEXT NOT NULL DEFAULT '',
+      effect_per_level NUMERIC(10,4) NOT NULL DEFAULT 0,
+      base_gold BIGINT NOT NULL DEFAULT 0,
+      base_seconds INT NOT NULL DEFAULT 3600,
+      max_level INT NOT NULL DEFAULT 10
+    );
+
+    CREATE TABLE IF NOT EXISTS research_prereqs (
+      research_code TEXT NOT NULL REFERENCES research_types(code) ON DELETE CASCADE,
+      prereq_code TEXT NOT NULL REFERENCES research_types(code) ON DELETE CASCADE,
+      required_level INT NOT NULL DEFAULT 1,
+      PRIMARY KEY (research_code, prereq_code)
+    );
+
+    CREATE TABLE IF NOT EXISTS kingdom_research (
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      research_code TEXT NOT NULL REFERENCES research_types(code) ON DELETE CASCADE,
+      level INT NOT NULL DEFAULT 0,
+      PRIMARY KEY (kingdom_id, research_code)
+    );
+
+    CREATE TABLE IF NOT EXISTS research_queue (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      research_code TEXT NOT NULL REFERENCES research_types(code) ON DELETE CASCADE,
+      target_level INT NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completes_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      completed_at TIMESTAMPTZ,
+      CHECK (status IN ('queued','completed','cancelled'))
+    );
+
     CREATE TABLE IF NOT EXISTS attack_reports (
       id BIGSERIAL PRIMARY KEY,
       attacker_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
@@ -176,6 +312,7 @@ export async function ensureSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS attack_reports_attacker_idx ON attack_reports(attacker_kingdom_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS troop_movements_due_idx ON troop_movements(status, returns_at);
     CREATE INDEX IF NOT EXISTS troop_movements_owner_idx ON troop_movements(owner_kingdom_id, status, returns_at DESC);
+    CREATE INDEX IF NOT EXISTS research_queue_due_idx ON research_queue(status, completes_at);
   `);
 
   await pool.query(`
@@ -190,6 +327,13 @@ export async function ensureSchema(): Promise<void> {
   await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS housing TEXT NOT NULL DEFAULT ''`);
   await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT ''`);
   await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS is_trainable BOOLEAN NOT NULL DEFAULT TRUE`);
+
+  await pool.query(`ALTER TABLE research_types ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'General'`);
+  await pool.query(`ALTER TABLE research_types ADD COLUMN IF NOT EXISTS effect_text TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE research_types ADD COLUMN IF NOT EXISTS effect_per_level NUMERIC(10,4) NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE research_types ADD COLUMN IF NOT EXISTS base_gold BIGINT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE research_types ADD COLUMN IF NOT EXISTS base_seconds INT NOT NULL DEFAULT 3600`);
+  await pool.query(`ALTER TABLE research_types ADD COLUMN IF NOT EXISTS max_level INT NOT NULL DEFAULT 10`);
 
   for (const b of BUILDINGS) {
     await pool.query(
@@ -227,6 +371,37 @@ export async function ensureSchema(): Promise<void> {
           is_trainable = EXCLUDED.is_trainable;
       `,
       [t.code, t.name, t.trainGoldCost, t.trainFoodCost, t.trainSeconds, t.upkeepFood, t.upkeepGold, t.att, t.def, t.nw, t.housing, t.notes, t.isTrainable],
+    );
+  }
+
+  for (const r of RESEARCH_SKILLS) {
+    await pool.query(
+      `
+      INSERT INTO research_types (code, name, category, effect_text, effect_per_level, base_gold, base_seconds, max_level)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      ON CONFLICT (code) DO UPDATE
+      SET name = EXCLUDED.name,
+          category = EXCLUDED.category,
+          effect_text = EXCLUDED.effect_text,
+          effect_per_level = EXCLUDED.effect_per_level,
+          base_gold = EXCLUDED.base_gold,
+          base_seconds = EXCLUDED.base_seconds,
+          max_level = EXCLUDED.max_level
+      `,
+      [r.code, r.name, r.category, r.effectText, r.effectPerLevel, r.baseGold, r.baseSeconds, r.maxLevel],
+    );
+  }
+
+  await pool.query(`DELETE FROM research_prereqs`);
+  for (const p of RESEARCH_PREREQS) {
+    await pool.query(
+      `
+      INSERT INTO research_prereqs (research_code, prereq_code, required_level)
+      VALUES ($1,$2,$3)
+      ON CONFLICT (research_code, prereq_code) DO UPDATE
+      SET required_level = EXCLUDED.required_level
+      `,
+      [p.code, p.prereqCode, p.requiredLevel],
     );
   }
 }

@@ -21,6 +21,7 @@ const ATTACK_RETURN_MINUTES = Number(process.env.ATTACK_RETURN_MINUTES || 20);
 const LOCAL_DEMO_FAST = String(process.env.LOCAL_DEMO_FAST || "").trim() === "1";
 const FAST_BUILD_SECONDS = Math.max(1, Number(process.env.FAST_BUILD_SECONDS || 5));
 const FAST_TRAIN_SECONDS = Math.max(1, Number(process.env.FAST_TRAIN_SECONDS || 5));
+const FAST_RESEARCH_SECONDS = Math.max(5, Number(process.env.FAST_RESEARCH_SECONDS || 15));
 const ATTACK_RETURN_SECONDS = Math.max(
   1,
   Number(process.env.ATTACK_RETURN_SECONDS || (LOCAL_DEMO_FAST ? 20 : ATTACK_RETURN_MINUTES * 60)),
@@ -55,6 +56,10 @@ const demoResetBody = z.object({
   defenderUserId: z.string().min(1).optional().default("u2"),
   attackerUsername: z.string().min(1).optional().default("envy90"),
   defenderUsername: z.string().min(1).optional().default("zoo"),
+});
+
+const researchStartBody = z.object({
+  researchCode: z.string().min(1),
 });
 
 const ECON_BUILDING_HOURLY = {
@@ -168,6 +173,15 @@ function computeEconomyHourly(land: number, buildingLevels: Record<string, numbe
   };
 }
 
+function researchGoldCost(baseGold: number, currentLevel: number) {
+  return Math.max(1, Math.floor(baseGold * Math.pow(1.35, Math.max(0, currentLevel))));
+}
+
+function researchSeconds(baseSeconds: number, currentLevel: number) {
+  const raw = Math.max(300, Math.floor(baseSeconds * Math.pow(1.25, Math.max(0, currentLevel))));
+  return LOCAL_DEMO_FAST ? FAST_RESEARCH_SECONDS : raw;
+}
+
 async function seedKingdom(c: PoolClient, opts: {
   userId: string;
   username: string;
@@ -179,6 +193,7 @@ async function seedKingdom(c: PoolClient, opts: {
   land: number;
   buildingLevels?: Record<string, number>;
   troopAmounts?: Record<string, number>;
+  researchLevels?: Record<string, number>;
 }) {
   await c.query(`INSERT INTO app_users(id, username) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET username=EXCLUDED.username`, [
     opts.userId,
@@ -219,6 +234,19 @@ async function seedKingdom(c: PoolClient, opts: {
       );
     }
   }
+  if (opts.researchLevels && Object.keys(opts.researchLevels).length > 0) {
+    for (const [code, level] of Object.entries(opts.researchLevels)) {
+      await c.query(
+        `
+        INSERT INTO kingdom_research(kingdom_id, research_code, level)
+        VALUES ($1,$2,$3)
+        ON CONFLICT (kingdom_id, research_code) DO UPDATE
+        SET level = EXCLUDED.level
+        `,
+        [kingdom.id, code, Math.max(0, Math.floor(Number(level || 0)))],
+      );
+    }
+  }
   return kingdom;
 }
 
@@ -238,7 +266,7 @@ app.post("/api/dev/demo-reset", async (req, res) => {
 
   try {
     const out = await withTx(async (c) => {
-      await c.query(`TRUNCATE troop_movements, attack_reports, train_queue, build_queue, kingdom_troops, kingdom_buildings, kingdoms, app_users RESTART IDENTITY CASCADE`);
+      await c.query(`TRUNCATE troop_movements, attack_reports, research_queue, kingdom_research, train_queue, build_queue, kingdom_troops, kingdom_buildings, kingdoms, app_users RESTART IDENTITY CASCADE`);
 
       const attacker = await seedKingdom(c, {
         userId: body.attackerUserId,
@@ -263,6 +291,32 @@ app.post("/api/dev/demo-reset", async (req, res) => {
           archers: 22_000,
           light_cavalry: 38_000,
           heavy_cavalry: 27_000,
+        },
+        researchLevels: {
+          better_farming_methods: 7,
+          crop_rotation: 5,
+          animal_husbandry: 5,
+          winter_crops: 4,
+          engineering: 4,
+          improved_metal_working: 3,
+          improved_tools: 1,
+          better_building_maintenance: 4,
+          better_barns: 3,
+          improved_market_wagons: 5,
+          larger_archery_ranges: 6,
+          larger_barracks: 6,
+          spy_glass: 1,
+          mathematics: 5,
+          accounting: 4,
+          monastery: 5,
+          herbalism: 5,
+          medicine: 2,
+          better_training_methods: 5,
+          tactics: 5,
+          leadership_training: 4,
+          phalanx: 7,
+          sharpshooter: 3,
+          loose_order_formation: 3,
         },
       });
 
@@ -822,6 +876,174 @@ app.get("/api/war-room/reports/:kingdom", async (req, res) => {
     return res.json({ ok: true, items: rows.rows });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/research/:kingdom", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+
+  try {
+    const k = await pool.query(`SELECT id, name, gold FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const kingdomRow = k.rows[0];
+
+    const skills = await pool.query(
+      `SELECT code, name, category, effect_text, effect_per_level, base_gold, base_seconds, max_level
+       FROM research_types
+       ORDER BY category, name`,
+    );
+    const levels = await pool.query(`SELECT research_code, level FROM kingdom_research WHERE kingdom_id=$1`, [kingdomRow.id]);
+    const queue = await pool.query(
+      `SELECT id, research_code, target_level, started_at, completes_at, status
+       FROM research_queue
+       WHERE kingdom_id=$1 AND status='queued'
+       ORDER BY completes_at ASC`,
+      [kingdomRow.id],
+    );
+    const prereqs = await pool.query(
+      `SELECT rp.research_code, rp.prereq_code, rp.required_level, rt.name AS prereq_name
+       FROM research_prereqs rp
+       JOIN research_types rt ON rt.code = rp.prereq_code`,
+    );
+
+    const levelMap = new Map<string, number>();
+    for (const l of levels.rows) levelMap.set(String(l.research_code), Number(l.level || 0));
+    const queuedSet = new Set(queue.rows.map((q) => String(q.research_code)));
+    const prereqMap = new Map<string, any[]>();
+    for (const p of prereqs.rows) {
+      const key = String(p.research_code);
+      if (!prereqMap.has(key)) prereqMap.set(key, []);
+      prereqMap.get(key)!.push({
+        code: p.prereq_code,
+        name: p.prereq_name,
+        requiredLevel: Number(p.required_level || 0),
+        currentLevel: Number(levelMap.get(String(p.prereq_code)) || 0),
+      });
+    }
+
+    const items = skills.rows.map((s) => {
+      const code = String(s.code);
+      const currentLevel = Number(levelMap.get(code) || 0);
+      const maxLevel = Number(s.max_level || 10);
+      const nextLevel = Math.min(maxLevel, currentLevel + 1);
+      const reqs = prereqMap.get(code) || [];
+      const missing = reqs.filter((r) => Number(r.currentLevel || 0) < Number(r.requiredLevel || 0));
+      const isMaxed = currentLevel >= maxLevel;
+      const nextGold = isMaxed ? 0 : researchGoldCost(Number(s.base_gold || 0), currentLevel);
+      const nextSeconds = isMaxed ? 0 : researchSeconds(Number(s.base_seconds || 0), currentLevel);
+      const queueSlotsUsed = queue.rows.length;
+      const canResearch = !isMaxed && missing.length === 0 && !queuedSet.has(code) && queueSlotsUsed < 2 && Number(kingdomRow.gold || 0) >= nextGold;
+      return {
+        code,
+        name: s.name,
+        category: s.category,
+        effectText: s.effect_text,
+        effectPerLevel: Number(s.effect_per_level || 0),
+        currentLevel,
+        nextLevel,
+        maxLevel,
+        currentEffect: Number((Number(s.effect_per_level || 0) * currentLevel).toFixed(4)),
+        nextEffect: Number((Number(s.effect_per_level || 0) * nextLevel).toFixed(4)),
+        nextGold,
+        nextSeconds,
+        isQueued: queuedSet.has(code),
+        missingPrereqs: missing,
+        prereqs: reqs,
+        canResearch,
+      };
+    });
+
+    return res.json({
+      ok: true,
+      kingdom: { id: kingdomRow.id, name: kingdomRow.name, gold: Number(kingdomRow.gold || 0) },
+      queueSlotsUsed: queue.rows.length,
+      queueSlotsMax: 2,
+      queue: queue.rows,
+      items,
+    });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/research/:kingdom/start", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = researchStartBody.safeParse(req.body);
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+
+  const researchCode = String(parsed.data.researchCode || "").toLowerCase().trim();
+  if (!researchCode) return res.status(400).json({ ok: false, error: "researchCode required" });
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id, name, gold FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kr = k.rows[0];
+
+      const active = await c.query(`SELECT COUNT(*)::int AS n FROM research_queue WHERE kingdom_id=$1 AND status='queued'`, [kr.id]);
+      const activeN = Number(active.rows[0]?.n || 0);
+      if (activeN >= 2) throw new Error("research queue full (max 2)");
+
+      const r = await c.query(
+        `SELECT code, name, base_gold, base_seconds, max_level
+         FROM research_types
+         WHERE code=$1
+         LIMIT 1`,
+        [researchCode],
+      );
+      if (!r.rowCount) throw new Error("unknown research code");
+      const def = r.rows[0];
+
+      const cur = await c.query(`SELECT level FROM kingdom_research WHERE kingdom_id=$1 AND research_code=$2 LIMIT 1`, [kr.id, researchCode]);
+      const curLevel = Number(cur.rows[0]?.level || 0);
+      const maxLevel = Number(def.max_level || 10);
+      if (curLevel >= maxLevel) throw new Error("research already maxed");
+
+      const alreadyQueued = await c.query(
+        `SELECT 1 FROM research_queue WHERE kingdom_id=$1 AND research_code=$2 AND status='queued' LIMIT 1`,
+        [kr.id, researchCode],
+      );
+      if (alreadyQueued.rowCount) throw new Error("research already queued");
+
+      const prereqs = await c.query(
+        `SELECT prereq_code, required_level FROM research_prereqs WHERE research_code=$1`,
+        [researchCode],
+      );
+      for (const p of prereqs.rows) {
+        const have = await c.query(
+          `SELECT level FROM kingdom_research WHERE kingdom_id=$1 AND research_code=$2 LIMIT 1`,
+          [kr.id, p.prereq_code],
+        );
+        const haveLevel = Number(have.rows[0]?.level || 0);
+        const needLevel = Number(p.required_level || 0);
+        if (haveLevel < needLevel) {
+          throw new Error(`missing prerequisite: ${String(p.prereq_code)} (${haveLevel}/${needLevel})`);
+        }
+      }
+
+      const goldCost = researchGoldCost(Number(def.base_gold || 0), curLevel);
+      if (Number(kr.gold || 0) < goldCost) throw new Error(`not enough gold (need ${goldCost})`);
+
+      await c.query(`UPDATE kingdoms SET gold = gold - $2 WHERE id=$1`, [kr.id, goldCost]);
+      const seconds = researchSeconds(Number(def.base_seconds || 3600), curLevel);
+      const targetLevel = curLevel + 1;
+      const ins = await c.query(
+        `
+        INSERT INTO research_queue(kingdom_id, research_code, target_level, started_at, completes_at, status)
+        VALUES ($1,$2,$3,now(), now() + ($4 || ' seconds')::interval, 'queued')
+        RETURNING id, research_code, target_level, started_at, completes_at, status
+        `,
+        [kr.id, researchCode, targetLevel, seconds],
+      );
+
+      return { queue: ins.rows[0], costGold: goldCost };
+    });
+
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
   }
 });
 

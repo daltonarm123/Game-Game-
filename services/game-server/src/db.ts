@@ -61,6 +61,25 @@ export async function ensureSchemaLite(): Promise<void> {
       CHECK (status IN ('queued','completed','cancelled'))
     );
 
+    CREATE TABLE IF NOT EXISTS kingdom_research (
+      kingdom_id BIGINT NOT NULL,
+      research_code TEXT NOT NULL,
+      level INT NOT NULL DEFAULT 0,
+      PRIMARY KEY (kingdom_id, research_code)
+    );
+
+    CREATE TABLE IF NOT EXISTS research_queue (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL,
+      research_code TEXT NOT NULL,
+      target_level INT NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completes_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      completed_at TIMESTAMPTZ,
+      CHECK (status IN ('queued','completed','cancelled'))
+    );
+
     CREATE TABLE IF NOT EXISTS troop_movements (
       id BIGSERIAL PRIMARY KEY,
       owner_kingdom_id BIGINT NOT NULL,
@@ -100,6 +119,7 @@ export async function ensureSchemaLite(): Promise<void> {
     CREATE INDEX IF NOT EXISTS build_queue_due_idx ON build_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS train_queue_due_idx ON train_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS troop_movements_due_idx ON troop_movements(status, returns_at);
+    CREATE INDEX IF NOT EXISTS research_queue_due_idx ON research_queue(status, completes_at);
   `);
 
   await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS upkeep_food INT NOT NULL DEFAULT 0`);

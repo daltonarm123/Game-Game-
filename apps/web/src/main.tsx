@@ -423,6 +423,150 @@ function BuildingsView() {
   );
 }
 
+function formatDuration(sec: number) {
+  const s = Math.max(0, Math.floor(Number(sec || 0)));
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function ResearchView() {
+  const [kingdom, setKingdom] = useState("Elixer");
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [actionMsg, setActionMsg] = useState("");
+  const [busyCode, setBusyCode] = useState("");
+
+  async function load() {
+    setLoading(true);
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/research/${encodeURIComponent(kingdom)}`);
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setData(j);
+    } catch (e: any) {
+      setData(null);
+      setError(String(e?.message || e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function startResearch(code: string) {
+    setActionMsg("");
+    setBusyCode(code);
+    try {
+      const r = await fetch(`${API_BASE}/api/research/${encodeURIComponent(kingdom)}/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ researchCode: code }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Research queued: ${code}`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Research failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusyCode("");
+    }
+  }
+
+  const items = (data?.items || []) as Array<any>;
+  const queue = (data?.queue || []) as Array<any>;
+  const byCategory = items.reduce((acc: Record<string, any[]>, item: any) => {
+    const key = String(item.category || "General");
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(item);
+    return acc;
+  }, {});
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <div style={CARD}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>Research - {data?.kingdom?.name || kingdom}</div>
+            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 18, fontWeight: 700 }}>
+              Gold: {Number(data?.kingdom?.gold || 0).toLocaleString()} • Queue: {Number(data?.queueSlotsUsed || 0)}/{Number(data?.queueSlotsMax || 2)}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={INPUT_STYLE} />
+            <button onClick={() => void load()} style={BTN_STYLE}>Load</button>
+          </div>
+        </div>
+        {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading research...</div> : null}
+        {error ? (
+          <div style={{ marginTop: 8, color: "#ffae9a", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span>{error}</span>
+            <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
+          </div>
+        ) : null}
+        {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
+      </div>
+
+      <div style={CARD}>
+        <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Current Research Queue</div>
+        {queue.length === 0 ? <div style={{ color: TEXT_MUTED }}>No active research queue.</div> : null}
+        {queue.map((q) => (
+          <div key={q.id} style={{ marginBottom: 6 }}>
+            {q.research_code} lvl {q.target_level} • {String(q.completes_at).replace("T", " ").slice(0, 19)}
+          </div>
+        ))}
+      </div>
+
+      {Object.keys(byCategory).map((category) => (
+        <div key={category} style={CARD}>
+          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>{category}</div>
+          <div style={{ display: "grid", gap: 8 }}>
+            {byCategory[category].map((r: any) => (
+              <div key={r.code} style={{ border: "1px solid rgba(216,176,117,.2)", borderRadius: 10, padding: 10, background: "rgba(0,0,0,.2)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: 18 }}>{r.name}</div>
+                    <div style={{ color: TEXT_MUTED, marginTop: 4 }}>
+                      {r.effectText} • Lvl {r.currentLevel}/{r.maxLevel} • Effect {r.currentEffect}% → {r.nextEffect}%
+                    </div>
+                    {Array.isArray(r.prereqs) && r.prereqs.length > 0 ? (
+                      <div style={{ color: TEXT_MUTED, marginTop: 4, fontSize: 13 }}>
+                        Prereqs: {r.prereqs.map((p: any) => `${p.name} (${p.currentLevel}/${p.requiredLevel})`).join(", ")}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div style={{ minWidth: 220, textAlign: "right" }}>
+                    <div style={{ fontSize: 14, color: TEXT_MUTED }}>Next: {r.nextGold.toLocaleString()} gold • {formatDuration(r.nextSeconds)}</div>
+                    <div style={{ marginTop: 6 }}>
+                      <button
+                        style={BTN_STYLE}
+                        disabled={!r.canResearch || !!busyCode || r.isQueued}
+                        onClick={() => void startResearch(r.code)}
+                      >
+                        {r.isQueued ? "Queued" : busyCode === r.code ? "Starting..." : "Research"}
+                      </button>
+                    </div>
+                    {!r.canResearch && !r.isQueued ? <div style={{ marginTop: 4, fontSize: 12, color: "#ffab9c" }}>Locked/requirements unmet</div> : null}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Placeholder({ label }: { label: string }) {
   return (
     <div style={CARD}>
@@ -1100,10 +1244,11 @@ function App() {
         <section style={{ display: "grid", gap: 12 }}>
           {active.id === "overview" ? <OverviewView /> : null}
           {active.id === "buildings" ? <BuildingsView /> : null}
+          {active.id === "research" ? <ResearchView /> : null}
           {active.id === "war-room" ? <WarRoomView /> : null}
           {active.id === "train-troops" ? <TrainTroopsView /> : null}
           {active.id === "attack-kingdom" ? <AttackKingdomView /> : null}
-          {active.id !== "overview" && active.id !== "buildings" && active.id !== "war-room" && active.id !== "train-troops" && active.id !== "attack-kingdom" ? <Placeholder label={active.label} /> : null}
+          {active.id !== "overview" && active.id !== "buildings" && active.id !== "research" && active.id !== "war-room" && active.id !== "train-troops" && active.id !== "attack-kingdom" ? <Placeholder label={active.label} /> : null}
         </section>
       </div>
       <footer
