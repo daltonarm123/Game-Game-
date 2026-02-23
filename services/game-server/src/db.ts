@@ -33,6 +33,12 @@ export async function ensureSchemaLite(): Promise<void> {
       stone BIGINT NOT NULL DEFAULT 5000,
       food BIGINT NOT NULL DEFAULT 50000,
       land BIGINT NOT NULL DEFAULT 1000,
+      tax_rate INT NOT NULL DEFAULT 25,
+      shield_status TEXT NOT NULL DEFAULT 'none',
+      shield_requested_at TIMESTAMPTZ,
+      shield_starts_at TIMESTAMPTZ,
+      shield_ends_at TIMESTAMPTZ,
+      shield_cooldown_ends_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       last_tick_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -172,6 +178,12 @@ export async function ensureSchemaLite(): Promise<void> {
 
   await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS upkeep_food INT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS upkeep_gold INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS tax_rate INT NOT NULL DEFAULT 25`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_status TEXT NOT NULL DEFAULT 'none'`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_requested_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_starts_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_ends_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_cooldown_ends_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_index INT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_code TEXT NOT NULL DEFAULT 'spring'`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_started_at TIMESTAMPTZ NOT NULL DEFAULT now()`);

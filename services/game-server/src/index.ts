@@ -8,6 +8,8 @@ const TICK_INTERVAL_SECONDS = Number(process.env.TICK_INTERVAL_SECONDS || (LOCAL
 const TICK_ALIGN_SECONDS = Number(process.env.TICK_ALIGN_SECONDS || (LOCAL_DEMO_FAST ? 5 : 300));
 const TICK_HOURS = Math.max(1, TICK_INTERVAL_SECONDS) / 3600;
 const SEASON_LENGTH_SECONDS = Math.max(30, Number(process.env.SEASON_LENGTH_SECONDS || (LOCAL_DEMO_FAST ? 60 : 7 * 24 * 3600)));
+const TAX_MIN = 0;
+const TAX_MAX = 40;
 
 const ECON_BUILDING_HOURLY = {
   farmFood: 120,
@@ -16,6 +18,20 @@ const ECON_BUILDING_HOURLY = {
   baseGoldPerLand: 3,
   baseFoodPerLand: 2,
 };
+
+function clamp(v: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function peasantDeltaPerHour(taxRate: number) {
+  if (taxRate < 25) return (25 - taxRate) * 50;
+  if (taxRate > 27) return -1 * (taxRate - 27) * 60;
+  return 0;
+}
+
+function taxGoldMultiplier(taxRate: number) {
+  return clamp(1 + (taxRate - 25) * 0.04, 0.2, 2.2);
+}
 
 type SeasonCode = "spring" | "summer" | "autumn" | "winter";
 type SeasonState = {
@@ -268,9 +284,47 @@ async function processSettlementBuildQueueTick(): Promise<number> {
   });
 }
 
+async function processShieldStateTick(): Promise<number> {
+  return withTx(async (c) => {
+    const pendingToActive = await c.query(
+      `
+      UPDATE kingdoms
+      SET shield_status='active', last_tick_at=now()
+      WHERE shield_status='pending'
+        AND shield_starts_at IS NOT NULL
+        AND shield_starts_at <= now()
+      `,
+    );
+    const activeToCooldown = await c.query(
+      `
+      UPDATE kingdoms
+      SET shield_status='cooldown', last_tick_at=now()
+      WHERE shield_status='active'
+        AND shield_ends_at IS NOT NULL
+        AND shield_ends_at <= now()
+      `,
+    );
+    const cooldownToNone = await c.query(
+      `
+      UPDATE kingdoms
+      SET shield_status='none',
+          shield_requested_at=NULL,
+          shield_starts_at=NULL,
+          shield_ends_at=NULL,
+          shield_cooldown_ends_at=NULL,
+          last_tick_at=now()
+      WHERE shield_status='cooldown'
+        AND shield_cooldown_ends_at IS NOT NULL
+        AND shield_cooldown_ends_at <= now()
+      `,
+    );
+    return Number(pendingToActive.rowCount || 0) + Number(activeToCooldown.rowCount || 0) + Number(cooldownToNone.rowCount || 0);
+  });
+}
+
 async function processEconomyTick(season: SeasonState): Promise<number> {
   return withTx(async (c) => {
-    const kingdoms = await c.query(`SELECT id, land, gold, food, wood, stone FROM kingdoms ORDER BY id ASC`);
+    const kingdoms = await c.query(`SELECT id, land, gold, food, wood, stone, tax_rate FROM kingdoms ORDER BY id ASC`);
     if (!kingdoms.rowCount) return 0;
 
     let updated = 0;
@@ -339,7 +393,8 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       }
 
       const seasonFoodIncome = foodIncomePerHour * Number(season.modifiers.food || 1);
-      const seasonGoldIncome = goldIncomePerHour * Number(season.modifiers.gold || 1);
+      const taxRate = clamp(Math.floor(Number(k.tax_rate || 25)), TAX_MIN, TAX_MAX);
+      const seasonGoldIncome = goldIncomePerHour * Number(season.modifiers.gold || 1) * taxGoldMultiplier(taxRate);
       const seasonWoodIncome = woodIncomePerHour * Number(season.modifiers.wood || 1);
       const seasonStoneIncome = stoneIncomePerHour * Number(season.modifiers.stone || 1);
 
@@ -361,6 +416,20 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
         `,
         [k.id, foodDelta, goldDelta, woodDelta, stoneDelta],
       );
+
+      const peasPerHour = peasantDeltaPerHour(taxRate);
+      const peasDelta = Math.floor(peasPerHour * TICK_HOURS);
+      if (peasDelta !== 0) {
+        await c.query(
+          `
+          INSERT INTO kingdom_troops(kingdom_id, troop_code, amount)
+          VALUES ($1,'peasants',$2)
+          ON CONFLICT (kingdom_id, troop_code) DO UPDATE
+          SET amount = GREATEST(0, kingdom_troops.amount + $2)
+          `,
+          [k.id, peasDelta],
+        );
+      }
       updated += 1;
     }
 
@@ -381,11 +450,12 @@ async function runTick() {
     const trains = await processTrainQueueTick();
     const research = await processResearchQueueTick();
     const settlementBuilds = await processSettlementBuildQueueTick();
+    const shieldTransitions = await processShieldStateTick();
     const returns = await processTroopReturnsTick();
     const economies = await processEconomyTick(season);
-    if (builds > 0 || trains > 0 || research > 0 || settlementBuilds > 0 || returns > 0 || economies > 0) {
+    if (builds > 0 || trains > 0 || research > 0 || settlementBuilds > 0 || shieldTransitions > 0 || returns > 0 || economies > 0) {
       console.log(
-        `[tick] ${new Date().toISOString()} season=${season.code}(${season.remainingSeconds}s) completed builds=${builds}, trainings=${trains}, research=${research}, settlement_builds=${settlementBuilds}, returns=${returns}, economy=${economies}`,
+        `[tick] ${new Date().toISOString()} season=${season.code}(${season.remainingSeconds}s) completed builds=${builds}, trainings=${trains}, research=${research}, settlement_builds=${settlementBuilds}, shields=${shieldTransitions}, returns=${returns}, economy=${economies}`,
       );
     }
   } catch (e) {

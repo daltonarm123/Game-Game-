@@ -68,6 +68,10 @@ const settlementUpgradeBody = z.object({
   buildingCode: z.string().min(1),
 });
 
+const taxUpdateBody = z.object({
+  taxRate: z.number().int().min(0).max(40),
+});
+
 const allianceCreateBody = z.object({
   slug: z.string().min(2),
   name: z.string().min(2),
@@ -197,6 +201,35 @@ function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
 
+function shieldStateFromRow(row: any, now = new Date()) {
+  const status = String(row?.shield_status || "none");
+  const requestedAt = row?.shield_requested_at ? new Date(row.shield_requested_at) : null;
+  const startsAt = row?.shield_starts_at ? new Date(row.shield_starts_at) : null;
+  const endsAt = row?.shield_ends_at ? new Date(row.shield_ends_at) : null;
+  const cooldownEndsAt = row?.shield_cooldown_ends_at ? new Date(row.shield_cooldown_ends_at) : null;
+
+  let activeUntil: Date | null = null;
+  if (status === "pending" && startsAt) activeUntil = startsAt;
+  if (status === "active" && endsAt) activeUntil = endsAt;
+  if (status === "cooldown" && cooldownEndsAt) activeUntil = cooldownEndsAt;
+
+  const remainingSeconds = activeUntil ? Math.max(0, Math.floor((activeUntil.getTime() - now.getTime()) / 1000)) : 0;
+  const retaliationOnly = status === "pending" || status === "cooldown";
+  const canAttack = status === "none";
+  const canBeAttacked = status !== "active";
+  return {
+    status,
+    requestedAt: requestedAt ? requestedAt.toISOString() : null,
+    startsAt: startsAt ? startsAt.toISOString() : null,
+    endsAt: endsAt ? endsAt.toISOString() : null,
+    cooldownEndsAt: cooldownEndsAt ? cooldownEndsAt.toISOString() : null,
+    remainingSeconds,
+    canAttack,
+    canBeAttacked,
+    retaliationOnly,
+  };
+}
+
 function combatResultFromRatio(ratio: number): string {
   if (ratio < 0.25) return "FLEE";
   if (ratio < 0.75) return "MAJOR LOSS";
@@ -264,6 +297,7 @@ function computeEconomyHourly(
   land: number,
   buildingLevels: Record<string, number>,
   troopRows: any[],
+  taxRate?: number,
   modifiers?: { food?: number; gold?: number; wood?: number; stone?: number },
 ) {
   const farm = Number(buildingLevels.farm || 0);
@@ -276,7 +310,9 @@ function computeEconomyHourly(
   const stoneIncomeRaw = quarry * ECON_BUILDING_HOURLY.quarryStone;
 
   const foodIncome = foodIncomeRaw * Number(modifiers?.food ?? 1);
-  const goldIncome = goldIncomeRaw * Number(modifiers?.gold ?? 1);
+  const tax = clamp(Math.floor(Number(taxRate ?? 25)), 0, 40);
+  const taxGoldMult = clamp(1 + (tax - 25) * 0.04, 0.2, 2.2);
+  const goldIncome = goldIncomeRaw * Number(modifiers?.gold ?? 1) * taxGoldMult;
   const woodIncome = woodIncomeRaw * Number(modifiers?.wood ?? 1);
   const stoneIncome = stoneIncomeRaw * Number(modifiers?.stone ?? 1);
 
@@ -298,6 +334,8 @@ function computeEconomyHourly(
     raw: {
       foodIncomeRaw,
       goldIncomeRaw,
+      taxRate: tax,
+      taxGoldMult,
       woodIncomeRaw,
       stoneIncomeRaw,
       foodIncome,
@@ -359,6 +397,46 @@ async function ensureSettlementsForKingdom(c: PoolClient, kingdomId: number, kin
       [settlementId],
     );
   }
+}
+
+async function normalizeShieldStateTx(c: PoolClient, kingdomId: number) {
+  const q = await c.query(
+    `
+    SELECT id, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
+    FROM kingdoms
+    WHERE id=$1
+    FOR UPDATE
+    `,
+    [kingdomId],
+  );
+  if (!q.rowCount) return null;
+  const row = q.rows[0];
+  const now = new Date();
+  let status = String(row.shield_status || "none");
+  const startsAt = row.shield_starts_at ? new Date(row.shield_starts_at) : null;
+  const endsAt = row.shield_ends_at ? new Date(row.shield_ends_at) : null;
+  const cooldownEndsAt = row.shield_cooldown_ends_at ? new Date(row.shield_cooldown_ends_at) : null;
+  let changed = false;
+
+  if (status === "pending" && startsAt && startsAt.getTime() <= now.getTime()) {
+    status = "active";
+    changed = true;
+  }
+  if (status === "active" && endsAt && endsAt.getTime() <= now.getTime()) {
+    status = "cooldown";
+    changed = true;
+  }
+  if (status === "cooldown" && cooldownEndsAt && cooldownEndsAt.getTime() <= now.getTime()) {
+    status = "none";
+    changed = true;
+  }
+
+  if (changed) {
+    await c.query(`UPDATE kingdoms SET shield_status=$2 WHERE id=$1`, [kingdomId, status]);
+    row.shield_status = status;
+  }
+
+  return row;
 }
 
 function sanitizeAllianceSlug(input: string) {
@@ -632,7 +710,7 @@ app.get("/api/kingdom/:name", async (req, res) => {
 
   try {
     const k = await pool.query(
-      `SELECT id, user_id, name, gold, wood, stone, food, land, created_at, last_tick_at
+      `SELECT id, user_id, name, gold, wood, stone, food, land, created_at, last_tick_at, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
        FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`,
       [name],
     );
@@ -641,8 +719,17 @@ app.get("/api/kingdom/:name", async (req, res) => {
     const kingdom = k.rows[0];
     await withTx(async (c) => {
       await ensureSettlementsForKingdom(c, Number(kingdom.id), String(kingdom.name), Number(kingdom.land || 0));
+      await normalizeShieldStateTx(c, Number(kingdom.id));
       return 0;
     });
+    const kresync = await pool.query(
+      `SELECT id, user_id, name, gold, wood, stone, food, land, created_at, last_tick_at, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
+       FROM kingdoms
+       WHERE id=$1
+       LIMIT 1`,
+      [kingdom.id],
+    );
+    const kingdomSync = kresync.rows[0] || kingdom;
 
     const buildings = await pool.query(
       `
@@ -716,17 +803,18 @@ app.get("/api/kingdom/:name", async (req, res) => {
       const away = Number(awayMap.get(code) || 0);
       return { ...t, amount: home + train + away };
     });
-    const economy = computeEconomyHourly(Number(kingdom.land || 0), buildingLevels, economyTroops, season.modifiers);
+    const economy = computeEconomyHourly(Number(kingdomSync.land || 0), buildingLevels, economyTroops, Number(kingdomSync.tax_rate || 25), season.modifiers);
 
     return res.json({
       ok: true,
-      kingdom,
+      kingdom: kingdomSync,
       buildings: buildings.rows,
       troops: troops.rows,
       buildQueue: buildQueue.rows,
       trainQueue: trainQueue.rows,
       economy,
       season,
+      shield: shieldStateFromRow(kingdomSync),
     });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
@@ -852,6 +940,66 @@ app.post("/api/kingdom/:name/train", async (req, res) => {
   }
 });
 
+app.post("/api/kingdom/:name/tax", async (req, res) => {
+  const name = String(req.params.name || "").trim();
+  const parsed = taxUpdateBody.safeParse(req.body);
+  if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+
+  try {
+    const out = await withTx(async (c) => {
+      const taxRate = clamp(Number(parsed.data.taxRate || 25), 0, 40);
+      const k = await c.query(
+        `UPDATE kingdoms SET tax_rate=$2 WHERE LOWER(name)=LOWER($1) RETURNING id, name, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at`,
+        [name, taxRate],
+      );
+      if (!k.rowCount) throw new Error("kingdom not found");
+      return k.rows[0];
+    });
+    return res.json({ ok: true, taxRate: Number(out.tax_rate || 25), shield: shieldStateFromRow(out) });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/kingdom/:name/shield/activate", async (req, res) => {
+  const name = String(req.params.name || "").trim();
+  if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
+
+  try {
+    const out = await withTx(async (c) => {
+      const kq = await c.query(
+        `SELECT id, name, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        [name],
+      );
+      if (!kq.rowCount) throw new Error("kingdom not found");
+      const k = kq.rows[0];
+      const normalized = await normalizeShieldStateTx(c, Number(k.id));
+      const current = normalized || k;
+      const status = String(current.shield_status || "none");
+      if (status !== "none") throw new Error(`shield unavailable while status is ${status}`);
+
+      const up = await c.query(
+        `
+        UPDATE kingdoms
+        SET shield_status='pending',
+            shield_requested_at=now(),
+            shield_starts_at=now() + interval '24 hours',
+            shield_ends_at=now() + interval '48 hours',
+            shield_cooldown_ends_at=now() + interval '72 hours'
+        WHERE id=$1
+        RETURNING id, name, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
+        `,
+        [k.id],
+      );
+      return up.rows[0];
+    });
+    return res.json({ ok: true, shield: shieldStateFromRow(out) });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 app.post("/api/war-room/:attacker/attack", async (req, res) => {
   const attackerName = String(req.params.attacker || "").trim();
   const parsed = attackBody.safeParse(req.body);
@@ -865,14 +1013,51 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
 
   try {
     const out = await withTx(async (c) => {
-      const a = await c.query(`SELECT id, name, land FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [attackerName]);
+      const a = await c.query(
+        `SELECT id, name, land, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        [attackerName],
+      );
       if (!a.rowCount) throw new Error("attacker kingdom not found");
-      const d = await c.query(`SELECT id, name, land FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [defenderName]);
+      const d = await c.query(
+        `SELECT id, name, land, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        [defenderName],
+      );
       if (!d.rowCount) throw new Error("defender kingdom not found");
 
       const atk = a.rows[0];
       const def = d.rows[0];
       if (Number(atk.id) === Number(def.id)) throw new Error("cannot attack self");
+
+      const atkShieldRow = await normalizeShieldStateTx(c, Number(atk.id));
+      const defShieldRow = await normalizeShieldStateTx(c, Number(def.id));
+      const atkShield = shieldStateFromRow(atkShieldRow || atk);
+      const defShield = shieldStateFromRow(defShieldRow || def);
+
+      if (!defShield.canBeAttacked) throw new Error("defender is shielded");
+      if (!atkShield.canAttack) {
+        if (!atkShield.retaliationOnly) throw new Error(`cannot attack while shield status is ${atkShield.status}`);
+        const retaliationStart = atkShield.status === "pending"
+          ? atkShield.requestedAt
+          : atkShield.status === "cooldown"
+            ? atkShield.endsAt
+            : null;
+        if (!retaliationStart) throw new Error("cannot attack right now");
+        const retaliation = await c.query(
+          `
+          SELECT 1
+          FROM attack_reports
+          WHERE attacker_kingdom_id=$1
+            AND defender_kingdom_id=$2
+            AND created_at >= $3::timestamptz
+          ORDER BY created_at DESC
+          LIMIT 1
+          `,
+          [def.id, atk.id, retaliationStart],
+        );
+        if (!retaliation.rowCount) {
+          throw new Error("attack locked: retaliation only during shield transition/cooldown");
+        }
+      }
 
       const atkRows = await c.query(
         `SELECT kt.troop_code, kt.amount, tt.att_rating, tt.def_rating
@@ -1077,11 +1262,20 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
   try {
     const season = await getSeasonSnapshot();
     const k = await pool.query(
-      `SELECT id, name, land, food, gold, created_at FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`,
+      `SELECT id, name, land, food, gold, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, created_at FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`,
       [kingdom],
     );
     if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
-    const row = k.rows[0];
+    let row = k.rows[0];
+    await withTx(async (c) => {
+      await normalizeShieldStateTx(c, Number(row.id));
+      return 0;
+    });
+    const kr = await pool.query(
+      `SELECT id, name, land, food, gold, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, created_at FROM kingdoms WHERE id=$1 LIMIT 1`,
+      [row.id],
+    );
+    row = kr.rows[0] || row;
 
     const rankQ = await pool.query(
       `WITH nw AS (
@@ -1200,10 +1394,12 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
         populationAway: troops.reduce((a, b) => a + Number(b.away || 0), 0),
         food: Number(row.food || 0),
         gold: Number(row.gold || 0),
+        taxRate: Number(row.tax_rate || 25),
       },
       troops,
       training: training.rows,
       season,
+      shield: shieldStateFromRow(row),
       actions: ["Train Troops", "Attack Kingdom"],
     });
   } catch (e: any) {

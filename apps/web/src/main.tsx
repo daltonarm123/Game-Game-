@@ -75,6 +75,9 @@ function OverviewView() {
   const [loading, setLoading] = useState(false);
   const [taxRate, setTaxRate] = useState(26);
   const [seasonRemainingSec, setSeasonRemainingSec] = useState(0);
+  const [taxBusy, setTaxBusy] = useState(false);
+  const [shieldBusy, setShieldBusy] = useState(false);
+  const [statusMsg, setStatusMsg] = useState("");
 
   async function load() {
     setLoading(true);
@@ -90,6 +93,7 @@ function OverviewView() {
       if (!wRes.ok || !wJson?.ok) throw new Error(wJson?.error || `War Room HTTP ${wRes.status}`);
       setDetails(kJson);
       setWar(wJson);
+      setTaxRate(Number(kJson?.kingdom?.tax_rate || 25));
     } catch (e: any) {
       setDetails(null);
       setWar(null);
@@ -127,6 +131,47 @@ function OverviewView() {
   const seasonHours = Math.floor((seasonRemaining % 86400) / 3600);
   const seasonMins = Math.floor((seasonRemaining % 3600) / 60);
   const seasonLabel = String(season?.name || "Spring");
+  const shield = details?.shield || war?.shield;
+
+  async function updateTax(nextRate: number) {
+    const v = Math.max(0, Math.min(40, Math.floor(Number(nextRate || 0))));
+    setTaxBusy(true);
+    setStatusMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/tax`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taxRate: v }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setTaxRate(Number(j?.taxRate || v));
+      await load();
+    } catch (e: any) {
+      setStatusMsg(`Tax update failed: ${String(e?.message || e)}`);
+    } finally {
+      setTaxBusy(false);
+    }
+  }
+
+  async function activateShield() {
+    setShieldBusy(true);
+    setStatusMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/shield/activate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setStatusMsg("Shield queued. It will activate in 24 hours.");
+      await load();
+    } catch (e: any) {
+      setStatusMsg(`Shield failed: ${String(e?.message || e)}`);
+    } finally {
+      setShieldBusy(false);
+    }
+  }
   const daysPlayed = Math.max(1, Math.floor((Date.now() - new Date(String(k?.created_at || Date.now())).getTime()) / 86400000));
   const rankNum = Number(war?.kingdom?.rank || 0);
   const rankTitle = rankNum <= 3 ? "Prince" : rankNum <= 10 ? "Duke" : rankNum <= 25 ? "Count" : "Lord";
@@ -177,6 +222,7 @@ function OverviewView() {
             <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
           </div>
         ) : null}
+        {statusMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{statusMsg}</div> : null}
 
         <div style={{ display: "grid", gap: 10, maxWidth: 760, marginTop: 12 }}>
           {statRows.map((row) => (
@@ -208,15 +254,28 @@ function OverviewView() {
           <div style={{ display: "grid", gridTemplateColumns: "40px auto", gap: 12, alignItems: "center", marginBottom: 8 }}>
             <div style={{ width: 36, height: 36, border: "1px solid rgba(216,176,117,.55)", background: "linear-gradient(180deg, rgba(93,66,28,.85), rgba(40,30,16,.86))", color: "#f4dfb8", fontWeight: 800, borderRadius: 2, display: "grid", placeItems: "center", fontSize: 12 }}>SH</div>
             <div style={{ fontSize: "clamp(24px,2.4vw,41px)", fontFamily: FONT_DISPLAY }}>
-              Shield: <button style={{ ...BTN_STYLE, marginLeft: 10, padding: "8px 14px" }}>Activate</button>
+              Shield:{" "}
+              <button
+                style={{ ...BTN_STYLE, marginLeft: 10, padding: "8px 14px" }}
+                disabled={shieldBusy || (shield && String(shield.status || "none") !== "none")}
+                onClick={() => void activateShield()}
+              >
+                {shieldBusy ? "..." : "Activate"}
+              </button>
+              <span style={{ marginLeft: 12, fontSize: 16, color: TEXT_MUTED }}>
+                {shield?.status === "pending" ? `Pending: ${formatDuration(Number(shield?.remainingSeconds || 0))}` : null}
+                {shield?.status === "active" ? `Active: ${formatDuration(Number(shield?.remainingSeconds || 0))}` : null}
+                {shield?.status === "cooldown" ? `Cooldown: ${formatDuration(Number(shield?.remainingSeconds || 0))} (retaliation only)` : null}
+                {shield?.status === "none" || !shield ? "None" : null}
+              </span>
             </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "40px auto", gap: 12, alignItems: "center", marginBottom: 8 }}>
             <div style={{ width: 36, height: 36, border: "1px solid rgba(216,176,117,.55)", background: "linear-gradient(180deg, rgba(93,66,28,.85), rgba(40,30,16,.86))", color: "#f4dfb8", fontWeight: 800, borderRadius: 2, display: "grid", placeItems: "center", fontSize: 12 }}>TX</div>
             <div style={{ fontSize: "clamp(24px,2.4vw,41px)", fontFamily: FONT_DISPLAY }}>
               Tax Rate: {taxRate}%{" "}
-              <button onClick={() => setTaxRate((v) => Math.min(40, v + 1))} style={{ ...BTN_STYLE, marginLeft: 10, padding: "2px 10px" }}>+</button>
-              <button onClick={() => setTaxRate((v) => Math.max(0, v - 1))} style={{ ...BTN_STYLE, marginLeft: 6, padding: "2px 10px" }}>-</button>
+              <button disabled={taxBusy} onClick={() => void updateTax(taxRate + 1)} style={{ ...BTN_STYLE, marginLeft: 10, padding: "2px 10px" }}>+</button>
+              <button disabled={taxBusy} onClick={() => void updateTax(taxRate - 1)} style={{ ...BTN_STYLE, marginLeft: 6, padding: "2px 10px" }}>-</button>
             </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "40px auto", gap: 12 }}>
