@@ -146,6 +146,38 @@ async function processResearchQueueTick(): Promise<number> {
   });
 }
 
+async function processSettlementBuildQueueTick(): Promise<number> {
+  return withTx(async (c) => {
+    const due = await c.query(
+      `
+      SELECT id, kingdom_id, settlement_id, building_code, target_level
+      FROM settlement_build_queue
+      WHERE status='queued'
+        AND completes_at <= now()
+      ORDER BY completes_at ASC
+      FOR UPDATE SKIP LOCKED
+      LIMIT 200
+      `,
+    );
+    if (!due.rowCount) return 0;
+
+    for (const row of due.rows) {
+      await c.query(
+        `
+        INSERT INTO settlement_buildings(settlement_id, building_code, level)
+        VALUES ($1,$2,$3)
+        ON CONFLICT (settlement_id, building_code) DO UPDATE
+        SET level = GREATEST(settlement_buildings.level, EXCLUDED.level)
+        `,
+        [row.settlement_id, row.building_code, row.target_level],
+      );
+      await c.query(`UPDATE settlement_build_queue SET status='completed', completed_at=now() WHERE id=$1`, [row.id]);
+      await c.query(`UPDATE kingdoms SET last_tick_at=now() WHERE id=$1`, [row.kingdom_id]);
+    }
+    return due.rowCount;
+  });
+}
+
 async function processEconomyTick(): Promise<number> {
   return withTx(async (c) => {
     const kingdoms = await c.query(`SELECT id, land, gold, food, wood, stone FROM kingdoms ORDER BY id ASC`);
@@ -227,11 +259,12 @@ async function runTick() {
     const builds = await processBuildQueueTick();
     const trains = await processTrainQueueTick();
     const research = await processResearchQueueTick();
+    const settlementBuilds = await processSettlementBuildQueueTick();
     const returns = await processTroopReturnsTick();
     const economies = await processEconomyTick();
-    if (builds > 0 || trains > 0 || research > 0 || returns > 0 || economies > 0) {
+    if (builds > 0 || trains > 0 || research > 0 || settlementBuilds > 0 || returns > 0 || economies > 0) {
       console.log(
-        `[tick] ${new Date().toISOString()} completed builds=${builds}, trainings=${trains}, research=${research}, returns=${returns}, economy=${economies}`,
+        `[tick] ${new Date().toISOString()} completed builds=${builds}, trainings=${trains}, research=${research}, settlement_builds=${settlementBuilds}, returns=${returns}, economy=${economies}`,
       );
     }
   } catch (e) {

@@ -80,6 +80,44 @@ export async function ensureSchemaLite(): Promise<void> {
       CHECK (status IN ('queued','completed','cancelled'))
     );
 
+    CREATE TABLE IF NOT EXISTS settlements (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL,
+      name TEXT NOT NULL,
+      settlement_type TEXT NOT NULL,
+      level INT NOT NULL DEFAULT 1,
+      slots_total INT NOT NULL DEFAULT 3,
+      wellbeing INT NOT NULL DEFAULT 0,
+      wall_level INT NOT NULL DEFAULT 0,
+      captured_from_kingdom_id BIGINT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS settlement_building_types (
+      code TEXT PRIMARY KEY,
+      name TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS settlement_buildings (
+      settlement_id BIGINT NOT NULL,
+      building_code TEXT NOT NULL,
+      level INT NOT NULL DEFAULT 0,
+      PRIMARY KEY (settlement_id, building_code)
+    );
+
+    CREATE TABLE IF NOT EXISTS settlement_build_queue (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL,
+      settlement_id BIGINT NOT NULL,
+      building_code TEXT NOT NULL,
+      target_level INT NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completes_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      completed_at TIMESTAMPTZ,
+      CHECK (status IN ('queued','completed','cancelled'))
+    );
+
     CREATE TABLE IF NOT EXISTS troop_movements (
       id BIGSERIAL PRIMARY KEY,
       owner_kingdom_id BIGINT NOT NULL,
@@ -120,6 +158,7 @@ export async function ensureSchemaLite(): Promise<void> {
     CREATE INDEX IF NOT EXISTS train_queue_due_idx ON train_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS troop_movements_due_idx ON troop_movements(status, returns_at);
     CREATE INDEX IF NOT EXISTS research_queue_due_idx ON research_queue(status, completes_at);
+    CREATE INDEX IF NOT EXISTS settlement_build_queue_due_idx ON settlement_build_queue(status, completes_at);
   `);
 
   await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS upkeep_food INT NOT NULL DEFAULT 0`);

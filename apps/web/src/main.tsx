@@ -567,6 +567,172 @@ function ResearchView() {
   );
 }
 
+function SettlementsView() {
+  const [kingdom, setKingdom] = useState("Elixer");
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [actionMsg, setActionMsg] = useState("");
+  const [settlementId, setSettlementId] = useState<number>(0);
+  const [buildingCode, setBuildingCode] = useState("housing");
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/settlements/${encodeURIComponent(kingdom)}`);
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setData(j);
+      if (!settlementId && Array.isArray(j.settlements) && j.settlements.length > 0) {
+        setSettlementId(Number(j.settlements[0].id));
+      }
+    } catch (e: any) {
+      setData(null);
+      setError(String(e?.message || e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function upgrade() {
+    if (!settlementId) return;
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/settlements/${encodeURIComponent(kingdom)}/upgrade-building`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settlementId, buildingCode }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Queued ${buildingCode} for settlement #${settlementId}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Upgrade failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const settlements = (data?.settlements || []) as Array<any>;
+  const queue = (data?.queue || []) as Array<any>;
+  const catalog = (data?.catalog || []) as Array<any>;
+  const buildings = (data?.buildings || []) as Array<any>;
+  const selected = settlements.find((s) => Number(s.id) === Number(settlementId));
+  const selectedBuildings = buildings.filter((b) => Number(b.settlement_id) === Number(settlementId));
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <div style={CARD}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>
+              Settlements - {data?.kingdom?.name || kingdom}
+            </div>
+            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 18, fontWeight: 700 }}>
+              Unlocked by land: {Number(data?.unlockedByLand || 0)} • Owned: {settlements.length}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={INPUT_STYLE} />
+            <button onClick={() => void load()} style={BTN_STYLE}>Load</button>
+          </div>
+        </div>
+        {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading settlements...</div> : null}
+        {error ? (
+          <div style={{ marginTop: 8, color: "#ffae9a", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span>{error}</span>
+            <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
+          </div>
+        ) : null}
+        {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
+      </div>
+
+      <div style={CARD}>
+        <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Owned Settlements</div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", padding: 8 }}>Name</th>
+                <th style={{ textAlign: "left", padding: 8 }}>Type</th>
+                <th style={{ textAlign: "right", padding: 8 }}>Level</th>
+                <th style={{ textAlign: "right", padding: 8 }}>Slots</th>
+                <th style={{ textAlign: "right", padding: 8 }}>Walls</th>
+              </tr>
+            </thead>
+            <tbody>
+              {settlements.map((s) => (
+                <tr key={s.id} onClick={() => setSettlementId(Number(s.id))} style={{ cursor: "pointer", background: Number(s.id) === Number(settlementId) ? "rgba(216,176,117,.12)" : "transparent" }}>
+                  <td style={{ padding: 8 }}>{s.name}</td>
+                  <td style={{ padding: 8 }}>{s.settlement_type}</td>
+                  <td style={{ padding: 8, textAlign: "right" }}>{Number(s.level || 0)}</td>
+                  <td style={{ padding: 8, textAlign: "right" }}>{Number(s.slots_total || 0)}</td>
+                  <td style={{ padding: 8, textAlign: "right" }}>{Number(s.wall_level || 0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style={CARD}>
+        <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Settlement Buildings {selected ? `- ${selected.name}` : ""}</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+          <select value={buildingCode} onChange={(e) => setBuildingCode(e.target.value)} style={INPUT_STYLE}>
+            {catalog.map((c) => (
+              <option key={c.code} value={c.code}>{c.name}</option>
+            ))}
+          </select>
+          <button onClick={() => void upgrade()} style={BTN_STYLE} disabled={busy || !settlementId}>
+            {busy ? "Queueing..." : "Upgrade Building"}
+          </button>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", padding: 8 }}>Building</th>
+                <th style={{ textAlign: "left", padding: 8 }}>Effect</th>
+                <th style={{ textAlign: "right", padding: 8 }}>Level</th>
+                <th style={{ textAlign: "right", padding: 8 }}>Max</th>
+              </tr>
+            </thead>
+            <tbody>
+              {selectedBuildings.map((b) => (
+                <tr key={`${b.settlement_id}-${b.building_code}`}>
+                  <td style={{ padding: 8 }}>{b.name}</td>
+                  <td style={{ padding: 8, color: TEXT_MUTED }}>{b.effect_text}</td>
+                  <td style={{ padding: 8, textAlign: "right" }}>{Number(b.level || 0)}</td>
+                  <td style={{ padding: 8, textAlign: "right" }}>{Number(b.max_level || 0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style={CARD}>
+        <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Settlement Build Queue</div>
+        {queue.length === 0 ? <div style={{ color: TEXT_MUTED }}>No active settlement build queue.</div> : null}
+        {queue.map((q) => (
+          <div key={q.id} style={{ marginBottom: 6 }}>
+            Settlement #{q.settlement_id} • {q.building_code} lvl {q.target_level} • {String(q.completes_at).replace("T", " ").slice(0, 19)}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Placeholder({ label }: { label: string }) {
   return (
     <div style={CARD}>
@@ -1245,10 +1411,11 @@ function App() {
           {active.id === "overview" ? <OverviewView /> : null}
           {active.id === "buildings" ? <BuildingsView /> : null}
           {active.id === "research" ? <ResearchView /> : null}
+          {active.id === "settlements" ? <SettlementsView /> : null}
           {active.id === "war-room" ? <WarRoomView /> : null}
           {active.id === "train-troops" ? <TrainTroopsView /> : null}
           {active.id === "attack-kingdom" ? <AttackKingdomView /> : null}
-          {active.id !== "overview" && active.id !== "buildings" && active.id !== "research" && active.id !== "war-room" && active.id !== "train-troops" && active.id !== "attack-kingdom" ? <Placeholder label={active.label} /> : null}
+          {active.id !== "overview" && active.id !== "buildings" && active.id !== "research" && active.id !== "settlements" && active.id !== "war-room" && active.id !== "train-troops" && active.id !== "attack-kingdom" ? <Placeholder label={active.label} /> : null}
         </section>
       </div>
       <footer

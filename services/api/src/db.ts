@@ -138,6 +138,23 @@ const RESEARCH_PREREQS = [
   { code: "loose_order_formation", prereqCode: "better_training_methods", requiredLevel: 3 },
 ] as const;
 
+const SETTLEMENT_BUILDING_TYPES = [
+  { code: "housing", name: "Housing", effectText: "Increased Population for houses/cities", baseGold: 50000, baseStone: 250, baseWood: 250, maxLevel: 12, cityOnly: false },
+  { code: "church", name: "Church", effectText: "Prayer effect bonus", baseGold: 75000, baseStone: 1250, baseWood: 250, maxLevel: 12, cityOnly: false },
+  { code: "cathedral", name: "Cathedral", effectText: "Prayer effect + reduced mana/gem costs", baseGold: 50000, baseStone: 12500, baseWood: 2500, maxLevel: 12, cityOnly: true },
+  { code: "barracks", name: "Barracks", effectText: "Extra soldier capacity", baseGold: 10000, baseStone: 300, baseWood: 100, maxLevel: 12, cityOnly: false },
+  { code: "barn", name: "Barn", effectText: "Food storage bonus", baseGold: 5000, baseStone: 100, baseWood: 300, maxLevel: 12, cityOnly: false },
+  { code: "granary", name: "Granary", effectText: "Food generation bonus", baseGold: 5000, baseStone: 100, baseWood: 300, maxLevel: 12, cityOnly: false },
+  { code: "stables", name: "Stables", effectText: "Stable population bonus", baseGold: 10000, baseStone: 500, baseWood: 500, maxLevel: 12, cityOnly: false },
+  { code: "market", name: "Market", effectText: "Wagon speed bonus", baseGold: 100000, baseStone: 250, baseWood: 250, maxLevel: 12, cityOnly: false },
+  { code: "tavern", name: "Tavern", effectText: "Settlement wellbeing boost", baseGold: 50000, baseStone: 500, baseWood: 500, maxLevel: 12, cityOnly: false },
+  { code: "inn", name: "Inn", effectText: "City wellbeing + kingdom gold bonus", baseGold: 500000, baseStone: 1000, baseWood: 1000, maxLevel: 12, cityOnly: true },
+  { code: "mason", name: "Mason", effectText: "Reduced stone maintenance", baseGold: 50000, baseStone: 250, baseWood: 250, maxLevel: 12, cityOnly: false },
+  { code: "carpenter", name: "Carpenter", effectText: "Reduced wood maintenance", baseGold: 50000, baseStone: 250, baseWood: 250, maxLevel: 12, cityOnly: false },
+  { code: "brewery", name: "Brewery", effectText: "Kingdom wellbeing bonus", baseGold: 100000, baseStone: 500, baseWood: 500, maxLevel: 12, cityOnly: false },
+  { code: "town_walls", name: "Town/City Walls", effectText: "Reduced chance to lose settlement", baseGold: 25000, baseStone: 1000, baseWood: 300, maxLevel: 12, cityOnly: false },
+] as const;
+
 export async function withTx<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
@@ -274,6 +291,58 @@ export async function ensureSchema(): Promise<void> {
       CHECK (status IN ('queued','completed','cancelled'))
     );
 
+    CREATE TABLE IF NOT EXISTS settlements (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      settlement_type TEXT NOT NULL,
+      level INT NOT NULL DEFAULT 1,
+      slots_total INT NOT NULL DEFAULT 3,
+      wellbeing INT NOT NULL DEFAULT 0,
+      wall_level INT NOT NULL DEFAULT 0,
+      captured_from_kingdom_id BIGINT REFERENCES kingdoms(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS settlement_building_types (
+      code TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      effect_text TEXT NOT NULL DEFAULT '',
+      base_gold BIGINT NOT NULL DEFAULT 0,
+      base_stone BIGINT NOT NULL DEFAULT 0,
+      base_wood BIGINT NOT NULL DEFAULT 0,
+      max_level INT NOT NULL DEFAULT 10,
+      city_only BOOLEAN NOT NULL DEFAULT FALSE
+    );
+
+    CREATE TABLE IF NOT EXISTS settlement_buildings (
+      settlement_id BIGINT NOT NULL REFERENCES settlements(id) ON DELETE CASCADE,
+      building_code TEXT NOT NULL REFERENCES settlement_building_types(code) ON DELETE CASCADE,
+      level INT NOT NULL DEFAULT 0,
+      PRIMARY KEY (settlement_id, building_code)
+    );
+
+    CREATE TABLE IF NOT EXISTS settlement_build_queue (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      settlement_id BIGINT NOT NULL REFERENCES settlements(id) ON DELETE CASCADE,
+      building_code TEXT NOT NULL REFERENCES settlement_building_types(code) ON DELETE CASCADE,
+      target_level INT NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completes_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      completed_at TIMESTAMPTZ,
+      CHECK (status IN ('queued','completed','cancelled'))
+    );
+
+    CREATE TABLE IF NOT EXISTS settlement_capture_log (
+      id BIGSERIAL PRIMARY KEY,
+      attacker_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      defender_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      settlement_id BIGINT NOT NULL REFERENCES settlements(id) ON DELETE CASCADE,
+      captured_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS attack_reports (
       id BIGSERIAL PRIMARY KEY,
       attacker_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
@@ -313,6 +382,9 @@ export async function ensureSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS troop_movements_due_idx ON troop_movements(status, returns_at);
     CREATE INDEX IF NOT EXISTS troop_movements_owner_idx ON troop_movements(owner_kingdom_id, status, returns_at DESC);
     CREATE INDEX IF NOT EXISTS research_queue_due_idx ON research_queue(status, completes_at);
+    CREATE INDEX IF NOT EXISTS settlements_kingdom_idx ON settlements(kingdom_id);
+    CREATE INDEX IF NOT EXISTS settlement_build_queue_due_idx ON settlement_build_queue(status, completes_at);
+    CREATE INDEX IF NOT EXISTS settlement_capture_log_def_idx ON settlement_capture_log(defender_kingdom_id, captured_at DESC);
   `);
 
   await pool.query(`
@@ -402,6 +474,24 @@ export async function ensureSchema(): Promise<void> {
       SET required_level = EXCLUDED.required_level
       `,
       [p.code, p.prereqCode, p.requiredLevel],
+    );
+  }
+
+  for (const s of SETTLEMENT_BUILDING_TYPES) {
+    await pool.query(
+      `
+      INSERT INTO settlement_building_types(code, name, effect_text, base_gold, base_stone, base_wood, max_level, city_only)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      ON CONFLICT (code) DO UPDATE
+      SET name = EXCLUDED.name,
+          effect_text = EXCLUDED.effect_text,
+          base_gold = EXCLUDED.base_gold,
+          base_stone = EXCLUDED.base_stone,
+          base_wood = EXCLUDED.base_wood,
+          max_level = EXCLUDED.max_level,
+          city_only = EXCLUDED.city_only
+      `,
+      [s.code, s.name, s.effectText, s.baseGold, s.baseStone, s.baseWood, s.maxLevel, s.cityOnly],
     );
   }
 }

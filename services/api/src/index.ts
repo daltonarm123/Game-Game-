@@ -62,6 +62,11 @@ const researchStartBody = z.object({
   researchCode: z.string().min(1),
 });
 
+const settlementUpgradeBody = z.object({
+  settlementId: z.number().int().positive(),
+  buildingCode: z.string().min(1),
+});
+
 const ECON_BUILDING_HOURLY = {
   farmFood: 120,
   lumberWood: 80,
@@ -182,6 +187,48 @@ function researchSeconds(baseSeconds: number, currentLevel: number) {
   return LOCAL_DEMO_FAST ? FAST_RESEARCH_SECONDS : raw;
 }
 
+const SETTLEMENT_UNLOCKS = [
+  { land: 3000, type: "small_town", slots: 3 },
+  { land: 8000, type: "medium_town", slots: 5 },
+  { land: 14000, type: "large_town", slots: 8 },
+  { land: 21000, type: "small_city", slots: 12 },
+  { land: 30000, type: "medium_city", slots: 17 },
+  { land: 50000, type: "large_city", slots: 25 },
+  { land: 100000, type: "large_city", slots: 25 },
+  { land: 250000, type: "large_city", slots: 25 },
+];
+
+function expectedSettlementSlots(land: number) {
+  return SETTLEMENT_UNLOCKS.filter((x) => land >= x.land);
+}
+
+async function ensureSettlementsForKingdom(c: PoolClient, kingdomId: number, kingdomName: string, land: number) {
+  const current = await c.query(`SELECT id FROM settlements WHERE kingdom_id=$1 ORDER BY id ASC`, [kingdomId]);
+  const expected = expectedSettlementSlots(land);
+  const currentCount = Number(current.rowCount || 0);
+  if (currentCount >= expected.length) return;
+
+  for (let i = currentCount; i < expected.length; i += 1) {
+    const spec = expected[i];
+    const name = `${kingdomName} ${i + 1}`;
+    const ins = await c.query(
+      `INSERT INTO settlements(kingdom_id, name, settlement_type, level, slots_total, wellbeing, wall_level)
+       VALUES ($1,$2,$3,$4,$5,0,0)
+       RETURNING id`,
+      [kingdomId, name, spec.type, i + 1, spec.slots],
+    );
+    const settlementId = Number(ins.rows[0].id);
+    await c.query(
+      `
+      INSERT INTO settlement_buildings(settlement_id, building_code, level)
+      SELECT $1::bigint, code, 0 FROM settlement_building_types
+      ON CONFLICT (settlement_id, building_code) DO NOTHING
+      `,
+      [settlementId],
+    );
+  }
+}
+
 async function seedKingdom(c: PoolClient, opts: {
   userId: string;
   username: string;
@@ -247,6 +294,7 @@ async function seedKingdom(c: PoolClient, opts: {
       );
     }
   }
+  await ensureSettlementsForKingdom(c, Number(kingdom.id), opts.kingdomName, Number(opts.land));
   return kingdom;
 }
 
@@ -421,6 +469,10 @@ app.get("/api/kingdom/:name", async (req, res) => {
     if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
 
     const kingdom = k.rows[0];
+    await withTx(async (c) => {
+      await ensureSettlementsForKingdom(c, Number(kingdom.id), String(kingdom.name), Number(kingdom.land || 0));
+      return 0;
+    });
 
     const buildings = await pool.query(
       `
@@ -715,6 +767,65 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
       await c.query(`UPDATE kingdoms SET land=$2 WHERE id=$1`, [atk.id, attackerLandNew]);
       await c.query(`UPDATE kingdoms SET land=$2 WHERE id=$1`, [def.id, defenderLandNew]);
 
+      // Fair settlement capture rules:
+      // - max one settlement capture from same defender per 24h
+      // - chance scales with land taken but reduced by target wall level
+      // - defenders that hold more settlements than land-unlocked count are more vulnerable
+      let capturedSettlement: any = null;
+      if (landTaken > 0 && ["MINOR VICTORY", "VICTORY", "MAJOR VICTORY", "OVERWHELMING VICTORY"].includes(result)) {
+        const recentCap = await c.query(
+          `
+          SELECT 1 FROM settlement_capture_log
+          WHERE defender_kingdom_id=$1
+            AND captured_at >= now() - interval '24 hours'
+          LIMIT 1
+          `,
+          [def.id],
+        );
+        if (!recentCap.rowCount) {
+          const defSetts = await c.query(
+            `SELECT id, name, settlement_type, level, slots_total, wall_level
+             FROM settlements
+             WHERE kingdom_id=$1
+             ORDER BY random()
+             LIMIT 1`,
+            [def.id],
+          );
+          const allDefSetts = await c.query(`SELECT COUNT(*)::int AS n FROM settlements WHERE kingdom_id=$1`, [def.id]);
+          const allowedDef = expectedSettlementSlots(defenderLandNew).length;
+          const overflow = Math.max(0, Number(allDefSetts.rows[0]?.n || 0) - allowedDef);
+          if (defSetts.rowCount) {
+            const s = defSetts.rows[0];
+            const wallReduction = Math.min(0.75, Number(s.wall_level || 0) / 100);
+            const landFactor = defenderLand > 0 ? landTaken / defenderLand : 0;
+            const baseChance = 0.03 + Math.min(0.14, landFactor * 0.7) + (overflow > 0 ? 0.2 : 0);
+            const captureChance = Math.max(0, Math.min(0.9, baseChance * (1 - wallReduction)));
+            if (Math.random() < captureChance) {
+              await c.query(
+                `UPDATE settlements
+                 SET kingdom_id=$2, captured_from_kingdom_id=$1
+                 WHERE id=$3`,
+                [def.id, atk.id, s.id],
+              );
+              await c.query(
+                `
+                INSERT INTO settlement_capture_log(attacker_kingdom_id, defender_kingdom_id, settlement_id)
+                VALUES ($1,$2,$3)
+                `,
+                [atk.id, def.id, s.id],
+              );
+              capturedSettlement = {
+                id: s.id,
+                name: s.name,
+                type: s.settlement_type,
+                level: s.level,
+                wallLevel: s.wall_level,
+              };
+            }
+          }
+        }
+      }
+
       const rep = await c.query(
         `INSERT INTO attack_reports(attacker_kingdom_id, defender_kingdom_id, attacker_name, defender_name, result, ratio, land_taken, attacker_power, defender_power, sent_troops, attacker_losses, defender_losses)\n         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb)\n         RETURNING id, created_at`,
         [
@@ -752,6 +863,7 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
         attackerLosses: attackerBattle.losses,
         defenderLosses: defenderBattle.losses,
         attackerSurvivorsAway: attackerSurvivors,
+        capturedSettlement,
       };
     });
 
@@ -1041,6 +1153,133 @@ app.post("/api/research/:kingdom/start", async (req, res) => {
       return { queue: ins.rows[0], costGold: goldCost };
     });
 
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/settlements/:kingdom", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  try {
+    const k = await pool.query(`SELECT id, name, land, gold, wood, stone FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const kr = k.rows[0];
+
+    await withTx(async (c) => {
+      await ensureSettlementsForKingdom(c, Number(kr.id), String(kr.name), Number(kr.land || 0));
+      return 0;
+    });
+
+    const settlements = await pool.query(
+      `SELECT id, name, settlement_type, level, slots_total, wellbeing, wall_level, captured_from_kingdom_id, created_at
+       FROM settlements
+       WHERE kingdom_id=$1
+       ORDER BY id ASC`,
+      [kr.id],
+    );
+    const buildings = await pool.query(
+      `
+      SELECT sb.settlement_id, sb.building_code, sb.level, bt.name, bt.effect_text, bt.base_gold, bt.base_stone, bt.base_wood, bt.max_level, bt.city_only
+      FROM settlement_buildings sb
+      JOIN settlement_building_types bt ON bt.code = sb.building_code
+      JOIN settlements s ON s.id = sb.settlement_id
+      WHERE s.kingdom_id = $1
+      ORDER BY sb.settlement_id, sb.building_code
+      `,
+      [kr.id],
+    );
+    const queue = await pool.query(
+      `
+      SELECT id, settlement_id, building_code, target_level, started_at, completes_at, status
+      FROM settlement_build_queue
+      WHERE kingdom_id=$1 AND status='queued'
+      ORDER BY completes_at ASC
+      `,
+      [kr.id],
+    );
+    const catalog = await pool.query(
+      `SELECT code, name, effect_text, base_gold, base_stone, base_wood, max_level, city_only
+       FROM settlement_building_types
+       ORDER BY name`,
+    );
+
+    return res.json({
+      ok: true,
+      kingdom: { id: kr.id, name: kr.name, land: Number(kr.land || 0), gold: Number(kr.gold || 0), wood: Number(kr.wood || 0), stone: Number(kr.stone || 0) },
+      settlements: settlements.rows,
+      buildings: buildings.rows,
+      queue: queue.rows,
+      catalog: catalog.rows,
+      unlockedByLand: expectedSettlementSlots(Number(kr.land || 0)).length,
+    });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/settlements/:kingdom/upgrade-building", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = settlementUpgradeBody.safeParse(req.body);
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const { settlementId, buildingCode } = parsed.data;
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id, name, gold, wood, stone FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kr = k.rows[0];
+
+      const s = await c.query(
+        `SELECT id, settlement_type, level FROM settlements WHERE id=$1 AND kingdom_id=$2 FOR UPDATE`,
+        [settlementId, kr.id],
+      );
+      if (!s.rowCount) throw new Error("settlement not found");
+      const st = s.rows[0];
+
+      const bt = await c.query(
+        `SELECT code, name, base_gold, base_stone, base_wood, max_level, city_only
+         FROM settlement_building_types
+         WHERE code=$1 LIMIT 1`,
+        [String(buildingCode).toLowerCase()],
+      );
+      if (!bt.rowCount) throw new Error("unknown settlement building");
+      const def = bt.rows[0];
+
+      const isCity = String(st.settlement_type || "").includes("city");
+      if (Boolean(def.city_only) && !isCity) throw new Error("building requires a city settlement");
+
+      const sb = await c.query(
+        `SELECT level FROM settlement_buildings WHERE settlement_id=$1 AND building_code=$2 LIMIT 1`,
+        [settlementId, def.code],
+      );
+      const currentLevel = Number(sb.rows[0]?.level || 0);
+      if (currentLevel >= Number(def.max_level || 10)) throw new Error("building already maxed");
+
+      const nextLevel = currentLevel + 1;
+      const costGold = Math.floor(Number(def.base_gold || 0) * Math.pow(1.3, currentLevel));
+      const costStone = Math.floor(Number(def.base_stone || 0) * Math.pow(1.2, currentLevel));
+      const costWood = Math.floor(Number(def.base_wood || 0) * Math.pow(1.2, currentLevel));
+      if (Number(kr.gold || 0) < costGold || Number(kr.stone || 0) < costStone || Number(kr.wood || 0) < costWood) {
+        throw new Error(`not enough resources (need gold ${costGold}, stone ${costStone}, wood ${costWood})`);
+      }
+
+      await c.query(`UPDATE kingdoms SET gold=gold-$2, stone=stone-$3, wood=wood-$4 WHERE id=$1`, [kr.id, costGold, costStone, costWood]);
+      const secondsBase = 6 * 3600;
+      const seconds = LOCAL_DEMO_FAST ? 20 : Math.floor(secondsBase * Math.pow(1.2, currentLevel));
+      const ins = await c.query(
+        `
+        INSERT INTO settlement_build_queue(kingdom_id, settlement_id, building_code, target_level, started_at, completes_at, status)
+        VALUES ($1,$2,$3,$4,now(), now() + ($5 || ' seconds')::interval, 'queued')
+        RETURNING id, settlement_id, building_code, target_level, started_at, completes_at, status
+        `,
+        [kr.id, settlementId, def.code, nextLevel, seconds],
+      );
+
+      return { queue: ins.rows[0], costs: { gold: costGold, stone: costStone, wood: costWood } };
+    });
     return res.json({ ok: true, ...out });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });
