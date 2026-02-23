@@ -15,6 +15,7 @@ const ECON_BUILDING_HOURLY = {
   farmFood: 120,
   lumberWood: 80,
   quarryStone: 80,
+  horseFarmHorses: 60,
   baseGoldPerLand: 3,
   baseFoodPerLand: 2,
 };
@@ -334,7 +335,8 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
         SELECT
           COALESCE(MAX(CASE WHEN building_code='farm' THEN level END),0) AS farm,
           COALESCE(MAX(CASE WHEN building_code='lumberyard' THEN level END),0) AS lumberyard,
-          COALESCE(MAX(CASE WHEN building_code='quarry' THEN level END),0) AS quarry
+          COALESCE(MAX(CASE WHEN building_code='quarry' THEN level END),0) AS quarry,
+          COALESCE(MAX(CASE WHEN building_code='horse_farms' THEN level END),0) AS horse_farms
         FROM kingdom_buildings
         WHERE kingdom_id = $1
         `,
@@ -378,11 +380,13 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       const farm = Number(b.rows[0]?.farm || 0);
       const lumber = Number(b.rows[0]?.lumberyard || 0);
       const quarry = Number(b.rows[0]?.quarry || 0);
+      const horseFarms = Number(b.rows[0]?.horse_farms || 0);
 
       const foodIncomePerHour = Number(k.land || 0) * ECON_BUILDING_HOURLY.baseFoodPerLand + farm * ECON_BUILDING_HOURLY.farmFood;
       const goldIncomePerHour = Number(k.land || 0) * ECON_BUILDING_HOURLY.baseGoldPerLand;
       const woodIncomePerHour = lumber * ECON_BUILDING_HOURLY.lumberWood;
       const stoneIncomePerHour = quarry * ECON_BUILDING_HOURLY.quarryStone;
+      const horseIncomePerHour = horseFarms * ECON_BUILDING_HOURLY.horseFarmHorses;
 
       let foodUpkeepPerHour = 0;
       let goldUpkeepPerHour = 0;
@@ -402,6 +406,7 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       const goldDelta = Math.floor((seasonGoldIncome - goldUpkeepPerHour) * TICK_HOURS);
       const woodDelta = Math.floor(seasonWoodIncome * TICK_HOURS);
       const stoneDelta = Math.floor(seasonStoneIncome * TICK_HOURS);
+      const horsesDelta = Math.floor(horseIncomePerHour * TICK_HOURS);
 
       await c.query(
         `
@@ -411,10 +416,11 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
           gold = GREATEST(0, gold + $3),
           wood = GREATEST(0, wood + $4),
           stone = GREATEST(0, stone + $5),
+          horses = GREATEST(0, horses + $6),
           last_tick_at = now()
         WHERE id = $1
         `,
-        [k.id, foodDelta, goldDelta, woodDelta, stoneDelta],
+        [k.id, foodDelta, goldDelta, woodDelta, stoneDelta, horsesDelta],
       );
 
       const peasPerHour = peasantDeltaPerHour(taxRate);

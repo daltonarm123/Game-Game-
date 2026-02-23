@@ -1361,10 +1361,13 @@ function WarRoomView() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [actionMsg, setActionMsg] = useState("");
-  const [trainTroop, setTrainTroop] = useState("pikemen");
-  const [trainQty, setTrainQty] = useState(1000);
+  const [trainOpen, setTrainOpen] = useState(true);
+  const [attackOpen, setAttackOpen] = useState(false);
+  const [trainTroop, setTrainTroop] = useState("footmen");
+  const [trainQty, setTrainQty] = useState(1);
   const [attackTarget, setAttackTarget] = useState("");
   const [sentTroops, setSentTroops] = useState<Record<string, number>>({});
+  const [targetHints, setTargetHints] = useState<Array<string>>([]);
   const [reports, setReports] = useState<Array<any>>([]);
 
   async function load() {
@@ -1397,6 +1400,7 @@ function WarRoomView() {
   const troops = (data?.troops || []) as Array<any>;
   const training = (data?.training || []) as Array<any>;
   const troopCodeOptions = troops.filter((t) => Boolean(t.isTrainable)).map((t) => String(t.troopCode || ""));
+  const trainTroopData = troops.find((t) => String(t.troopCode || "") === String(trainTroop));
 
   async function submitTrain(e: React.FormEvent) {
     e.preventDefault();
@@ -1419,8 +1423,43 @@ function WarRoomView() {
     }
   }
 
+  async function searchTargets(q: string) {
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom-search?q=${encodeURIComponent(q)}&limit=8`);
+      const j = await r.json();
+      if (r.ok && j?.ok) setTargetHints(Array.isArray(j.items) ? j.items : []);
+    } catch {
+      setTargetHints([]);
+    }
+  }
+
   function updateSent(code: string, value: number) {
     setSentTroops((prev) => ({ ...prev, [code]: Math.max(0, Math.floor(value || 0)) }));
+  }
+
+  async function disbandTroop(troopCode: string, maxHome: number) {
+    const raw = window.prompt(`How many ${troopCode} do you want to disband? (max ${maxHome.toLocaleString()})`, "0");
+    const qty = Math.max(0, Math.floor(Number(raw || 0)));
+    if (!qty) return;
+    if (qty > maxHome) {
+      setActionMsg(`Disband failed: amount exceeds home troops (${maxHome})`);
+      return;
+    }
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/disband`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ troopCode, quantity: qty }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      const refunded = Number(j.horsesRefunded || 0);
+      setActionMsg(refunded > 0 ? `Disbanded ${qty.toLocaleString()} ${troopCode} and refunded ${refunded.toLocaleString()} horses.` : `Disbanded ${qty.toLocaleString()} ${troopCode}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Disband failed: ${String(e?.message || e)}`);
+    }
   }
 
   async function submitAttack(e: React.FormEvent) {
@@ -1453,32 +1492,14 @@ function WarRoomView() {
     <div style={{ display: "grid", gap: 12 }}>
       <div style={{ ...CARD, background: "linear-gradient(180deg, rgba(52,32,16,0.96), rgba(28,18,10,0.94))" }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <div style={{ fontSize: 32, fontWeight: 800, color: "#fff7ec" }}>War Room</div>
+          <div style={{ fontSize: 42, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>War Room - {k?.name || kingdom}</div>
           <input
             value={kingdom}
             onChange={(e) => setKingdom(e.target.value)}
-            style={{
-              padding: "8px 10px",
-              borderRadius: 8,
-              border: "1px solid rgba(217,182,118,.35)",
-              background: "rgba(0,0,0,.2)",
-              color: "#f2e5cf",
-            }}
+            style={INPUT_STYLE}
             placeholder="Kingdom name"
           />
-          <button
-            onClick={() => void load()}
-            style={{
-              padding: "8px 12px",
-              borderRadius: 8,
-              border: "1px solid rgba(217,182,118,.35)",
-              background: "rgba(205,169,105,.28)",
-              color: "#f2e5cf",
-              cursor: "pointer",
-            }}
-          >
-            Load
-          </button>
+          <button onClick={() => void load()} style={BTN_STYLE}>Load</button>
         </div>
         {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading...</div> : null}
         {error ? (
@@ -1493,7 +1514,7 @@ function WarRoomView() {
       {k ? (
         <>
           <div style={CARD}>
-            <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>War Room - {k.name}</div>
+            <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>Kingdom Status</div>
             <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 20, fontWeight: 700 }}>
               Rank: #{k.rank || "N/A"} • Networth: {Math.floor(Number(k.networth || 0)).toLocaleString()}
             </div>
@@ -1501,108 +1522,102 @@ function WarRoomView() {
               Population: {Number(k.populationHome || 0).toLocaleString()} / {Number((k.populationHome || 0) + (k.populationTrain || 0) + (k.populationAway || 0)).toLocaleString()}
             </div>
             <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 20, fontWeight: 700 }}>
-              Food: {Number(k.food || 0).toLocaleString()} • Gold: {Number(k.gold || 0).toLocaleString()}
+              Food: {Number(k.food || 0).toLocaleString()} • Gold: {Number(k.gold || 0).toLocaleString()} • Horses: {Number(k.horses || 0).toLocaleString()}
             </div>
           </div>
 
-          <div style={CARD}>
-            <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 24 }}>Kingdom Troops</div>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Troop</th>
-                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Att</th>
-                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Def</th>
-                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Food</th>
-                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Gold</th>
-                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>NW</th>
-                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Home</th>
-                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Train</th>
-                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid rgba(216,176,117,.4)" }}>Away</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {troops.map((t) => (
-                    <tr key={t.troopCode}>
-                      <td style={{ padding: 8, borderBottom: "1px solid rgba(216,176,117,.15)" }}>{t.troopName}</td>
-                      <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.att || 0).toLocaleString()}</td>
-                      <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.def || 0).toLocaleString()}</td>
-                      <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.upkeepFood || 0).toLocaleString()}</td>
-                      <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.upkeepGold || 0).toLocaleString()}</td>
-                      <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.nw || 0).toLocaleString()}</td>
-                      <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.home || 0).toLocaleString()}</td>
-                      <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.train || 0).toLocaleString()}</td>
-                      <td style={{ padding: 8, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.15)" }}>{Number(t.away || 0).toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <div style={{ ...CARD, display: "grid", gridTemplateColumns: "1.05fr 1fr", gap: 16 }}>
+            <div>
+              <div style={{ fontWeight: 800, marginBottom: 10, fontSize: 24, fontFamily: FONT_DISPLAY }}>Kingdom Troops</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 90px 90px 52px", gap: 8, color: TEXT_MUTED, marginBottom: 6 }}>
+                <div>Troop</div><div style={{ textAlign: "right" }}>Home</div><div style={{ textAlign: "right" }}>Train</div><div style={{ textAlign: "right" }}>Away</div><div />
+              </div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {troops.map((t) => (
+                  <div key={t.troopCode} style={{ display: "grid", gridTemplateColumns: "1fr 110px 90px 90px 52px", gap: 8, alignItems: "center", borderBottom: "1px solid rgba(216,176,117,.18)", paddingBottom: 6 }}>
+                    <div style={{ fontSize: 31, fontFamily: FONT_DISPLAY }}>{t.troopName}</div>
+                    <div style={{ textAlign: "right", fontSize: 26, fontFamily: FONT_DISPLAY }}>{Number(t.home || 0).toLocaleString()}</div>
+                    <div style={{ textAlign: "right", fontSize: 22 }}>{Number(t.train || 0).toLocaleString()}</div>
+                    <div style={{ textAlign: "right", fontSize: 22 }}>{Number(t.away || 0).toLocaleString()}</div>
+                    <button style={{ ...BTN_STYLE, padding: "6px 8px" }} onClick={() => void disbandTroop(String(t.troopCode), Number(t.home || 0))}>Del</button>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
 
-          <div style={CARD}>
-            <div style={{ fontWeight: 700, marginBottom: 8 }}>Actions</div>
-            <div style={{ display: "grid", gap: 10 }}>
-              <form onSubmit={submitTrain} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                <div style={{ minWidth: 110, opacity: 0.9 }}>Train Troops</div>
-                <select
-                  value={trainTroop}
-                  onChange={(e) => setTrainTroop(e.target.value)}
-                  style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(217,182,118,.35)", background: "rgba(0,0,0,.2)", color: "#f2e5cf" }}
-                >
-                  {troopCodeOptions.map((code) => (
-                    <option key={code} value={code}>
-                      {code}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  type="number"
-                  min={1}
-                  max={50000}
-                  value={trainQty}
-                  onChange={(e) => setTrainQty(Math.max(1, Number(e.target.value || 1)))}
-                  style={{ width: 130, padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(217,182,118,.35)", background: "rgba(0,0,0,.2)", color: "#f2e5cf" }}
-                />
-                <button type="submit" style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid rgba(217,182,118,.35)", background: "rgba(205,169,105,.28)", color: "#f2e5cf", cursor: "pointer" }}>
-                  Queue Training
+            <div>
+              <div style={{ fontWeight: 800, marginBottom: 10, fontSize: 24, fontFamily: FONT_DISPLAY }}>Actions</div>
+              <div style={{ border: "1px solid rgba(216,176,117,.24)", borderRadius: 10, overflow: "hidden" }}>
+                <button onClick={() => setTrainOpen((v) => !v)} style={{ ...BTN_STYLE, width: "100%", textAlign: "left", borderRadius: 0, border: "none", borderBottom: "1px solid rgba(216,176,117,.2)" }}>
+                  {trainOpen ? "-" : "+"} Train Troops
                 </button>
-              </form>
+                {trainOpen ? (
+                  <form onSubmit={submitTrain} style={{ padding: 10, display: "grid", gap: 8 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "170px 1fr", gap: 8 }}>
+                      <div style={{ ...INPUT_STYLE }}>Population Types</div>
+                      <select value={trainTroop} onChange={(e) => setTrainTroop(e.target.value)} style={INPUT_STYLE}>
+                        {troopCodeOptions.map((code) => <option key={code} value={code}>{code}</option>)}
+                      </select>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "170px 1fr", gap: 8 }}>
+                      <div style={{ ...INPUT_STYLE }}>Amount To Train</div>
+                      <input type="number" min={1} max={50000} value={trainQty} onChange={(e) => setTrainQty(Math.max(1, Number(e.target.value || 1)))} style={INPUT_STYLE} />
+                    </div>
+                    {trainTroopData ? (
+                      <div style={{ color: TEXT_MUTED }}>
+                        {trainTroopData.troopName} • Training Time: {formatDuration(Number(trainTroopData.trainSeconds || 0) * Math.max(1, Number(trainQty || 1)))}
+                        <br />
+                        Costs: Gold {(Number(trainTroopData.goldCost || 0) * Math.max(1, Number(trainQty || 1))).toLocaleString()} • Food {(Number(trainTroopData.foodCost || 0) * Math.max(1, Number(trainQty || 1))).toLocaleString()} • Horses {(Number(trainTroopData.horseCost || 0) * Math.max(1, Number(trainQty || 1))).toLocaleString()}
+                        <br />
+                        Upkeep/h each: Gold {Number(trainTroopData.upkeepGold || 0)} • Food {Number(trainTroopData.upkeepFood || 0)}
+                      </div>
+                    ) : null}
+                    <button type="submit" style={BTN_STYLE}>Train Now</button>
+                  </form>
+                ) : null}
 
-              <form onSubmit={submitAttack} style={{ display: "grid", gap: 8 }}>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                  <div style={{ minWidth: 110, opacity: 0.9 }}>Attack Kingdom</div>
-                  <input
-                    value={attackTarget}
-                    onChange={(e) => setAttackTarget(e.target.value)}
-                    placeholder="Defender kingdom"
-                    style={{ minWidth: 220, padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(217,182,118,.35)", background: "rgba(0,0,0,.2)", color: "#f2e5cf" }}
-                  />
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 8 }}>
-                  {troops.map((t) => (
-                    <label key={t.troopCode} style={{ display: "grid", gap: 4 }}>
-                      <span style={{ fontSize: 12, opacity: 0.85 }}>
-                        {t.troopName} (home {Number(t.home || 0).toLocaleString()})
-                      </span>
+                <button onClick={() => setAttackOpen((v) => !v)} style={{ ...BTN_STYLE, width: "100%", textAlign: "left", borderRadius: 0, border: "none", borderTop: "1px solid rgba(216,176,117,.2)" }}>
+                  {attackOpen ? "-" : "+"} Attack Kingdom
+                </button>
+                {attackOpen ? (
+                  <form onSubmit={submitAttack} style={{ padding: 10, display: "grid", gap: 8 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "170px 1fr", gap: 8 }}>
+                      <div style={{ ...INPUT_STYLE }}>Kingdom Name</div>
                       <input
-                        type="number"
-                        min={0}
-                        max={Number(t.home || 0)}
-                        value={Number(sentTroops[t.troopCode] || 0)}
-                        onChange={(e) => updateSent(t.troopCode, Math.min(Number(t.home || 0), Number(e.target.value || 0)))}
-                        style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(217,182,118,.35)", background: "rgba(0,0,0,.2)", color: "#f2e5cf" }}
+                        value={attackTarget}
+                        onChange={(e) => {
+                          setAttackTarget(e.target.value);
+                          void searchTargets(e.target.value);
+                        }}
+                        placeholder="Kingdom to attack..."
+                        style={INPUT_STYLE}
+                        list="attack-hints"
                       />
-                    </label>
-                  ))}
-                </div>
-                <div>
-                  <button type="submit" style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid rgba(217,182,118,.35)", background: "rgba(205,169,105,.28)", color: "#f2e5cf", cursor: "pointer" }}>
-                    Launch Attack
-                  </button>
-                </div>
-              </form>
+                      <datalist id="attack-hints">
+                        {targetHints.map((n) => <option key={n} value={n} />)}
+                      </datalist>
+                    </div>
+                    <div style={{ fontWeight: 700 }}>Troops To Send...</div>
+                    <div style={{ display: "grid", gap: 6 }}>
+                      {troops.map((t) => (
+                        <div key={`atk-${t.troopCode}`} style={{ display: "grid", gridTemplateColumns: "170px 1fr 120px", gap: 8, alignItems: "center" }}>
+                          <div>{t.troopName}</div>
+                          <input
+                            type="number"
+                            min={0}
+                            max={Number(t.home || 0)}
+                            value={Number(sentTroops[t.troopCode] || 0)}
+                            onChange={(e) => updateSent(t.troopCode, Math.min(Number(t.home || 0), Number(e.target.value || 0)))}
+                            style={INPUT_STYLE}
+                          />
+                          <div style={{ textAlign: "right" }}>/ {Number(t.home || 0).toLocaleString()}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <button type="submit" style={BTN_STYLE}>Send Attack</button>
+                  </form>
+                ) : null}
+              </div>
             </div>
           </div>
 

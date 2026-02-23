@@ -43,6 +43,11 @@ const trainBody = z.object({
   quantity: z.number().int().min(1).max(50000),
 });
 
+const disbandBody = z.object({
+  troopCode: z.string().min(1),
+  quantity: z.number().int().min(1).max(50000),
+});
+
 const attackBody = z.object({
   defenderKingdom: z.string().min(2),
   sentTroops: z.record(z.string(), z.number().int().min(0)).refine((v) => Object.values(v).some((n) => n > 0), {
@@ -501,6 +506,7 @@ async function seedKingdom(c: PoolClient, opts: {
   wood: number;
   stone: number;
   land: number;
+  horses?: number;
   buildingLevels?: Record<string, number>;
   troopAmounts?: Record<string, number>;
   researchLevels?: Record<string, number>;
@@ -510,10 +516,10 @@ async function seedKingdom(c: PoolClient, opts: {
     opts.username,
   ]);
   const k = await c.query(
-    `INSERT INTO kingdoms(user_id, name, gold, food, wood, stone, land)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)
+    `INSERT INTO kingdoms(user_id, name, gold, food, wood, stone, land, horses)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
      RETURNING id, name`,
-    [opts.userId, opts.kingdomName, opts.gold, opts.food, opts.wood, opts.stone, opts.land],
+    [opts.userId, opts.kingdomName, opts.gold, opts.food, opts.wood, opts.stone, opts.land, Math.max(0, Math.floor(Number(opts.horses || 0)))],
   );
   const kingdom = k.rows[0];
   await c.query(
@@ -745,7 +751,7 @@ app.get("/api/kingdom/:name", async (req, res) => {
 
   try {
     const k = await pool.query(
-      `SELECT id, user_id, name, gold, wood, stone, food, land, created_at, last_tick_at, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
+      `SELECT id, user_id, name, gold, wood, stone, food, land, horses, created_at, last_tick_at, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
        FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`,
       [name],
     );
@@ -758,7 +764,7 @@ app.get("/api/kingdom/:name", async (req, res) => {
       return 0;
     });
     const kresync = await pool.query(
-      `SELECT id, user_id, name, gold, wood, stone, food, land, created_at, last_tick_at, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
+      `SELECT id, user_id, name, gold, wood, stone, food, land, horses, created_at, last_tick_at, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
        FROM kingdoms
        WHERE id=$1
        LIMIT 1`,
@@ -780,7 +786,7 @@ app.get("/api/kingdom/:name", async (req, res) => {
     const troops = await pool.query(
       `
       SELECT kt.troop_code, tt.name AS troop_name, kt.amount, tt.gold_cost, tt.food_cost, tt.train_seconds,
-             tt.upkeep_food, tt.upkeep_gold, tt.att_rating, tt.def_rating, tt.nw_value, tt.housing, tt.notes, tt.is_trainable
+             tt.horse_cost, tt.upkeep_food, tt.upkeep_gold, tt.att_rating, tt.def_rating, tt.nw_value, tt.housing, tt.notes, tt.is_trainable
       FROM kingdom_troops kt
       JOIN troop_types tt ON tt.code = kt.troop_code
       WHERE kt.kingdom_id = $1
@@ -940,23 +946,24 @@ app.post("/api/kingdom/:name/train", async (req, res) => {
 
   try {
     const out = await withTx(async (c) => {
-      const k = await c.query(`SELECT id, gold, food FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [name]);
+      const k = await c.query(`SELECT id, gold, food, horses FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [name]);
       if (!k.rowCount) throw new Error("kingdom not found");
       const kingdom = k.rows[0];
 
-      const tt = await c.query(`SELECT code, name, gold_cost, food_cost, train_seconds, is_trainable FROM troop_types WHERE code=$1 LIMIT 1`, [troopCode]);
+      const tt = await c.query(`SELECT code, name, gold_cost, food_cost, horse_cost, train_seconds, is_trainable FROM troop_types WHERE code=$1 LIMIT 1`, [troopCode]);
       if (!tt.rowCount) throw new Error("unknown troop code");
       const def = tt.rows[0];
       if (!Boolean(def.is_trainable)) throw new Error(`${troopCode} is not trainable`);
 
       const totalGold = Number(def.gold_cost) * qty;
       const totalFood = Number(def.food_cost) * qty;
+      const totalHorses = Number(def.horse_cost || 0) * qty;
 
-      if (Number(kingdom.gold) < totalGold || Number(kingdom.food) < totalFood) {
-        throw new Error(`not enough resources (need gold ${totalGold}, food ${totalFood})`);
+      if (Number(kingdom.gold) < totalGold || Number(kingdom.food) < totalFood || Number(kingdom.horses || 0) < totalHorses) {
+        throw new Error(`not enough resources (need gold ${totalGold}, food ${totalFood}, horses ${totalHorses})`);
       }
 
-      await c.query(`UPDATE kingdoms SET gold = gold - $2, food = food - $3 WHERE id=$1`, [kingdom.id, totalGold, totalFood]);
+      await c.query(`UPDATE kingdoms SET gold = gold - $2, food = food - $3, horses = horses - $4 WHERE id=$1`, [kingdom.id, totalGold, totalFood, totalHorses]);
 
       const totalSeconds = LOCAL_DEMO_FAST ? FAST_TRAIN_SECONDS : Math.max(1, Number(def.train_seconds) * qty);
       const ins = await c.query(
@@ -966,12 +973,77 @@ app.post("/api/kingdom/:name/train", async (req, res) => {
         [kingdom.id, troopCode, qty, totalSeconds],
       );
 
-      return { queue: ins.rows[0], costs: { gold: totalGold, food: totalFood } };
+      return { queue: ins.rows[0], costs: { gold: totalGold, food: totalFood, horses: totalHorses } };
     });
 
     return res.json({ ok: true, ...out });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/kingdom/:name/disband", async (req, res) => {
+  const name = String(req.params.name || "").trim();
+  const parsed = disbandBody.safeParse(req.body);
+  if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const troopCode = String(parsed.data.troopCode || "").toLowerCase().trim();
+  const qty = Math.max(1, Math.floor(Number(parsed.data.quantity || 0)));
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [name]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kr = k.rows[0];
+
+      const t = await c.query(
+        `SELECT kt.amount, tt.horse_cost
+         FROM kingdom_troops kt
+         JOIN troop_types tt ON tt.code = kt.troop_code
+         WHERE kt.kingdom_id=$1 AND kt.troop_code=$2
+         LIMIT 1
+         FOR UPDATE`,
+        [kr.id, troopCode],
+      );
+      if (!t.rowCount) throw new Error("troop not found");
+      const have = Number(t.rows[0].amount || 0);
+      if (qty > have) throw new Error(`not enough troops to disband (have ${have}, requested ${qty})`);
+      const horseRefund = Number(t.rows[0].horse_cost || 0) * qty;
+
+      await c.query(`UPDATE kingdom_troops SET amount = amount - $3 WHERE kingdom_id=$1 AND troop_code=$2`, [kr.id, troopCode, qty]);
+      if (horseRefund > 0) {
+        await c.query(`UPDATE kingdoms SET horses = horses + $2 WHERE id=$1`, [kr.id, horseRefund]);
+      }
+      return { troopCode, quantity: qty, horsesRefunded: horseRefund };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/kingdom-search", async (req, res) => {
+  const q = String(req.query.q || "").trim();
+  const limit = clamp(Number(req.query.limit || 8), 1, 20);
+  try {
+    if (!q) {
+      const rows = await pool.query(`SELECT name FROM kingdoms ORDER BY created_at DESC LIMIT $1`, [limit]);
+      return res.json({ ok: true, items: rows.rows.map((r) => String(r.name)) });
+    }
+    const rows = await pool.query(
+      `
+      SELECT name
+      FROM kingdoms
+      WHERE LOWER(name) LIKE LOWER($1 || '%')
+         OR LOWER(name) LIKE LOWER('%' || $1 || '%')
+      ORDER BY CASE WHEN LOWER(name) LIKE LOWER($1 || '%') THEN 0 ELSE 1 END, name ASC
+      LIMIT $2
+      `,
+      [q, limit],
+    );
+    return res.json({ ok: true, items: rows.rows.map((r) => String(r.name)) });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
@@ -1297,7 +1369,7 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
   try {
     const season = await getSeasonSnapshot();
     const k = await pool.query(
-      `SELECT id, name, land, food, gold, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, created_at FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`,
+      `SELECT id, name, land, food, gold, horses, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, created_at FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`,
       [kingdom],
     );
     if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
@@ -1307,7 +1379,7 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
       return 0;
     });
     const kr = await pool.query(
-      `SELECT id, name, land, food, gold, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, created_at FROM kingdoms WHERE id=$1 LIMIT 1`,
+      `SELECT id, name, land, food, gold, horses, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, created_at FROM kingdoms WHERE id=$1 LIMIT 1`,
       [row.id],
     );
     row = kr.rows[0] || row;
@@ -1364,7 +1436,7 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
     );
 
     const homeRows = await pool.query(
-      `SELECT tt.code, tt.name, tt.att_rating, tt.def_rating, tt.upkeep_food, tt.upkeep_gold, tt.nw_value, tt.housing, tt.notes, tt.is_trainable,
+      `SELECT tt.code, tt.name, tt.gold_cost, tt.food_cost, tt.horse_cost, tt.train_seconds, tt.att_rating, tt.def_rating, tt.upkeep_food, tt.upkeep_gold, tt.nw_value, tt.housing, tt.notes, tt.is_trainable,
               COALESCE(kt.amount,0) AS home
        FROM troop_types tt
        LEFT JOIN kingdom_troops kt ON kt.troop_code = tt.code AND kt.kingdom_id = $1
@@ -1395,6 +1467,10 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
     const troops = homeRows.rows.map((t) => ({
       troopCode: t.code,
       troopName: t.name,
+      goldCost: Number(t.gold_cost || 0),
+      foodCost: Number(t.food_cost || 0),
+      horseCost: Number(t.horse_cost || 0),
+      trainSeconds: Number(t.train_seconds || 0),
       att: Number(t.att_rating || 0),
       def: Number(t.def_rating || 0),
       upkeepFood: Number(t.upkeep_food || 0),
@@ -1429,6 +1505,7 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
         populationAway: troops.reduce((a, b) => a + Number(b.away || 0), 0),
         food: Number(row.food || 0),
         gold: Number(row.gold || 0),
+        horses: Number(row.horses || 0),
         taxRate: Number(row.tax_rate || 25),
       },
       troops,
