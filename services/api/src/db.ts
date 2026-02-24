@@ -139,20 +139,20 @@ const RESEARCH_PREREQS = [
 ] as const;
 
 const SETTLEMENT_BUILDING_TYPES = [
-  { code: "housing", name: "Housing", effectText: "Increased Population for houses/cities", baseGold: 50000, baseStone: 250, baseWood: 250, maxLevel: 12, cityOnly: false },
-  { code: "church", name: "Church", effectText: "Prayer effect bonus", baseGold: 75000, baseStone: 1250, baseWood: 250, maxLevel: 12, cityOnly: false },
-  { code: "cathedral", name: "Cathedral", effectText: "Prayer effect + reduced mana/gem costs", baseGold: 50000, baseStone: 12500, baseWood: 2500, maxLevel: 12, cityOnly: true },
-  { code: "barracks", name: "Barracks", effectText: "Extra soldier capacity", baseGold: 10000, baseStone: 300, baseWood: 100, maxLevel: 12, cityOnly: false },
-  { code: "barn", name: "Barn", effectText: "Food storage bonus", baseGold: 5000, baseStone: 100, baseWood: 300, maxLevel: 12, cityOnly: false },
-  { code: "granary", name: "Granary", effectText: "Food generation bonus", baseGold: 5000, baseStone: 100, baseWood: 300, maxLevel: 12, cityOnly: false },
-  { code: "stables", name: "Stables", effectText: "Stable population bonus", baseGold: 10000, baseStone: 500, baseWood: 500, maxLevel: 12, cityOnly: false },
-  { code: "market", name: "Market", effectText: "Wagon speed bonus", baseGold: 100000, baseStone: 250, baseWood: 250, maxLevel: 12, cityOnly: false },
-  { code: "tavern", name: "Tavern", effectText: "Settlement wellbeing boost", baseGold: 50000, baseStone: 500, baseWood: 500, maxLevel: 12, cityOnly: false },
-  { code: "inn", name: "Inn", effectText: "City wellbeing + kingdom gold bonus", baseGold: 500000, baseStone: 1000, baseWood: 1000, maxLevel: 12, cityOnly: true },
-  { code: "mason", name: "Mason", effectText: "Reduced stone maintenance", baseGold: 50000, baseStone: 250, baseWood: 250, maxLevel: 12, cityOnly: false },
-  { code: "carpenter", name: "Carpenter", effectText: "Reduced wood maintenance", baseGold: 50000, baseStone: 250, baseWood: 250, maxLevel: 12, cityOnly: false },
-  { code: "brewery", name: "Brewery", effectText: "Kingdom wellbeing bonus", baseGold: 100000, baseStone: 500, baseWood: 500, maxLevel: 12, cityOnly: false },
-  { code: "town_walls", name: "Town/City Walls", effectText: "Reduced chance to lose settlement", baseGold: 25000, baseStone: 1000, baseWood: 300, maxLevel: 12, cityOnly: false },
+  { code: "housing", name: "Housing", effectText: "Increased Population for houses/cities", baseGold: 50000, baseStone: 250, baseWood: 250, maxLevel: 12, cityOnly: false, requiredSettlementSize: 1, baseBuildSeconds: 3 * 3600 },
+  { code: "church", name: "Church", effectText: "Prayer effect bonus", baseGold: 75000, baseStone: 1250, baseWood: 250, maxLevel: 12, cityOnly: false, requiredSettlementSize: 1, baseBuildSeconds: 3 * 3600 },
+  { code: "cathedral", name: "Cathedral", effectText: "Prayer effect + reduced mana/gem costs", baseGold: 50000, baseStone: 12500, baseWood: 2500, maxLevel: 12, cityOnly: true, requiredSettlementSize: 4, baseBuildSeconds: 4 * 3600 },
+  { code: "barracks", name: "Barracks", effectText: "Extra soldier capacity", baseGold: 10000, baseStone: 300, baseWood: 100, maxLevel: 12, cityOnly: false, requiredSettlementSize: 1, baseBuildSeconds: 2 * 3600 },
+  { code: "barn", name: "Barn", effectText: "Food storage bonus", baseGold: 5000, baseStone: 100, baseWood: 300, maxLevel: 12, cityOnly: false, requiredSettlementSize: 1, baseBuildSeconds: 2 * 3600 },
+  { code: "granary", name: "Granary", effectText: "Food generation bonus", baseGold: 5000, baseStone: 100, baseWood: 300, maxLevel: 12, cityOnly: false, requiredSettlementSize: 1, baseBuildSeconds: 2 * 3600 },
+  { code: "stables", name: "Stables", effectText: "Stable population bonus", baseGold: 10000, baseStone: 500, baseWood: 500, maxLevel: 12, cityOnly: false, requiredSettlementSize: 2, baseBuildSeconds: 3 * 3600 },
+  { code: "market", name: "Market", effectText: "Wagon speed bonus", baseGold: 100000, baseStone: 250, baseWood: 250, maxLevel: 12, cityOnly: false, requiredSettlementSize: 2, baseBuildSeconds: 3 * 3600 },
+  { code: "tavern", name: "Tavern", effectText: "Settlement wellbeing boost", baseGold: 50000, baseStone: 500, baseWood: 500, maxLevel: 12, cityOnly: false, requiredSettlementSize: 2, baseBuildSeconds: 3 * 3600 },
+  { code: "inn", name: "Inn", effectText: "City wellbeing + kingdom gold bonus", baseGold: 500000, baseStone: 1000, baseWood: 1000, maxLevel: 12, cityOnly: true, requiredSettlementSize: 4, baseBuildSeconds: 4 * 3600 },
+  { code: "mason", name: "Mason", effectText: "Reduced stone maintenance", baseGold: 50000, baseStone: 250, baseWood: 250, maxLevel: 12, cityOnly: false, requiredSettlementSize: 1, baseBuildSeconds: 3 * 3600 },
+  { code: "carpenter", name: "Carpenter", effectText: "Reduced wood maintenance", baseGold: 50000, baseStone: 250, baseWood: 250, maxLevel: 12, cityOnly: false, requiredSettlementSize: 1, baseBuildSeconds: 3 * 3600 },
+  { code: "brewery", name: "Brewery", effectText: "Kingdom wellbeing bonus", baseGold: 100000, baseStone: 500, baseWood: 500, maxLevel: 12, cityOnly: false, requiredSettlementSize: 2, baseBuildSeconds: 3 * 3600 },
+  { code: "town_walls", name: "Town/City Walls", effectText: "Reduced chance to lose settlement", baseGold: 25000, baseStone: 1000, baseWood: 300, maxLevel: 12, cityOnly: false, requiredSettlementSize: 1, baseBuildSeconds: 2 * 3600 },
 ] as const;
 
 const ALLIANCE_BUILDING_TYPES = [
@@ -181,7 +181,16 @@ export async function ensureSchema(): Promise<void> {
     CREATE TABLE IF NOT EXISTS app_users (
       id TEXT PRIMARY KEY,
       username TEXT NOT NULL,
+      email TEXT,
+      password_hash TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+      token TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS kingdoms (
@@ -334,6 +343,8 @@ export async function ensureSchema(): Promise<void> {
       base_gold BIGINT NOT NULL DEFAULT 0,
       base_stone BIGINT NOT NULL DEFAULT 0,
       base_wood BIGINT NOT NULL DEFAULT 0,
+      required_settlement_size INT NOT NULL DEFAULT 1,
+      base_build_seconds INT NOT NULL DEFAULT 10800,
       max_level INT NOT NULL DEFAULT 10,
       city_only BOOLEAN NOT NULL DEFAULT FALSE
     );
@@ -364,6 +375,20 @@ export async function ensureSchema(): Promise<void> {
       defender_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
       settlement_id BIGINT NOT NULL REFERENCES settlements(id) ON DELETE CASCADE,
       captured_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS settlement_garrison (
+      settlement_id BIGINT NOT NULL REFERENCES settlements(id) ON DELETE CASCADE,
+      troop_code TEXT NOT NULL REFERENCES troop_types(code) ON DELETE CASCADE,
+      amount BIGINT NOT NULL DEFAULT 0,
+      PRIMARY KEY (settlement_id, troop_code)
+    );
+
+    CREATE TABLE IF NOT EXISTS settlement_history (
+      id BIGSERIAL PRIMARY KEY,
+      settlement_id BIGINT NOT NULL REFERENCES settlements(id) ON DELETE CASCADE,
+      item TEXT NOT NULL,
+      datetime TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS alliances (
@@ -443,18 +468,57 @@ export async function ensureSchema(): Promise<void> {
       CHECK (status IN ('out','returned','cancelled'))
     );
 
+    CREATE TABLE IF NOT EXISTS kingdom_networth_history (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      networth NUMERIC(18,2) NOT NULL,
+      recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS kingdom_mail (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      mail_kind TEXT NOT NULL DEFAULT 'system',
+      subject TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      read_at TIMESTAMPTZ
+    );
+
+    CREATE TABLE IF NOT EXISTS kingdom_notifications (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      notice_type TEXT NOT NULL DEFAULT 'info',
+      message TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      seen_at TIMESTAMPTZ
+    );
+
     CREATE INDEX IF NOT EXISTS build_queue_due_idx ON build_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS train_queue_due_idx ON train_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS attack_reports_defender_idx ON attack_reports(defender_kingdom_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS attack_reports_attacker_idx ON attack_reports(attacker_kingdom_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS troop_movements_due_idx ON troop_movements(status, returns_at);
     CREATE INDEX IF NOT EXISTS troop_movements_owner_idx ON troop_movements(owner_kingdom_id, status, returns_at DESC);
+    CREATE INDEX IF NOT EXISTS kingdom_networth_history_kingdom_idx ON kingdom_networth_history(kingdom_id, recorded_at DESC);
+    CREATE INDEX IF NOT EXISTS kingdom_mail_kingdom_idx ON kingdom_mail(kingdom_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS kingdom_mail_unread_idx ON kingdom_mail(kingdom_id, read_at, created_at DESC);
+    CREATE INDEX IF NOT EXISTS kingdom_notifications_kingdom_idx ON kingdom_notifications(kingdom_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS kingdom_notifications_unseen_idx ON kingdom_notifications(kingdom_id, seen_at, created_at DESC);
     CREATE INDEX IF NOT EXISTS research_queue_due_idx ON research_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS settlements_kingdom_idx ON settlements(kingdom_id);
     CREATE INDEX IF NOT EXISTS settlement_build_queue_due_idx ON settlement_build_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS settlement_capture_log_def_idx ON settlement_capture_log(defender_kingdom_id, captured_at DESC);
+    CREATE INDEX IF NOT EXISTS settlement_history_settlement_idx ON settlement_history(settlement_id, datetime DESC);
     CREATE INDEX IF NOT EXISTS alliance_members_kingdom_idx ON alliance_members(kingdom_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS app_users_email_lower_uq ON app_users((LOWER(email))) WHERE email IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS auth_sessions_user_idx ON auth_sessions(user_id);
+    CREATE INDEX IF NOT EXISTS auth_sessions_expires_idx ON auth_sessions(expires_at);
   `);
+
+  await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS email TEXT`);
+  await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS password_hash TEXT`);
 
   await pool.query(`
     ALTER TABLE building_types
@@ -483,6 +547,10 @@ export async function ensureSchema(): Promise<void> {
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_starts_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_ends_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_cooldown_ends_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS daily_login_streak INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS daily_last_claimed_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE settlement_building_types ADD COLUMN IF NOT EXISTS required_settlement_size INT NOT NULL DEFAULT 1`);
+  await pool.query(`ALTER TABLE settlement_building_types ADD COLUMN IF NOT EXISTS base_build_seconds INT NOT NULL DEFAULT 10800`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_index INT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_code TEXT NOT NULL DEFAULT 'spring'`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_started_at TIMESTAMPTZ NOT NULL DEFAULT now()`);
@@ -570,18 +638,20 @@ export async function ensureSchema(): Promise<void> {
   for (const s of SETTLEMENT_BUILDING_TYPES) {
     await pool.query(
       `
-      INSERT INTO settlement_building_types(code, name, effect_text, base_gold, base_stone, base_wood, max_level, city_only)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      INSERT INTO settlement_building_types(code, name, effect_text, base_gold, base_stone, base_wood, required_settlement_size, base_build_seconds, max_level, city_only)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
       ON CONFLICT (code) DO UPDATE
       SET name = EXCLUDED.name,
           effect_text = EXCLUDED.effect_text,
           base_gold = EXCLUDED.base_gold,
           base_stone = EXCLUDED.base_stone,
           base_wood = EXCLUDED.base_wood,
+          required_settlement_size = EXCLUDED.required_settlement_size,
+          base_build_seconds = EXCLUDED.base_build_seconds,
           max_level = EXCLUDED.max_level,
           city_only = EXCLUDED.city_only
       `,
-      [s.code, s.name, s.effectText, s.baseGold, s.baseStone, s.baseWood, s.maxLevel, s.cityOnly],
+      [s.code, s.name, s.effectText, s.baseGold, s.baseStone, s.baseWood, s.requiredSettlementSize, s.baseBuildSeconds, s.maxLevel, s.cityOnly],
     );
   }
 

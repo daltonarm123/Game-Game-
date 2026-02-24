@@ -111,7 +111,9 @@ export async function ensureSchemaLite(): Promise<void> {
 
     CREATE TABLE IF NOT EXISTS settlement_building_types (
       code TEXT PRIMARY KEY,
-      name TEXT NOT NULL
+      name TEXT NOT NULL,
+      required_settlement_size INT NOT NULL DEFAULT 1,
+      base_build_seconds INT NOT NULL DEFAULT 10800
     );
 
     CREATE TABLE IF NOT EXISTS settlement_buildings (
@@ -134,6 +136,13 @@ export async function ensureSchemaLite(): Promise<void> {
       CHECK (status IN ('queued','completed','cancelled'))
     );
 
+    CREATE TABLE IF NOT EXISTS settlement_history (
+      id BIGSERIAL PRIMARY KEY,
+      settlement_id BIGINT NOT NULL,
+      item TEXT NOT NULL,
+      datetime TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS troop_movements (
       id BIGSERIAL PRIMARY KEY,
       owner_kingdom_id BIGINT NOT NULL,
@@ -147,6 +156,13 @@ export async function ensureSchemaLite(): Promise<void> {
       status TEXT NOT NULL DEFAULT 'out',
       source_attack_report_id BIGINT,
       CHECK (status IN ('out','returned','cancelled'))
+    );
+
+    CREATE TABLE IF NOT EXISTS kingdom_networth_history (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL,
+      networth NUMERIC(18,2) NOT NULL,
+      recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS kingdom_buildings (
@@ -168,19 +184,25 @@ export async function ensureSchemaLite(): Promise<void> {
       name TEXT NOT NULL,
       horse_cost INT NOT NULL DEFAULT 0,
       upkeep_food INT NOT NULL DEFAULT 0,
-      upkeep_gold INT NOT NULL DEFAULT 0
+      upkeep_gold INT NOT NULL DEFAULT 0,
+      nw_value NUMERIC(8,2) NOT NULL DEFAULT 0
     );
 
     CREATE INDEX IF NOT EXISTS build_queue_due_idx ON build_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS train_queue_due_idx ON train_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS troop_movements_due_idx ON troop_movements(status, returns_at);
+    CREATE INDEX IF NOT EXISTS kingdom_networth_history_kingdom_idx ON kingdom_networth_history(kingdom_id, recorded_at DESC);
     CREATE INDEX IF NOT EXISTS research_queue_due_idx ON research_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS settlement_build_queue_due_idx ON settlement_build_queue(status, completes_at);
+    CREATE INDEX IF NOT EXISTS settlement_history_settlement_idx ON settlement_history(settlement_id, datetime DESC);
   `);
 
   await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS upkeep_food INT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS upkeep_gold INT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS horse_cost INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS nw_value NUMERIC(8,2) NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE settlement_building_types ADD COLUMN IF NOT EXISTS required_settlement_size INT NOT NULL DEFAULT 1`);
+  await pool.query(`ALTER TABLE settlement_building_types ADD COLUMN IF NOT EXISTS base_build_seconds INT NOT NULL DEFAULT 10800`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS tax_rate INT NOT NULL DEFAULT 25`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_status TEXT NOT NULL DEFAULT 'none'`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_requested_at TIMESTAMPTZ`);

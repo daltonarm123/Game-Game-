@@ -1,5 +1,6 @@
-﻿import dotenv from "dotenv";
+import dotenv from "dotenv";
 import express from "express";
+import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import type { PoolClient } from "pg";
 import { z } from "zod";
 import { ensureSchema, pool, withTx } from "./db.js";
@@ -27,11 +28,28 @@ const ATTACK_RETURN_SECONDS = Math.max(
   Number(process.env.ATTACK_RETURN_SECONDS || (LOCAL_DEMO_FAST ? 20 : ATTACK_RETURN_MINUTES * 60)),
 );
 const SEASON_LENGTH_SECONDS = Math.max(30, Number(process.env.SEASON_LENGTH_SECONDS || (LOCAL_DEMO_FAST ? 60 : 7 * 24 * 3600)));
+const EXPLORE_LAND_CAP = 20_000;
+const EXPLORE_MIN_RETURN_SECONDS = LOCAL_DEMO_FAST ? 12 : 5 * 60;
+const EXPLORE_MAX_RETURN_SECONDS = LOCAL_DEMO_FAST ? 40 : 8 * 3600;
+const SPY_RETURN_SECONDS = LOCAL_DEMO_FAST ? 15 : 25 * 60;
+const DAILY_STREAK_CAP = 365;
 
 const registerBody = z.object({
   userId: z.string().min(1),
   username: z.string().min(1),
   kingdomName: z.string().min(2),
+});
+
+const authRegisterBody = z.object({
+  email: z.string().email(),
+  username: z.string().min(3).max(32),
+  password: z.string().min(8).max(128),
+  kingdomName: z.string().min(2).max(40),
+});
+
+const authLoginBody = z.object({
+  emailOrUsername: z.string().min(1),
+  password: z.string().min(8).max(128),
 });
 
 const buildBody = z.object({
@@ -55,6 +73,23 @@ const attackBody = z.object({
   }),
 });
 
+const exploreBody = z.object({
+  sentTroops: z.record(z.string(), z.number().int().min(0)).refine((v) => Object.values(v).some((n) => n > 0), {
+    message: "At least one troop amount must be > 0",
+  }),
+});
+
+const spyBody = z.object({
+  defenderKingdom: z.string().min(2),
+  spiesToSend: z.number().int().min(1).max(50000),
+});
+
+const sendPigeonBody = z.object({
+  toKingdom: z.string().min(2),
+  subject: z.string().min(1).max(120),
+  body: z.string().min(1).max(4000),
+});
+
 const demoResetBody = z.object({
   attackerName: z.string().min(2).optional().default("Elixer"),
   defenderName: z.string().min(2).optional().default("Galileo"),
@@ -76,6 +111,35 @@ const settlementUpgradeBody = z.object({
 const settlementRenameBody = z.object({
   settlementId: z.number().int().positive(),
   name: z.string().min(2).max(64),
+});
+
+const settlementFoundBody = z.object({
+  name: z.string().min(2).max(64),
+});
+
+const settlementBuildBody = z.object({
+  settlementId: z.number().int().positive(),
+  buildingCode: z.string().min(1),
+});
+
+const settlementDestroyBody = z.object({
+  settlementId: z.number().int().positive(),
+  buildingCode: z.string().min(1),
+});
+
+const settlementUpgradeCostBody = z.object({
+  settlementId: z.number().int().positive(),
+  buildingCode: z.string().min(1),
+});
+
+const settlementHistoryBody = z.object({
+  settlementId: z.number().int().positive(),
+});
+
+const settlementGarrisonBody = z.object({
+  settlementId: z.number().int().positive(),
+  troopCode: z.string().min(1),
+  amount: z.number().int().positive(),
 });
 
 const taxUpdateBody = z.object({
@@ -157,6 +221,68 @@ const TROOP_TRAIN_REQUIREMENTS: Record<string, { buildingCode: string; buildingN
 };
 
 const FOOTMAN_ELITE_PROMOTION_RATE = clamp(Number(process.env.FOOTMAN_ELITE_PROMOTION_RATE || 0.0025), 0, 0.05);
+const AUTH_SESSION_DAYS = 30;
+
+function normalizeEmail(input: string) {
+  return String(input || "").trim().toLowerCase();
+}
+
+function normalizeUsername(input: string) {
+  return String(input || "").trim();
+}
+
+function hashPassword(password: string) {
+  const salt = randomBytes(16).toString("hex");
+  const hash = scryptSync(password, salt, 64).toString("hex");
+  return `scrypt:${salt}:${hash}`;
+}
+
+function verifyPassword(password: string, stored: string | null | undefined) {
+  if (!stored || !stored.startsWith("scrypt:")) return false;
+  const parts = stored.split(":");
+  if (parts.length !== 3) return false;
+  const salt = parts[1];
+  const expectedHex = parts[2];
+  const actualHex = scryptSync(password, salt, 64).toString("hex");
+  const expected = Buffer.from(expectedHex, "hex");
+  const actual = Buffer.from(actualHex, "hex");
+  if (expected.length !== actual.length) return false;
+  return timingSafeEqual(expected, actual);
+}
+
+async function createAuthSession(c: PoolClient, userId: string) {
+  const token = randomBytes(32).toString("hex");
+  const q = await c.query(
+    `
+    INSERT INTO auth_sessions(token, user_id, expires_at)
+    VALUES ($1,$2, now() + ($3 || ' days')::interval)
+    RETURNING token, user_id, created_at, expires_at
+    `,
+    [token, userId, AUTH_SESSION_DAYS],
+  );
+  return q.rows[0];
+}
+
+async function getAuthSession(token: string) {
+  const q = await pool.query(
+    `
+    SELECT s.token, s.user_id, s.created_at, s.expires_at, u.username, u.email
+    FROM auth_sessions s
+    JOIN app_users u ON u.id = s.user_id
+    WHERE s.token=$1 AND s.expires_at > now()
+    LIMIT 1
+    `,
+    [token],
+  );
+  return q.rows[0] || null;
+}
+
+function extractAuthToken(req: express.Request) {
+  const h = String(req.headers.authorization || "").trim();
+  if (h.toLowerCase().startsWith("bearer ")) return h.slice(7).trim();
+  const alt = String(req.headers["x-auth-token"] || "").trim();
+  return alt || "";
+}
 
 function seasonByIndex(index: number) {
   return SEASONS[((index % SEASONS.length) + SEASONS.length) % SEASONS.length];
@@ -307,6 +433,105 @@ function applyLosses(units: Record<string, number>, pct: number, scope?: Record<
   return { losses, remaining: result };
 }
 
+const TROOP_CLASS: Record<string, "infantry" | "archer" | "cavalry" | "support"> = {
+  peasants: "support",
+  footmen: "infantry",
+  pikemen: "infantry",
+  elites: "infantry",
+  archers: "archer",
+  crossbowmen: "archer",
+  light_cavalry: "cavalry",
+  heavy_cavalry: "cavalry",
+  knights: "cavalry",
+  diplomats: "support",
+  priests: "support",
+  spies: "support",
+};
+
+const RPS_MULTIPLIER: Record<string, number> = {
+  "infantry:archer": 1.28,
+  "archer:cavalry": 1.24,
+  "cavalry:infantry": 1.28,
+  "archer:infantry": 0.84,
+  "cavalry:archer": 0.86,
+  "infantry:cavalry": 0.84,
+};
+
+function classForTroop(code: string): "infantry" | "archer" | "cavalry" | "support" {
+  return TROOP_CLASS[String(code || "").toLowerCase()] || "support";
+}
+
+function matchupMultiplier(attackerCode: string, defenderCode: string): number {
+  const atkClass = classForTroop(attackerCode);
+  const defClass = classForTroop(defenderCode);
+  return Number(RPS_MULTIPLIER[`${atkClass}:${defClass}`] || 1);
+}
+
+function normalizedShares(units: Record<string, number>) {
+  const entries = Object.entries(units).filter(([, qty]) => Number(qty || 0) > 0);
+  const total = entries.reduce((acc, [, qty]) => acc + Number(qty || 0), 0);
+  if (total <= 0) return [] as Array<[string, number]>;
+  return entries.map(([code, qty]) => [code, Number(qty || 0) / total] as [string, number]);
+}
+
+function effectivePowerVsComposition(
+  ownTroops: Record<string, number>,
+  ratings: Record<string, number>,
+  enemyTroops: Record<string, number>,
+) {
+  const enemyShares = normalizedShares(enemyTroops);
+  if (enemyShares.length === 0) {
+    return Object.entries(ownTroops).reduce((acc, [code, qty]) => acc + Number(qty || 0) * Number(ratings[code] || 0), 0);
+  }
+  let total = 0;
+  for (const [ownCode, ownQtyRaw] of Object.entries(ownTroops)) {
+    const ownQty = Number(ownQtyRaw || 0);
+    if (ownQty <= 0) continue;
+    const ownRating = Number(ratings[ownCode] || 0);
+    if (ownRating <= 0) continue;
+    let weighted = 0;
+    for (const [enemyCode, share] of enemyShares) {
+      weighted += share * matchupMultiplier(ownCode, enemyCode);
+    }
+    total += ownQty * ownRating * weighted;
+  }
+  return total;
+}
+
+function formatSecondsAsClock(seconds: number): string {
+  const s = Math.max(0, Math.floor(Number(seconds || 0)));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+}
+
+async function sendMailTx(
+  c: PoolClient,
+  kingdomId: number,
+  mailKind: "system" | "attack" | "spy" | "player",
+  subject: string,
+  body: string,
+) {
+  await c.query(
+    `INSERT INTO kingdom_mail(kingdom_id, mail_kind, subject, body) VALUES ($1,$2,$3,$4)`,
+    [kingdomId, mailKind, subject, body],
+  );
+}
+
+async function sendNoticeTx(
+  c: PoolClient,
+  kingdomId: number,
+  noticeType: "info" | "success" | "warning" | "error",
+  message: string,
+  payload: Record<string, any> = {},
+) {
+  await c.query(
+    `INSERT INTO kingdom_notifications(kingdom_id, notice_type, message, payload) VALUES ($1,$2,$3,$4::jsonb)`,
+    [kingdomId, noticeType, message, JSON.stringify(payload || {})],
+  );
+}
+
 function toLevelMap(rows: any[]): Record<string, number> {
   const out: Record<string, number> = {};
   for (const r of rows) out[String(r.building_code)] = Number(r.level || 0);
@@ -405,47 +630,67 @@ function expectedSettlementPlan(land: number) {
   return plan;
 }
 
+function settlementTypeDisplay(size: number) {
+  if (size >= 6) return "Large City";
+  if (size >= 5) return "Medium City";
+  if (size >= 4) return "Small City";
+  if (size >= 3) return "Large Town";
+  if (size >= 2) return "Medium Town";
+  return "Small Town";
+}
+
 async function ensureSettlementsForKingdom(c: PoolClient, kingdomId: number, kingdomName: string, land: number) {
   const current = await c.query(`SELECT id, name FROM settlements WHERE kingdom_id=$1 ORDER BY id ASC`, [kingdomId]);
   const plan = expectedSettlementPlan(land);
   const expectedTypes = plan.types;
 
-  for (let i = 0; i < expectedTypes.length; i += 1) {
+  if (!expectedTypes.length) return;
+
+  // Keep existing settlements aligned to currently unlocked size/types, but do not
+  // auto-create every unlocked slot. Additional slots are filled via "found settlement".
+  const keepCount = Math.min(current.rows.length, expectedTypes.length);
+  for (let i = 0; i < keepCount; i += 1) {
     const t = expectedTypes[i];
     const def = SETTLEMENT_TYPE_DEF[t];
     const slots = i === 0 ? Math.floor(def.slots * 1.3) : def.slots;
     const cur = current.rows[i];
-    if (cur) {
-      await c.query(
-        `UPDATE settlements SET settlement_type=$3, level=$4, slots_total=$5 WHERE id=$1 AND kingdom_id=$2`,
-        [cur.id, kingdomId, t, def.level, slots],
-      );
-      await c.query(
-        `
-        INSERT INTO settlement_buildings(settlement_id, building_code, level)
-        SELECT $1::bigint, code, 0 FROM settlement_building_types
-        ON CONFLICT (settlement_id, building_code) DO NOTHING
-        `,
-        [cur.id],
-      );
-    } else {
-      const name = i === 0 ? `${kingdomName} Capital` : `${kingdomName} ${i + 1}`;
-      const ins = await c.query(
-        `INSERT INTO settlements(kingdom_id, name, settlement_type, level, slots_total, wellbeing, wall_level)
-         VALUES ($1,$2,$3,$4,$5,0,0)
-         RETURNING id`,
-        [kingdomId, name, t, def.level, slots],
-      );
-      const settlementId = Number(ins.rows[0].id);
-      await c.query(
-        `
-        INSERT INTO settlement_buildings(settlement_id, building_code, level)
-        SELECT $1::bigint, code, 0 FROM settlement_building_types
-        ON CONFLICT (settlement_id, building_code) DO NOTHING
-        `,
-        [settlementId],
-      );
-    }
+    await c.query(
+      `UPDATE settlements SET settlement_type=$3, level=$4, slots_total=$5 WHERE id=$1 AND kingdom_id=$2`,
+      [cur.id, kingdomId, t, def.level, slots],
+    );
+    await c.query(
+      `
+      INSERT INTO settlement_buildings(settlement_id, building_code, level)
+      SELECT $1::bigint, code, 0 FROM settlement_building_types
+      ON CONFLICT (settlement_id, building_code) DO NOTHING
+      `,
+      [cur.id],
+    );
+  }
+
+  if (current.rows.length === 0) {
+    const firstType = expectedTypes[0];
+    const firstDef = SETTLEMENT_TYPE_DEF[firstType];
+    const firstSlots = Math.floor(firstDef.slots * 1.3);
+    const ins = await c.query(
+      `INSERT INTO settlements(kingdom_id, name, settlement_type, level, slots_total, wellbeing, wall_level)
+       VALUES ($1,$2,$3,$4,$5,0,0)
+       RETURNING id`,
+      [kingdomId, `${kingdomName} Capital`, firstType, firstDef.level, firstSlots],
+    );
+    const settlementId = Number(ins.rows[0].id);
+    await c.query(
+      `
+      INSERT INTO settlement_buildings(settlement_id, building_code, level)
+      SELECT $1::bigint, code, 0 FROM settlement_building_types
+      ON CONFLICT (settlement_id, building_code) DO NOTHING
+      `,
+      [settlementId],
+    );
+    await c.query(
+      `INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`,
+      [settlementId, "Settlement founded"],
+    );
   }
 }
 
@@ -510,6 +755,8 @@ function allianceMemberCap(hallLevel: number) {
 async function seedKingdom(c: PoolClient, opts: {
   userId: string;
   username: string;
+  email?: string | null;
+  passwordHash?: string | null;
   kingdomName: string;
   gold: number;
   food: number;
@@ -521,10 +768,15 @@ async function seedKingdom(c: PoolClient, opts: {
   troopAmounts?: Record<string, number>;
   researchLevels?: Record<string, number>;
 }) {
-  await c.query(`INSERT INTO app_users(id, username) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET username=EXCLUDED.username`, [
-    opts.userId,
-    opts.username,
-  ]);
+  await c.query(
+    `INSERT INTO app_users(id, username, email, password_hash)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT (id) DO UPDATE SET
+       username=EXCLUDED.username,
+       email=COALESCE(EXCLUDED.email, app_users.email),
+       password_hash=COALESCE(EXCLUDED.password_hash, app_users.password_hash)`,
+    [opts.userId, opts.username, opts.email || null, opts.passwordHash || null],
+  );
   const k = await c.query(
     `INSERT INTO kingdoms(user_id, name, gold, food, wood, stone, land, horses)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
@@ -583,6 +835,126 @@ app.get("/healthz", async (_req, res) => {
     res.json({ ok: true, service: "api", db: "up", ts: new Date().toISOString() });
   } catch (e: any) {
     res.status(500).json({ ok: false, service: "api", db: "down", error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/auth/register", async (req, res) => {
+  const parsed = authRegisterBody.safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const email = normalizeEmail(parsed.data.email);
+  const username = normalizeUsername(parsed.data.username);
+  const password = String(parsed.data.password || "");
+  const kingdomName = String(parsed.data.kingdomName || "").trim();
+  if (!email || !username || !password || !kingdomName) {
+    return res.status(400).json({ ok: false, error: "email, username, password, kingdomName required" });
+  }
+
+  try {
+    const out = await withTx(async (c) => {
+      const emailUsed = await c.query(`SELECT 1 FROM app_users WHERE LOWER(email)=LOWER($1) LIMIT 1`, [email]);
+      if (emailUsed.rowCount) throw new Error("email already in use");
+      const usernameUsed = await c.query(`SELECT 1 FROM app_users WHERE LOWER(username)=LOWER($1) LIMIT 1`, [username]);
+      if (usernameUsed.rowCount) throw new Error("username already in use");
+      const kingdomUsed = await c.query(`SELECT 1 FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdomName]);
+      if (kingdomUsed.rowCount) throw new Error("kingdom name already in use");
+
+      const userId = `u_${randomBytes(12).toString("hex")}`;
+      const kingdom = await seedKingdom(c, {
+        userId,
+        username,
+        email,
+        passwordHash: hashPassword(password),
+        kingdomName,
+        gold: 50_000,
+        food: 50_000,
+        wood: 5_000,
+        stone: 5_000,
+        land: 1_000,
+        horses: 0,
+      });
+      const session = await createAuthSession(c, userId);
+      return {
+        session,
+        user: { id: userId, username, email },
+        kingdom: { id: Number(kingdom.id), name: String(kingdom.name) },
+      };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/auth/login", async (req, res) => {
+  const parsed = authLoginBody.safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const emailOrUsername = String(parsed.data.emailOrUsername || "").trim();
+  const password = String(parsed.data.password || "");
+  if (!emailOrUsername || !password) return res.status(400).json({ ok: false, error: "credentials required" });
+  try {
+    const out = await withTx(async (c) => {
+      const u = await c.query(
+        `
+        SELECT id, username, email, password_hash
+        FROM app_users
+        WHERE LOWER(email)=LOWER($1) OR LOWER(username)=LOWER($1)
+        LIMIT 1
+        `,
+        [emailOrUsername],
+      );
+      if (!u.rowCount) throw new Error("invalid credentials");
+      const user = u.rows[0];
+      if (!verifyPassword(password, user.password_hash)) throw new Error("invalid credentials");
+      const k = await c.query(`SELECT id, name FROM kingdoms WHERE user_id=$1 LIMIT 1`, [user.id]);
+      if (!k.rowCount) throw new Error("account has no kingdom");
+      const session = await createAuthSession(c, String(user.id));
+      return {
+        session,
+        user: { id: String(user.id), username: String(user.username), email: String(user.email || "") },
+        kingdom: { id: Number(k.rows[0].id), name: String(k.rows[0].name) },
+      };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(401).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/auth/me", async (req, res) => {
+  const token = extractAuthToken(req);
+  if (!token) return res.status(401).json({ ok: false, error: "missing auth token" });
+  try {
+    const session = await getAuthSession(token);
+    if (!session) return res.status(401).json({ ok: false, error: "invalid or expired session" });
+    const kingdom = await pool.query(`SELECT id, name FROM kingdoms WHERE user_id=$1 LIMIT 1`, [session.user_id]);
+    return res.json({
+      ok: true,
+      session: {
+        token: String(session.token),
+        userId: String(session.user_id),
+        createdAt: session.created_at,
+        expiresAt: session.expires_at,
+      },
+      user: {
+        id: String(session.user_id),
+        username: String(session.username),
+        email: String(session.email || ""),
+      },
+      kingdom: kingdom.rowCount ? { id: Number(kingdom.rows[0].id), name: String(kingdom.rows[0].name) } : null,
+    });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/auth/logout", async (req, res) => {
+  const token = extractAuthToken(req);
+  if (!token) return res.status(400).json({ ok: false, error: "missing auth token" });
+  try {
+    await pool.query(`DELETE FROM auth_sessions WHERE token=$1`, [token]);
+    return res.json({ ok: true });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
@@ -761,7 +1133,7 @@ app.get("/api/kingdom/:name", async (req, res) => {
 
   try {
     const k = await pool.query(
-      `SELECT id, user_id, name, gold, wood, stone, food, land, horses, created_at, last_tick_at, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
+      `SELECT id, user_id, name, gold, wood, stone, food, land, horses, created_at, last_tick_at, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, daily_login_streak, daily_last_claimed_at
        FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`,
       [name],
     );
@@ -774,7 +1146,7 @@ app.get("/api/kingdom/:name", async (req, res) => {
       return 0;
     });
     const kresync = await pool.query(
-      `SELECT id, user_id, name, gold, wood, stone, food, land, horses, created_at, last_tick_at, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
+      `SELECT id, user_id, name, gold, wood, stone, food, land, horses, created_at, last_tick_at, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, daily_login_streak, daily_last_claimed_at
        FROM kingdoms
        WHERE id=$1
        LIMIT 1`,
@@ -1227,16 +1599,9 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
         if (have < sent) throw new Error(`not enough ${code} (have ${have}, need ${sent})`);
       }
 
-      let attackerPower = 0;
-      for (const [code, sent] of Object.entries(sentTroopsRaw)) {
-        if (sent <= 0) continue;
-        attackerPower += Number(sent) * Number(troopAtt[code] || 0);
-      }
-
-      let defenderPowerRaw = 0;
-      for (const [code, amount] of Object.entries(defenderTroops)) {
-        defenderPowerRaw += Number(amount) * Number(troopDef[code] || 0);
-      }
+      const sentOnly = Object.fromEntries(Object.entries(sentTroopsRaw).filter(([, v]) => v > 0));
+      const attackerPower = effectivePowerVsComposition(sentOnly, troopAtt, defenderTroops);
+      const defenderPowerRaw = effectivePowerVsComposition(defenderTroops, troopDef, sentOnly);
       const castles = Number(defCastle.rows[0]?.lvl || 0);
       const castleBonus = castles > 0 ? Math.sqrt(castles) / 100 : 0;
       const defenderPower = defenderPowerRaw * (1 + castleBonus);
@@ -1247,7 +1612,6 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
       const aLossPct = attackerLossPct(result);
       const dLossPct = defenderLossPct(result);
 
-      const sentOnly = Object.fromEntries(Object.entries(sentTroopsRaw).filter(([, v]) => v > 0));
       const attackerAfterSend: Record<string, number> = { ...attackerTroops };
       for (const [code, sent] of Object.entries(sentOnly)) {
         attackerAfterSend[code] = Number(attackerAfterSend[code] || 0) - Number(sent);
@@ -1331,12 +1695,17 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
                  WHERE id=$3`,
                 [def.id, atk.id, s.id],
               );
+              await c.query(`DELETE FROM settlement_garrison WHERE settlement_id=$1`, [s.id]);
               await c.query(
                 `
                 INSERT INTO settlement_capture_log(attacker_kingdom_id, defender_kingdom_id, settlement_id)
                 VALUES ($1,$2,$3)
                 `,
                 [atk.id, def.id, s.id],
+              );
+              await c.query(
+                `INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`,
+                [s.id, `Settlement captured by ${String(atk.name)}`],
               );
               capturedSettlement = {
                 id: s.id,
@@ -1377,6 +1746,14 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
         );
       }
 
+      const attackSummary = `${atk.name} vs ${def.name} • ${result} • Land ${landTaken.toLocaleString()} • Ratio ${Number(ratio || 0).toFixed(2)}`;
+      const attackerBody = `${attackSummary}\nAttacker losses: ${JSON.stringify(attackerBattle.losses)}\nDefender losses: ${JSON.stringify(defenderBattle.losses)}`;
+      const defenderBody = `${attackSummary}\nYour losses: ${JSON.stringify(defenderBattle.losses)}\nEnemy losses: ${JSON.stringify(attackerBattle.losses)}`;
+      await sendMailTx(c, Number(atk.id), "attack", `Attack Report #${rep.rows[0].id}`, attackerBody);
+      await sendMailTx(c, Number(def.id), "attack", `Defence Report #${rep.rows[0].id}`, defenderBody);
+      await sendNoticeTx(c, Number(atk.id), "success", `Attack ${result} vs ${def.name}. Land +${landTaken.toLocaleString()}`, { reportId: rep.rows[0].id });
+      await sendNoticeTx(c, Number(def.id), landTaken > 0 ? "warning" : "info", `${atk.name} attacked you: ${result}. Land ${landTaken > 0 ? "-" : ""}${landTaken.toLocaleString()}`, { reportId: rep.rows[0].id });
+
       return {
         report: rep.rows[0],
         result,
@@ -1392,6 +1769,255 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
       };
     });
 
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/war-room/:attacker/explore", async (req, res) => {
+  const attackerName = String(req.params.attacker || "").trim();
+  const parsed = exploreBody.safeParse(req.body);
+  if (!attackerName) return res.status(400).json({ ok: false, error: "attacker kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+
+  const sentTroopsRaw = Object.fromEntries(
+    Object.entries(parsed.data.sentTroops).map(([k, v]) => [String(k).toLowerCase(), Number(v || 0)]),
+  );
+
+  try {
+    const out = await withTx(async (c) => {
+      const a = await c.query(
+        `SELECT id, name, land, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        [attackerName],
+      );
+      if (!a.rowCount) throw new Error("attacker kingdom not found");
+      const atk = a.rows[0];
+      if (Number(atk.land || 0) >= EXPLORE_LAND_CAP) {
+        throw new Error(`explore unavailable at ${EXPLORE_LAND_CAP.toLocaleString()} land cap`);
+      }
+
+      const atkShieldRow = await normalizeShieldStateTx(c, Number(atk.id));
+      const atkShield = shieldStateFromRow(atkShieldRow || atk);
+      if (!atkShield.canAttack) {
+        throw new Error(`cannot explore while shield status is ${atkShield.status}`);
+      }
+
+      const atkRows = await c.query(
+        `SELECT kt.troop_code, kt.amount, tt.att_rating, tt.def_rating
+         FROM kingdom_troops kt
+         JOIN troop_types tt ON tt.code = kt.troop_code
+         WHERE kt.kingdom_id=$1`,
+        [atk.id],
+      );
+
+      const attackerTroops: Record<string, number> = {};
+      const troopAtt: Record<string, number> = {};
+      const troopDef: Record<string, number> = {};
+      for (const r of atkRows.rows) {
+        const code = String(r.troop_code || "");
+        attackerTroops[code] = Number(r.amount || 0);
+        troopAtt[code] = Number(r.att_rating || 0);
+        troopDef[code] = Number(r.def_rating || 0);
+      }
+
+      const sentOnly = Object.fromEntries(Object.entries(sentTroopsRaw).filter(([, v]) => v > 0));
+      for (const [code, sent] of Object.entries(sentOnly)) {
+        const have = Number(attackerTroops[code] || 0);
+        if (have < sent) throw new Error(`not enough ${code} (have ${have}, need ${sent})`);
+      }
+
+      const totalSent = Object.values(sentOnly).reduce((acc, v) => acc + Number(v || 0), 0);
+      if (totalSent <= 0) throw new Error("send at least one troop to explore");
+
+      const sentPower = Object.entries(sentOnly).reduce((acc, [code, qty]) => {
+        const base = Number(qty || 0);
+        const aRating = Number(troopAtt[code] || 0);
+        const dRating = Number(troopDef[code] || 0);
+        return acc + base * Math.max(0.1, aRating * 0.75 + dRating * 0.25);
+      }, 0);
+
+      const remainingCap = Math.max(0, EXPLORE_LAND_CAP - Number(atk.land || 0));
+      const randomness = 0.82 + Math.random() * 0.46;
+      const baseLand = Math.max(1, Math.floor(Math.pow(Math.max(1, sentPower), 0.49) * 1.35 * randomness));
+      const landFound = Math.max(1, Math.min(remainingCap, baseLand));
+
+      const sentPressure = totalSent + sentPower * 0.14;
+      const pace = clamp(sentPressure / 40000, 0, 1);
+      const returnSeconds = Math.round(
+        EXPLORE_MIN_RETURN_SECONDS + (EXPLORE_MAX_RETURN_SECONDS - EXPLORE_MIN_RETURN_SECONDS) * Math.pow(pace, 0.85),
+      );
+
+      const attackerAfterSend: Record<string, number> = { ...attackerTroops };
+      for (const [code, sent] of Object.entries(sentOnly)) {
+        attackerAfterSend[code] = Number(attackerAfterSend[code] || 0) - Number(sent);
+      }
+      for (const [code, amount] of Object.entries(attackerAfterSend)) {
+        await c.query(`UPDATE kingdom_troops SET amount=$3 WHERE kingdom_id=$1 AND troop_code=$2`, [atk.id, code, Math.max(0, Math.floor(amount))]);
+      }
+
+      const newLand = Number(atk.land || 0) + landFound;
+      await c.query(`UPDATE kingdoms SET land=$2 WHERE id=$1`, [atk.id, newLand]);
+
+      for (const [code, qty] of Object.entries(sentOnly)) {
+        await c.query(
+          `INSERT INTO troop_movements(owner_kingdom_id, owner_kingdom_name, target_kingdom_id, target_kingdom_name, troop_code, quantity, departed_at, returns_at, status)
+           VALUES ($1,$2,NULL,'Wilderness',$3,$4,now(), now() + ($5 || ' seconds')::interval, 'out')`,
+          [atk.id, atk.name, code, Math.floor(Number(qty || 0)), returnSeconds],
+        );
+      }
+
+      await sendMailTx(
+        c,
+        Number(atk.id),
+        "system",
+        "Explore Report",
+        `Exploration succeeded.\nLand gained: ${landFound.toLocaleString()}\nNew total land: ${newLand.toLocaleString()}\nTroops return in: ${formatSecondsAsClock(returnSeconds)}`,
+      );
+      await sendNoticeTx(
+        c,
+        Number(atk.id),
+        "success",
+        `Explore +${landFound.toLocaleString()} land. Troops return in ${formatSecondsAsClock(returnSeconds)}.`,
+        { landFound, returnSeconds },
+      );
+
+      return {
+        landFound,
+        newLand,
+        sentTroops: sentOnly,
+        returnSeconds,
+        returnEta: formatSecondsAsClock(returnSeconds),
+      };
+    });
+
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/war-room/:attacker/spy", async (req, res) => {
+  const attackerName = String(req.params.attacker || "").trim();
+  const parsed = spyBody.safeParse(req.body);
+  if (!attackerName) return res.status(400).json({ ok: false, error: "attacker kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const defenderName = parsed.data.defenderKingdom.trim();
+  const spiesToSend = Math.max(1, Number(parsed.data.spiesToSend || 0));
+
+  try {
+    const out = await withTx(async (c) => {
+      const a = await c.query(
+        `SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        [attackerName],
+      );
+      if (!a.rowCount) throw new Error("attacker kingdom not found");
+      const d = await c.query(
+        `SELECT id, name, land, gold, food, wood, stone, horses FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        [defenderName],
+      );
+      if (!d.rowCount) throw new Error("defender kingdom not found");
+      const atk = a.rows[0];
+      const def = d.rows[0];
+      if (Number(atk.id) === Number(def.id)) throw new Error("cannot spy yourself");
+
+      const atkSpy = await c.query(
+        `SELECT amount FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='spies' LIMIT 1`,
+        [atk.id],
+      );
+      const defSpy = await c.query(
+        `SELECT amount FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='spies' LIMIT 1`,
+        [def.id],
+      );
+      const atkHave = Number(atkSpy.rows[0]?.amount || 0);
+      const defHave = Number(defSpy.rows[0]?.amount || 0);
+      if (atkHave < spiesToSend) throw new Error(`not enough spies (have ${atkHave}, need ${spiesToSend})`);
+
+      const spyGlassAtk = await c.query(
+        `SELECT level FROM kingdom_research WHERE kingdom_id=$1 AND research_code='spy_glass' LIMIT 1`,
+        [atk.id],
+      );
+      const spyGlassDef = await c.query(
+        `SELECT level FROM kingdom_research WHERE kingdom_id=$1 AND research_code='spy_glass' LIMIT 1`,
+        [def.id],
+      );
+      const atkBonus = 1 + Number(spyGlassAtk.rows[0]?.level || 0) * 0.02;
+      const defBonus = 1 + Number(spyGlassDef.rows[0]?.level || 0) * 0.02;
+
+      const atkPower = spiesToSend * atkBonus;
+      const defPower = Math.max(1, defHave * defBonus);
+      const ratio = atkPower / defPower;
+      const success = ratio >= 0.95 || Math.random() < ratio;
+
+      let spyLosses = Math.max(0, Math.floor(spiesToSend * (success ? 0.08 : 0.3)));
+      spyLosses = clamp(spyLosses, 0, spiesToSend);
+      const survivors = spiesToSend - spyLosses;
+      const defenderSpyLosses = success ? Math.max(0, Math.floor(defHave * 0.04)) : 0;
+
+      await c.query(`UPDATE kingdom_troops SET amount=amount-$2 WHERE kingdom_id=$1 AND troop_code='spies'`, [atk.id, spiesToSend]);
+      await c.query(`UPDATE kingdom_troops SET amount=GREATEST(0, amount-$2) WHERE kingdom_id=$1 AND troop_code='spies'`, [def.id, defenderSpyLosses]);
+
+      if (survivors > 0) {
+        await c.query(
+          `INSERT INTO troop_movements(owner_kingdom_id, owner_kingdom_name, target_kingdom_id, target_kingdom_name, troop_code, quantity, departed_at, returns_at, status)
+           VALUES ($1,$2,$3,$4,'spies',$5,now(), now() + ($6 || ' seconds')::interval, 'out')`,
+          [atk.id, atk.name, def.id, def.name, survivors, SPY_RETURN_SECONDS],
+        );
+      }
+
+      const intel = success
+        ? {
+            land: Number(def.land || 0),
+            gold: Number(def.gold || 0),
+            food: Number(def.food || 0),
+            wood: Number(def.wood || 0),
+            stone: Number(def.stone || 0),
+            horses: Number(def.horses || 0),
+            spiesHome: defHave,
+          }
+        : null;
+
+      await sendMailTx(
+        c,
+        Number(atk.id),
+        "spy",
+        `Spy Report: ${def.name}`,
+        success
+          ? `Spy mission successful.\nIntel: ${JSON.stringify(intel)}\nSpies lost: ${spyLosses.toLocaleString()}\nSpies returning: ${survivors.toLocaleString()}`
+          : `Spy mission failed.\nSpies lost: ${spyLosses.toLocaleString()}\nSpies returning: ${survivors.toLocaleString()}`,
+      );
+      await sendMailTx(
+        c,
+        Number(def.id),
+        "spy",
+        `Counterintelligence Report`,
+        `${atk.name} sent spies to your kingdom.\nEnemy spies sent: ${spiesToSend.toLocaleString()}\nEnemy spies lost: ${spyLosses.toLocaleString()}\nYour spies lost: ${defenderSpyLosses.toLocaleString()}`,
+      );
+      await sendNoticeTx(
+        c,
+        Number(atk.id),
+        success ? "success" : "warning",
+        success ? `Spy mission succeeded against ${def.name}.` : `Spy mission failed against ${def.name}.`,
+        { defender: def.name, success, spyLosses, survivors },
+      );
+      await sendNoticeTx(
+        c,
+        Number(def.id),
+        "warning",
+        `${atk.name} attempted espionage on your kingdom.`,
+        { attacker: atk.name, spiesToSend },
+      );
+
+      return {
+        success,
+        ratio: Number(ratio.toFixed(3)),
+        spiesSent: spiesToSend,
+        spyLosses,
+        survivorsReturning: survivors,
+        returnSeconds: SPY_RETURN_SECONDS,
+        intel,
+      };
+    });
     return res.json({ ok: true, ...out });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });
@@ -1545,6 +2171,14 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
        LIMIT 50`,
       [row.id],
     );
+    const movements = await pool.query(
+      `SELECT id, troop_code, quantity, target_kingdom_name, departed_at, returns_at, status, source_attack_report_id
+       FROM troop_movements
+       WHERE owner_kingdom_id=$1 AND status='out' AND returns_at > now()
+       ORDER BY returns_at ASC
+       LIMIT 80`,
+      [row.id],
+    );
 
     return res.json({
       ok: true,
@@ -1553,6 +2187,7 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
         name: row.name,
         rank: Number(rankQ.rows[0]?.rank || 0),
         networth: Number(rankQ.rows[0]?.networth || 0),
+        land: Number(row.land || 0),
         populationHome: troops.reduce((a, b) => a + Number(b.home || 0), 0),
         populationTrain: troops.reduce((a, b) => a + Number(b.train || 0), 0),
         populationAway: troops.reduce((a, b) => a + Number(b.away || 0), 0),
@@ -1563,9 +2198,17 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
       },
       troops,
       training: training.rows,
+      movements: movements.rows,
       season,
       shield: shieldStateFromRow(row),
-      actions: ["Train Troops", "Attack Kingdom"],
+      explore: {
+        landCap: EXPLORE_LAND_CAP,
+        remaining: Math.max(0, EXPLORE_LAND_CAP - Number(row.land || 0)),
+        minReturnSeconds: EXPLORE_MIN_RETURN_SECONDS,
+        maxReturnSeconds: EXPLORE_MAX_RETURN_SECONDS,
+      },
+      tickIntervalSeconds: LOCAL_DEMO_FAST ? 5 : 300,
+      actions: ["Train Troops", "Attack Kingdom", "Explore"],
     });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
@@ -1585,6 +2228,290 @@ app.get("/api/war-room/reports/:kingdom", async (req, res) => {
     return res.json({ ok: true, items: rows.rows });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/rankings/kingdoms", async (req, res) => {
+  const limit = clamp(Number(req.query.limit || 20), 1, 200);
+  const offset = Math.max(0, Math.floor(Number(req.query.offset || 0)));
+  const search = String(req.query.search || "").trim().toLowerCase();
+  const searchLike = `%${search}%`;
+  try {
+    const rows = await pool.query(
+      `
+      WITH home AS (
+        SELECT kingdom_id, troop_code, COALESCE(SUM(amount),0) AS qty
+        FROM kingdom_troops
+        GROUP BY kingdom_id, troop_code
+      ),
+      train AS (
+        SELECT kingdom_id, troop_code, COALESCE(SUM(quantity),0) AS qty
+        FROM train_queue
+        WHERE status='queued'
+        GROUP BY kingdom_id, troop_code
+      ),
+      away AS (
+        SELECT owner_kingdom_id AS kingdom_id, troop_code, COALESCE(SUM(quantity),0) AS qty
+        FROM troop_movements
+        WHERE status='out' AND returns_at > now()
+        GROUP BY owner_kingdom_id, troop_code
+      ),
+      totals AS (
+        SELECT
+          COALESCE(h.kingdom_id, t.kingdom_id, a.kingdom_id) AS kingdom_id,
+          COALESCE(h.troop_code, t.troop_code, a.troop_code) AS troop_code,
+          COALESCE(h.qty,0) + COALESCE(t.qty,0) + COALESCE(a.qty,0) AS qty
+        FROM home h
+        FULL OUTER JOIN train t
+          ON t.kingdom_id = h.kingdom_id
+         AND t.troop_code = h.troop_code
+        FULL OUTER JOIN away a
+          ON a.kingdom_id = COALESCE(h.kingdom_id, t.kingdom_id)
+         AND a.troop_code = COALESCE(h.troop_code, t.troop_code)
+      ),
+      troop_nw AS (
+        SELECT t.kingdom_id, COALESCE(SUM(t.qty * ty.nw_value),0) AS troop_nw
+        FROM totals t
+        JOIN troop_types ty ON ty.code = t.troop_code
+        GROUP BY t.kingdom_id
+      ),
+      raw AS (
+        SELECT
+          k.id,
+          k.name,
+          COALESCE(a.slug, '') AS alliance_tag,
+          (k.land * 0.04 + k.food * 0.0001 + k.gold * 0.0005 + k.stone * 0.0002 + k.wood * 0.0002 + COALESCE(tn.troop_nw, 0)) AS networth
+        FROM kingdoms k
+        LEFT JOIN troop_nw tn ON tn.kingdom_id = k.id
+        LEFT JOIN alliance_members am ON am.kingdom_id = k.id
+        LEFT JOIN alliances a ON a.id = am.alliance_id
+      ),
+      ranked AS (
+        SELECT id, name, alliance_tag, networth, ROW_NUMBER() OVER (ORDER BY networth DESC, id ASC) AS rank
+        FROM raw
+      ),
+      filtered AS (
+        SELECT * FROM ranked
+        WHERE ($1 = '' OR LOWER(name) LIKE $2 OR LOWER(alliance_tag) LIKE $2)
+      )
+      SELECT id, name, alliance_tag, networth, rank,
+             COUNT(*) OVER()::int AS total_filtered
+      FROM filtered
+      ORDER BY rank ASC
+      OFFSET $3 LIMIT $4
+      `,
+      [search, searchLike, offset, limit],
+    );
+
+    const items = rows.rows.map((r) => ({
+      id: Number(r.id),
+      rank: Number(r.rank || 0),
+      name: String(r.name || ""),
+      allianceTag: String(r.alliance_tag || ""),
+      networth: Number(r.networth || 0),
+    }));
+    const total = Number(rows.rows[0]?.total_filtered || 0);
+    return res.json({ ok: true, items, total, limit, offset });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/rankings/kingdoms/:name/nw-history", async (req, res) => {
+  const name = String(req.params.name || "").trim();
+  const limit = clamp(Number(req.query.limit || 288), 10, 2000);
+  if (!name) return res.status(400).json({ ok: false, error: "kingdom required" });
+  try {
+    const k = await pool.query(`SELECT id, name, land, food, gold, stone, wood FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [name]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const kingdom = k.rows[0];
+    const rows = await pool.query(
+      `SELECT id, networth, recorded_at
+       FROM kingdom_networth_history
+       WHERE kingdom_id=$1
+       ORDER BY recorded_at DESC
+       LIMIT $2`,
+      [kingdom.id, limit],
+    );
+    let items = rows.rows
+      .slice()
+      .reverse()
+      .map((r) => ({ id: Number(r.id), networth: Number(r.networth || 0), recordedAt: r.recorded_at }));
+    if (items.length === 0) {
+      const nw = Number(kingdom.land || 0) * 0.04 + Number(kingdom.food || 0) * 0.0001 + Number(kingdom.gold || 0) * 0.0005 + Number(kingdom.stone || 0) * 0.0002 + Number(kingdom.wood || 0) * 0.0002;
+      await pool.query(
+        `INSERT INTO kingdom_networth_history(kingdom_id, networth, recorded_at) VALUES ($1,$2,now())`,
+        [kingdom.id, Number(nw.toFixed(2))],
+      );
+      items = [{ id: 0, networth: Number(nw.toFixed(2)), recordedAt: new Date().toISOString() }];
+    }
+    return res.json({ ok: true, kingdom: kingdom.name, items });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/pigeons/:kingdom", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const limit = clamp(Number(req.query.limit || 100), 1, 300);
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  try {
+    const k = await pool.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const kingdomId = Number(k.rows[0].id);
+    const rows = await pool.query(
+      `SELECT id, mail_kind, subject, body, created_at, read_at
+       FROM kingdom_mail
+       WHERE kingdom_id=$1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [kingdomId, limit],
+    );
+    const unread = await pool.query(`SELECT COUNT(*)::int AS n FROM kingdom_mail WHERE kingdom_id=$1 AND read_at IS NULL`, [kingdomId]);
+    return res.json({ ok: true, unread: Number(unread.rows[0]?.n || 0), items: rows.rows });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/pigeons/:kingdom/send", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = sendPigeonBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  try {
+    const out = await withTx(async (c) => {
+      const fromQ = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
+      if (!fromQ.rowCount) throw new Error("sender kingdom not found");
+      const toQ = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [parsed.data.toKingdom]);
+      if (!toQ.rowCount) throw new Error("target kingdom not found");
+      const from = fromQ.rows[0];
+      const to = toQ.rows[0];
+      if (Number(from.id) === Number(to.id)) throw new Error("cannot send pigeon to yourself");
+
+      const cleanSubject = parsed.data.subject.trim();
+      const cleanBody = parsed.data.body.trim();
+      await sendMailTx(c, Number(to.id), "player", `${cleanSubject}`, `From ${from.name}\n\n${cleanBody}`);
+      await sendMailTx(c, Number(from.id), "player", `Sent: ${cleanSubject}`, `To ${to.name}\n\n${cleanBody}`);
+      await sendNoticeTx(c, Number(to.id), "info", `New pigeon from ${from.name}: ${cleanSubject}`, { from: from.name });
+      return { to: to.name, subject: cleanSubject };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/pigeons/:kingdom/:mailId/read", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const mailId = Number(req.params.mailId || 0);
+  if (!kingdom || !mailId) return res.status(400).json({ ok: false, error: "kingdom and mailId required" });
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(k.rows[0].id);
+      await c.query(`UPDATE kingdom_mail SET read_at=COALESCE(read_at, now()) WHERE id=$1 AND kingdom_id=$2`, [mailId, kingdomId]);
+      return kingdomId;
+    });
+    return res.json({ ok: true, kingdomId: out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/notifications/:kingdom", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const limit = clamp(Number(req.query.limit || 30), 1, 100);
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  try {
+    const k = await pool.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const kingdomId = Number(k.rows[0].id);
+    const rows = await pool.query(
+      `SELECT id, notice_type, message, payload, created_at, seen_at
+       FROM kingdom_notifications
+       WHERE kingdom_id=$1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [kingdomId, limit],
+    );
+    return res.json({ ok: true, items: rows.rows });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/notifications/:kingdom/ack", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const sinceId = Number(req.body?.sinceId || 0);
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(k.rows[0].id);
+      if (sinceId > 0) {
+        await c.query(`UPDATE kingdom_notifications SET seen_at=now() WHERE kingdom_id=$1 AND id <= $2 AND seen_at IS NULL`, [kingdomId, sinceId]);
+      } else {
+        await c.query(`UPDATE kingdom_notifications SET seen_at=now() WHERE kingdom_id=$1 AND seen_at IS NULL`, [kingdomId]);
+      }
+      return kingdomId;
+    });
+    return res.json({ ok: true, kingdomId: out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/kingdom/:name/daily-bonus/claim", async (req, res) => {
+  const name = String(req.params.name || "").trim();
+  if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(
+        `SELECT id, name, gold, food, wood, stone, daily_login_streak, daily_last_claimed_at
+         FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        [name],
+      );
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const row = k.rows[0];
+      const now = new Date();
+      const last = row.daily_last_claimed_at ? new Date(row.daily_last_claimed_at) : null;
+      if (last && last.toDateString() === now.toDateString()) {
+        return { claimed: false, message: "daily bonus already claimed today", streak: Number(row.daily_login_streak || 0) };
+      }
+
+      const yesterday = new Date(now.getTime() - 24 * 3600 * 1000).toDateString();
+      const continued = last ? last.toDateString() === yesterday : false;
+      const nextStreak = continued ? Number(row.daily_login_streak || 0) + 1 : 1;
+      const streakUsed = clamp(nextStreak, 1, DAILY_STREAK_CAP);
+      const scale = 1 + Math.log2(1 + streakUsed) * 0.2;
+      const randomMult = 0.9 + Math.random() * 0.2;
+
+      const gold = Math.min(900000, Math.floor(3500 * scale * randomMult));
+      const food = Math.min(1200000, Math.floor(4500 * scale * randomMult));
+      const wood = Math.min(500000, Math.floor(1700 * scale * randomMult));
+      const stone = Math.min(500000, Math.floor(1700 * scale * randomMult));
+      const horses = Math.min(12000, Math.floor(25 * Math.sqrt(streakUsed) * randomMult));
+
+      await c.query(
+        `UPDATE kingdoms
+         SET gold=gold+$2, food=food+$3, wood=wood+$4, stone=stone+$5, horses=horses+$6,
+             daily_login_streak=$7, daily_last_claimed_at=now()
+         WHERE id=$1`,
+        [row.id, gold, food, wood, stone, horses, nextStreak],
+      );
+      const subject = `Daily Bonus Day ${nextStreak}`;
+      const body = `Daily bonus granted.\nStreak: ${nextStreak}\nGold +${gold.toLocaleString()}\nFood +${food.toLocaleString()}\nWood +${wood.toLocaleString()}\nStone +${stone.toLocaleString()}\nHorses +${horses.toLocaleString()}`;
+      await sendMailTx(c, Number(row.id), "system", subject, body);
+      await sendNoticeTx(c, Number(row.id), "success", `Daily bonus claimed: +${gold.toLocaleString()} gold, +${food.toLocaleString()} food`, { streak: nextStreak });
+      return { claimed: true, streak: nextStreak, rewards: { gold, food, wood, stone, horses } };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
@@ -1778,7 +2705,7 @@ app.get("/api/settlements/:kingdom", async (req, res) => {
     );
     const buildings = await pool.query(
       `
-      SELECT sb.settlement_id, sb.building_code, sb.level, bt.name, bt.effect_text, bt.base_gold, bt.base_stone, bt.base_wood, bt.max_level, bt.city_only
+      SELECT sb.settlement_id, sb.building_code, sb.level, bt.name, bt.effect_text, bt.base_gold, bt.base_stone, bt.base_wood, bt.required_settlement_size, bt.base_build_seconds, bt.max_level, bt.city_only
       FROM settlement_buildings sb
       JOIN settlement_building_types bt ON bt.code = sb.building_code
       JOIN settlements s ON s.id = sb.settlement_id
@@ -1797,9 +2724,21 @@ app.get("/api/settlements/:kingdom", async (req, res) => {
       [kr.id],
     );
     const catalog = await pool.query(
-      `SELECT code, name, effect_text, base_gold, base_stone, base_wood, max_level, city_only
+      `SELECT code, name, effect_text, base_gold, base_stone, base_wood, required_settlement_size, base_build_seconds, max_level, city_only
        FROM settlement_building_types
        ORDER BY name`,
+    );
+
+    const garrison = await pool.query(
+      `
+      SELECT sg.settlement_id, sg.troop_code, tt.name AS troop_name, sg.amount
+      FROM settlement_garrison sg
+      JOIN settlements s ON s.id = sg.settlement_id
+      JOIN troop_types tt ON tt.code = sg.troop_code
+      WHERE s.kingdom_id = $1
+      ORDER BY sg.settlement_id, sg.troop_code
+      `,
+      [kr.id],
     );
 
     const maintenance = await pool.query(
@@ -1826,23 +2765,76 @@ app.get("/api/settlements/:kingdom", async (req, res) => {
       });
     }
 
-    const settlementsWithMeta = settlements.rows.map((s) => ({
-      ...s,
-      maintenance: maintMap.get(Number(s.id)) || { gold: 0, stone: 0, wood: 0 },
-    }));
+    const garrisonMap = new Map<number, Array<{ troopCode: string; troopName: string; amount: number }>>();
+    for (const g of garrison.rows) {
+      const sid = Number(g.settlement_id);
+      const cur = garrisonMap.get(sid) || [];
+      cur.push({
+        troopCode: String(g.troop_code),
+        troopName: String(g.troop_name),
+        amount: Number(g.amount || 0),
+      });
+      garrisonMap.set(sid, cur);
+    }
+
+    const settlementsWithMeta = settlements.rows.map((s, idx) => {
+      const sid = Number(s.id);
+      const gRows = garrisonMap.get(sid) || [];
+      const footmen = gRows
+        .filter((g) => String(g.troopCode) === "footmen")
+        .reduce((a, g) => a + Number(g.amount || 0), 0);
+      const garrisonWellbeingBonus = Math.floor(footmen / 100);
+      const baseWellbeing = Number(s.wellbeing || 0);
+      return {
+        ...s,
+        isCapital: idx === 0,
+        maintenance: maintMap.get(sid) || { gold: 0, stone: 0, wood: 0 },
+        garrison: gRows,
+        garrisonWellbeingBonus,
+        wellbeing: baseWellbeing + garrisonWellbeingBonus,
+        baseWellbeing,
+      };
+    });
     const avgWellbeing = settlementsWithMeta.length
       ? Math.floor(settlementsWithMeta.reduce((a, s) => a + Number(s.wellbeing || 0), 0) / settlementsWithMeta.length)
       : 0;
     const totalSettlementRank = settlementsWithMeta.reduce((a, s) => a + Number(s.level || 0), 0);
     const plan = expectedSettlementPlan(Number(kr.land || 0));
+    const settlementSlots = Array.from({ length: plan.types.length }, (_v, i) => {
+      const built = settlementsWithMeta[i];
+      if (built) return { ...built, isBuilt: true };
+      const t = plan.types[i];
+      const def = SETTLEMENT_TYPE_DEF[t];
+      const slots = i === 0 ? Math.floor(def.slots * 1.3) : def.slots;
+      return {
+        isBuilt: false,
+        isCapital: i === 0,
+        slotIndex: i,
+        settlement_type: t,
+        requiredType: settlementTypeDisplay(def.level),
+        level: def.level,
+        slots_total: slots,
+        wellbeing: 0,
+        baseWellbeing: 0,
+        garrisonWellbeingBonus: 0,
+        maintenance: { gold: 0, stone: 0, wood: 0 },
+        garrison: [],
+      };
+    });
+
+    const catalogWithReq = catalog.rows.map((r) => ({
+      ...r,
+      requiredSettlementType: settlementTypeDisplay(Math.max(1, Number(r.required_settlement_size || 1))),
+    }));
 
     return res.json({
       ok: true,
       kingdom: { id: kr.id, name: kr.name, land: Number(kr.land || 0), gold: Number(kr.gold || 0), wood: Number(kr.wood || 0), stone: Number(kr.stone || 0) },
       settlements: settlementsWithMeta,
+      settlementSlots,
       buildings: buildings.rows,
       queue: queue.rows,
-      catalog: catalog.rows,
+      catalog: catalogWithReq,
       unlockedByLand: plan.types.length,
       unlockPlan: plan.types,
       averageWellbeing: avgWellbeing,
@@ -1850,6 +2842,238 @@ app.get("/api/settlements/:kingdom", async (req, res) => {
     });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/settlements/:kingdom/building-types", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  try {
+    const k = await pool.query(`SELECT id, land FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const rows = await pool.query(
+      `
+      SELECT code, name, effect_text, base_gold, base_stone, base_wood, required_settlement_size, base_build_seconds, max_level, city_only
+      FROM settlement_building_types
+      ORDER BY name
+      `,
+    );
+    return res.json({
+      ok: true,
+      types: rows.rows.map((r) => ({
+        ...r,
+        requiredSettlementType: settlementTypeDisplay(Math.max(1, Number(r.required_settlement_size || 1))),
+      })),
+    });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/settlements/:kingdom/found", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = settlementFoundBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const name = String(parsed.data.name || "").trim();
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id, name, land FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kr = k.rows[0];
+
+      await ensureSettlementsForKingdom(c, Number(kr.id), String(kr.name), Number(kr.land || 0));
+      const plan = expectedSettlementPlan(Number(kr.land || 0));
+      if (!plan.types.length) throw new Error("kingdom too small to support settlements");
+
+      const existing = await c.query(`SELECT id FROM settlements WHERE kingdom_id=$1 ORDER BY id ASC`, [kr.id]);
+      const slotIndex = Number(existing.rowCount || 0);
+      if (slotIndex >= plan.types.length) throw new Error("no free settlement slots available");
+
+      const settlementType = plan.types[slotIndex];
+      const def = SETTLEMENT_TYPE_DEF[settlementType];
+      const slots = slotIndex === 0 ? Math.floor(def.slots * 1.3) : def.slots;
+      const ins = await c.query(
+        `INSERT INTO settlements(kingdom_id, name, settlement_type, level, slots_total, wellbeing, wall_level)
+         VALUES ($1,$2,$3,$4,$5,0,0)
+         RETURNING id, name, settlement_type, level, slots_total, wellbeing, wall_level`,
+        [kr.id, name, settlementType, def.level, slots],
+      );
+      const settlementId = Number(ins.rows[0].id);
+      await c.query(
+        `
+        INSERT INTO settlement_buildings(settlement_id, building_code, level)
+        SELECT $1::bigint, code, 0 FROM settlement_building_types
+        ON CONFLICT (settlement_id, building_code) DO NOTHING
+        `,
+        [settlementId],
+      );
+      await c.query(`INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`, [settlementId, "Settlement founded"]);
+      return ins.rows[0];
+    });
+    return res.json({ ok: true, settlement: out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/settlements/:kingdom/build-building", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = settlementBuildBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const settlementId = Number(parsed.data.settlementId);
+  const buildingCode = String(parsed.data.buildingCode || "").toLowerCase();
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id, gold, stone, wood FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kr = k.rows[0];
+      const s = await c.query(`SELECT id, settlement_type, level FROM settlements WHERE id=$1 AND kingdom_id=$2 FOR UPDATE`, [settlementId, kr.id]);
+      if (!s.rowCount) throw new Error("settlement not found");
+      const st = s.rows[0];
+
+      const bt = await c.query(
+        `
+        SELECT code, name, base_gold, base_stone, base_wood, required_settlement_size, base_build_seconds, city_only
+        FROM settlement_building_types
+        WHERE code=$1
+        LIMIT 1
+        `,
+        [buildingCode],
+      );
+      if (!bt.rowCount) throw new Error("unknown settlement building");
+      const def = bt.rows[0];
+      const isCity = String(st.settlement_type || "").includes("city");
+      if (Boolean(def.city_only) && !isCity) throw new Error("building requires a city settlement");
+      if (Number(st.level || 1) < Number(def.required_settlement_size || 1)) {
+        throw new Error(
+          `building requires settlement size ${Number(def.required_settlement_size || 1)} (${settlementTypeDisplay(Number(def.required_settlement_size || 1))})`,
+        );
+      }
+
+      const sb = await c.query(`SELECT level FROM settlement_buildings WHERE settlement_id=$1 AND building_code=$2 LIMIT 1`, [settlementId, buildingCode]);
+      const currentLevel = Number(sb.rows[0]?.level || 0);
+      if (currentLevel > 0) throw new Error("building already exists; use upgrade");
+
+      const inQueue = await c.query(`SELECT 1 FROM settlement_build_queue WHERE settlement_id=$1 AND building_code=$2 AND status='queued' LIMIT 1`, [settlementId, buildingCode]);
+      if (inQueue.rowCount) throw new Error("building already queued");
+
+      const costGold = Math.floor(Number(def.base_gold || 0));
+      const costStone = Math.floor(Number(def.base_stone || 0));
+      const costWood = Math.floor(Number(def.base_wood || 0));
+      if (Number(kr.gold || 0) < costGold || Number(kr.stone || 0) < costStone || Number(kr.wood || 0) < costWood) {
+        throw new Error(`not enough resources (need gold ${costGold}, stone ${costStone}, wood ${costWood})`);
+      }
+
+      await c.query(`UPDATE kingdoms SET gold=gold-$2, stone=stone-$3, wood=wood-$4 WHERE id=$1`, [kr.id, costGold, costStone, costWood]);
+      const seconds = LOCAL_DEMO_FAST ? 20 : Math.max(300, Number(def.base_build_seconds || 10800));
+      const q = await c.query(
+        `
+        INSERT INTO settlement_build_queue(kingdom_id, settlement_id, building_code, target_level, started_at, completes_at, status)
+        VALUES ($1,$2,$3,1,now(), now() + ($4 || ' seconds')::interval, 'queued')
+        RETURNING id, settlement_id, building_code, target_level, started_at, completes_at, status
+        `,
+        [kr.id, settlementId, buildingCode, seconds],
+      );
+      await c.query(`INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`, [settlementId, `Started building ${String(def.name)}`]);
+      return q.rows[0];
+    });
+    return res.json({ ok: true, queue: out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/settlements/:kingdom/upgrade-cost", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = settlementUpgradeCostBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const settlementId = Number(parsed.data.settlementId);
+  const buildingCode = String(parsed.data.buildingCode || "").toLowerCase();
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id, gold, stone, wood FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kr = k.rows[0];
+      const s = await c.query(`SELECT id, level, settlement_type FROM settlements WHERE id=$1 AND kingdom_id=$2 FOR UPDATE`, [settlementId, kr.id]);
+      if (!s.rowCount) throw new Error("settlement not found");
+      const st = s.rows[0];
+      const bt = await c.query(
+        `SELECT code, name, base_gold, base_stone, base_wood, max_level, city_only, required_settlement_size, base_build_seconds
+         FROM settlement_building_types
+         WHERE code=$1 LIMIT 1`,
+        [buildingCode],
+      );
+      if (!bt.rowCount) throw new Error("unknown settlement building");
+      const def = bt.rows[0];
+      const isCity = String(st.settlement_type || "").includes("city");
+      if (Boolean(def.city_only) && !isCity) throw new Error("building requires a city settlement");
+      if (Number(st.level || 1) < Number(def.required_settlement_size || 1)) {
+        throw new Error(
+          `building requires settlement size ${Number(def.required_settlement_size || 1)} (${settlementTypeDisplay(Number(def.required_settlement_size || 1))})`,
+        );
+      }
+      const sb = await c.query(`SELECT level FROM settlement_buildings WHERE settlement_id=$1 AND building_code=$2 LIMIT 1`, [settlementId, buildingCode]);
+      const currentLevel = Number(sb.rows[0]?.level || 0);
+      const effectiveMax = Math.min(Number(def.max_level || 10), Math.max(1, Number(st.level || 1)));
+      if (currentLevel >= effectiveMax) throw new Error(`building already maxed for settlement level (max ${effectiveMax})`);
+      const nextLevel = currentLevel + 1;
+      const costGold = Math.floor(Number(def.base_gold || 0) * Math.pow(1.3, currentLevel));
+      const costStone = Math.floor(Number(def.base_stone || 0) * Math.pow(1.2, currentLevel));
+      const costWood = Math.floor(Number(def.base_wood || 0) * Math.pow(1.2, currentLevel));
+      const secondsBase = Math.max(300, Number(def.base_build_seconds || 10800));
+      const seconds = LOCAL_DEMO_FAST ? 20 : Math.floor(secondsBase * Math.pow(1.2, currentLevel));
+      return {
+        buildingCode,
+        buildingName: String(def.name),
+        currentLevel,
+        nextLevel,
+        maxForSettlement: effectiveMax,
+        costs: { gold: costGold, stone: costStone, wood: costWood },
+        hasEnough: {
+          gold: Number(kr.gold || 0) >= costGold,
+          stone: Number(kr.stone || 0) >= costStone,
+          wood: Number(kr.wood || 0) >= costWood,
+        },
+        buildSeconds: seconds,
+      };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/settlements/:kingdom/destroy-building", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = settlementDestroyBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const settlementId = Number(parsed.data.settlementId);
+  const buildingCode = String(parsed.data.buildingCode || "").toLowerCase();
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kr = k.rows[0];
+      const s = await c.query(`SELECT id FROM settlements WHERE id=$1 AND kingdom_id=$2 FOR UPDATE`, [settlementId, kr.id]);
+      if (!s.rowCount) throw new Error("settlement not found");
+      const sb = await c.query(`SELECT level FROM settlement_buildings WHERE settlement_id=$1 AND building_code=$2 FOR UPDATE`, [settlementId, buildingCode]);
+      if (!sb.rowCount || Number(sb.rows[0].level || 0) < 1) throw new Error("building not found");
+      await c.query(`UPDATE settlement_buildings SET level=GREATEST(level-1,0) WHERE settlement_id=$1 AND building_code=$2`, [settlementId, buildingCode]);
+      await c.query(`UPDATE settlements SET wellbeing = wellbeing - 75 WHERE id=$1`, [settlementId]);
+      await c.query(`INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`, [settlementId, `Destroyed one level of ${buildingCode.replaceAll("_", " ")}`]);
+      return true;
+    });
+    return res.json({ ok: true, result: out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
@@ -1875,6 +3099,7 @@ app.post("/api/settlements/:kingdom/upgrade-building", async (req, res) => {
 
       const bt = await c.query(
         `SELECT code, name, base_gold, base_stone, base_wood, max_level, city_only
+                , required_settlement_size, base_build_seconds
          FROM settlement_building_types
          WHERE code=$1 LIMIT 1`,
         [String(buildingCode).toLowerCase()],
@@ -1884,6 +3109,11 @@ app.post("/api/settlements/:kingdom/upgrade-building", async (req, res) => {
 
       const isCity = String(st.settlement_type || "").includes("city");
       if (Boolean(def.city_only) && !isCity) throw new Error("building requires a city settlement");
+      if (Number(st.level || 1) < Number(def.required_settlement_size || 1)) {
+        throw new Error(
+          `building requires settlement size ${Number(def.required_settlement_size || 1)} (${settlementTypeDisplay(Number(def.required_settlement_size || 1))})`,
+        );
+      }
 
       const sb = await c.query(
         `SELECT level FROM settlement_buildings WHERE settlement_id=$1 AND building_code=$2 LIMIT 1`,
@@ -1901,9 +3131,14 @@ app.post("/api/settlements/:kingdom/upgrade-building", async (req, res) => {
       if (Number(kr.gold || 0) < costGold || Number(kr.stone || 0) < costStone || Number(kr.wood || 0) < costWood) {
         throw new Error(`not enough resources (need gold ${costGold}, stone ${costStone}, wood ${costWood})`);
       }
+      const inQueue = await c.query(
+        `SELECT 1 FROM settlement_build_queue WHERE settlement_id=$1 AND building_code=$2 AND status='queued' LIMIT 1`,
+        [settlementId, def.code],
+      );
+      if (inQueue.rowCount) throw new Error("building already queued");
 
       await c.query(`UPDATE kingdoms SET gold=gold-$2, stone=stone-$3, wood=wood-$4 WHERE id=$1`, [kr.id, costGold, costStone, costWood]);
-      const secondsBase = 6 * 3600;
+      const secondsBase = Math.max(300, Number(def.base_build_seconds || 10800));
       const seconds = LOCAL_DEMO_FAST ? 20 : Math.floor(secondsBase * Math.pow(1.2, currentLevel));
       const ins = await c.query(
         `
@@ -1914,9 +3149,152 @@ app.post("/api/settlements/:kingdom/upgrade-building", async (req, res) => {
         [kr.id, settlementId, def.code, nextLevel, seconds],
       );
 
+      await c.query(
+        `INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`,
+        [settlementId, `Started upgrading ${String(def.name)} to level ${nextLevel}`],
+      );
+
       return { queue: ins.rows[0], costs: { gold: costGold, stone: costStone, wood: costWood } };
     });
     return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/settlements/:kingdom/history", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = settlementHistoryBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const settlementId = Number(parsed.data.settlementId);
+  try {
+    const k = await pool.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const check = await pool.query(`SELECT 1 FROM settlements WHERE id=$1 AND kingdom_id=$2 LIMIT 1`, [settlementId, k.rows[0].id]);
+    if (!check.rowCount) return res.status(404).json({ ok: false, error: "settlement not found" });
+    const items = await pool.query(
+      `SELECT item, datetime FROM settlement_history WHERE settlement_id=$1 ORDER BY datetime DESC LIMIT 200`,
+      [settlementId],
+    );
+    return res.json({ ok: true, items: items.rows });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/settlements/:kingdom/:settlementId/garrison", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const settlementId = Number(req.params.settlementId);
+  if (!kingdom || !settlementId) return res.status(400).json({ ok: false, error: "kingdom and settlementId required" });
+  try {
+    const k = await pool.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const s = await pool.query(`SELECT id FROM settlements WHERE id=$1 AND kingdom_id=$2 LIMIT 1`, [settlementId, k.rows[0].id]);
+    if (!s.rowCount) return res.status(404).json({ ok: false, error: "settlement not found" });
+    const rows = await pool.query(
+      `
+      SELECT sg.settlement_id, sg.troop_code, tt.name AS name, sg.amount
+      FROM settlement_garrison sg
+      JOIN troop_types tt ON tt.code = sg.troop_code
+      WHERE sg.settlement_id=$1
+      ORDER BY sg.troop_code
+      `,
+      [settlementId],
+    );
+    return res.json({ ok: true, troops: rows.rows });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/settlements/:kingdom/garrison/add", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = settlementGarrisonBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(k.rows[0].id);
+      const settlementId = Number(parsed.data.settlementId);
+      const troopCode = String(parsed.data.troopCode).toLowerCase();
+      const amount = Number(parsed.data.amount);
+
+      const s = await c.query(`SELECT id FROM settlements WHERE id=$1 AND kingdom_id=$2 FOR UPDATE`, [settlementId, kingdomId]);
+      if (!s.rowCount) throw new Error("settlement not found");
+
+      const barracks = await c.query(
+        `SELECT level FROM settlement_buildings WHERE settlement_id=$1 AND building_code='barracks' LIMIT 1`,
+        [settlementId],
+      );
+      if (Number(barracks.rows[0]?.level || 0) < 1) throw new Error("a barracks is required before garrisoning troops");
+
+      const own = await c.query(`SELECT amount FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code=$2 FOR UPDATE`, [kingdomId, troopCode]);
+      if (!own.rowCount || Number(own.rows[0].amount || 0) < amount) throw new Error("not enough troops available");
+
+      await c.query(`UPDATE kingdom_troops SET amount=amount-$3 WHERE kingdom_id=$1 AND troop_code=$2`, [kingdomId, troopCode, amount]);
+      await c.query(
+        `
+        INSERT INTO settlement_garrison(settlement_id, troop_code, amount)
+        VALUES ($1,$2,$3)
+        ON CONFLICT (settlement_id, troop_code) DO UPDATE
+        SET amount = settlement_garrison.amount + EXCLUDED.amount
+        `,
+        [settlementId, troopCode, amount],
+      );
+      await c.query(
+        `INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`,
+        [settlementId, `Garrisoned ${amount} ${troopCode.replaceAll("_", " ")}`],
+      );
+      return true;
+    });
+    return res.json({ ok: true, result: out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/settlements/:kingdom/garrison/remove", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = settlementGarrisonBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(k.rows[0].id);
+      const settlementId = Number(parsed.data.settlementId);
+      const troopCode = String(parsed.data.troopCode).toLowerCase();
+      const amount = Number(parsed.data.amount);
+
+      const s = await c.query(`SELECT id FROM settlements WHERE id=$1 AND kingdom_id=$2 FOR UPDATE`, [settlementId, kingdomId]);
+      if (!s.rowCount) throw new Error("settlement not found");
+      const gar = await c.query(`SELECT amount FROM settlement_garrison WHERE settlement_id=$1 AND troop_code=$2 FOR UPDATE`, [settlementId, troopCode]);
+      if (!gar.rowCount || Number(gar.rows[0].amount || 0) < amount) throw new Error("not enough garrisoned troops");
+
+      await c.query(`UPDATE settlement_garrison SET amount=amount-$3 WHERE settlement_id=$1 AND troop_code=$2`, [settlementId, troopCode, amount]);
+      await c.query(`DELETE FROM settlement_garrison WHERE settlement_id=$1 AND troop_code=$2 AND amount<=0`, [settlementId, troopCode]);
+      await c.query(
+        `
+        INSERT INTO kingdom_troops(kingdom_id, troop_code, amount)
+        VALUES ($1,$2,$3)
+        ON CONFLICT (kingdom_id, troop_code) DO UPDATE
+        SET amount = kingdom_troops.amount + EXCLUDED.amount
+        `,
+        [kingdomId, troopCode, amount],
+      );
+      await c.query(
+        `INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`,
+        [settlementId, `Released ${amount} ${troopCode.replaceAll("_", " ")}`],
+      );
+      return true;
+    });
+    return res.json({ ok: true, result: out });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });
   }
@@ -1947,6 +3325,10 @@ app.post("/api/settlements/:kingdom/rename", async (req, res) => {
         [settlementId, kr.id, name],
       );
       if (!s.rowCount) throw new Error("settlement not found");
+      await c.query(
+        `INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`,
+        [settlementId, `Settlement renamed to ${name}`],
+      );
       return s.rows[0];
     });
     return res.json({ ok: true, settlement: out });

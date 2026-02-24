@@ -269,6 +269,11 @@ async function processSettlementBuildQueueTick(): Promise<number> {
     if (!due.rowCount) return 0;
 
     for (const row of due.rows) {
+      const prevQ = await c.query(`SELECT level FROM settlement_buildings WHERE settlement_id=$1 AND building_code=$2 LIMIT 1`, [
+        row.settlement_id,
+        row.building_code,
+      ]);
+      const prevLevel = Number(prevQ.rows[0]?.level || 0);
       await c.query(
         `
         INSERT INTO settlement_buildings(settlement_id, building_code, level)
@@ -277,6 +282,11 @@ async function processSettlementBuildQueueTick(): Promise<number> {
         SET level = GREATEST(settlement_buildings.level, EXCLUDED.level)
         `,
         [row.settlement_id, row.building_code, row.target_level],
+      );
+      const action = prevLevel > 0 ? "upgrading" : "building";
+      await c.query(
+        `INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`,
+        [row.settlement_id, `Finished ${action} ${String(row.building_code).replaceAll("_", " ")} to level ${row.target_level}`],
       );
       await c.query(`UPDATE settlement_build_queue SET status='completed', completed_at=now() WHERE id=$1`, [row.id]);
       await c.query(`UPDATE kingdoms SET last_tick_at=now() WHERE id=$1`, [row.kingdom_id]);
@@ -370,7 +380,7 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
           FULL OUTER JOIN train t ON t.troop_code = h.troop_code
           FULL OUTER JOIN away a ON a.troop_code = COALESCE(h.troop_code, t.troop_code)
         )
-        SELECT totals.troop_code, totals.amount, tt.upkeep_food, tt.upkeep_gold
+        SELECT totals.troop_code, totals.amount, tt.upkeep_food, tt.upkeep_gold, tt.nw_value
         FROM totals
         JOIN troop_types tt ON tt.code = totals.troop_code
         `,
@@ -390,10 +400,12 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
 
       let foodUpkeepPerHour = 0;
       let goldUpkeepPerHour = 0;
+      let troopNetworth = 0;
       for (const row of t.rows) {
         const amount = Number(row.amount || 0);
         foodUpkeepPerHour += amount * Number(row.upkeep_food || 0);
         goldUpkeepPerHour += amount * Number(row.upkeep_gold || 0);
+        troopNetworth += amount * Number(row.nw_value || 0);
       }
 
       const seasonFoodIncome = foodIncomePerHour * Number(season.modifiers.food || 1);
@@ -407,6 +419,10 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       const woodDelta = Math.floor(seasonWoodIncome * TICK_HOURS);
       const stoneDelta = Math.floor(seasonStoneIncome * TICK_HOURS);
       const horsesDelta = Math.floor(horseIncomePerHour * TICK_HOURS);
+      const newFood = Math.max(0, Number(k.food || 0) + foodDelta);
+      const newGold = Math.max(0, Number(k.gold || 0) + goldDelta);
+      const newWood = Math.max(0, Number(k.wood || 0) + woodDelta);
+      const newStone = Math.max(0, Number(k.stone || 0) + stoneDelta);
 
       await c.query(
         `
@@ -436,6 +452,12 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
           [k.id, peasDelta],
         );
       }
+
+      const networth = Number(k.land || 0) * 0.04 + newFood * 0.0001 + newGold * 0.0005 + newStone * 0.0002 + newWood * 0.0002 + troopNetworth;
+      await c.query(
+        `INSERT INTO kingdom_networth_history(kingdom_id, networth, recorded_at) VALUES ($1,$2,now())`,
+        [k.id, Number(networth.toFixed(2))],
+      );
       updated += 1;
     }
 

@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 type NavItem = { id: string; label: string; group: "top" | "kingdom" };
@@ -42,6 +42,8 @@ const CARD: React.CSSProperties = {
 };
 
 const API_BASE = (window as any).__GG_API_BASE || "http://localhost:8080";
+const AUTH_STORAGE_KEY = "gg:auth";
+const KINGDOM_STORAGE_KEY = "gg:kingdom";
 const BUILD_SHA = (import.meta as any).env?.VITE_GIT_SHA || "dev";
 const BUILD_MODE = (import.meta as any).env?.MODE || "development";
 const FAST_FLAG = (import.meta as any).env?.VITE_LOCAL_DEMO_FAST || "unknown";
@@ -65,6 +67,20 @@ const BTN_STYLE: React.CSSProperties = {
   fontWeight: 700,
   fontSize: 14,
   fontFamily: FONT_BODY,
+};
+
+type AuthState = {
+  token: string;
+  user: {
+    id: string;
+    username: string;
+    email: string;
+  };
+  kingdom: {
+    id: number;
+    name: string;
+  } | null;
+  expiresAt?: string;
 };
 
 const BUILDING_META: Record<string, { sigil: string; summary: string; unlocks: string }> = {
@@ -100,7 +116,7 @@ const TROOP_META: Record<string, { sigil: string; tint: string; role: string }> 
 };
 
 function OverviewView() {
-  const [kingdom, setKingdom] = useState("Elixer");
+  const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "Elixer");
   const [details, setDetails] = useState<any>(null);
   const [war, setWar] = useState<any>(null);
   const [error, setError] = useState("");
@@ -372,7 +388,7 @@ function OverviewView() {
 }
 
 function BuildingsView() {
-  const [kingdom, setKingdom] = useState("Elixer");
+  const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "Elixer");
   const [details, setDetails] = useState<any>(null);
   const [war, setWar] = useState<any>(null);
   const [error, setError] = useState("");
@@ -619,7 +635,7 @@ function formatDuration(sec: number) {
 }
 
 function ResearchView() {
-  const [kingdom, setKingdom] = useState("Elixer");
+  const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "Elixer");
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -753,7 +769,7 @@ function ResearchView() {
 }
 
 function SettlementsView() {
-  const [kingdom, setKingdom] = useState("Elixer");
+  const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "Elixer");
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1018,7 +1034,7 @@ function SettlementsView() {
 }
 
 function AllianceView() {
-  const [kingdom, setKingdom] = useState("Elixer");
+  const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "Elixer");
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1405,7 +1421,7 @@ function Placeholder({ label }: { label: string }) {
 }
 
 function WarRoomView() {
-  const [kingdom, setKingdom] = useState("Elixer");
+  const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "Elixer");
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1748,7 +1764,7 @@ function WarRoomView() {
 }
 
 function TrainTroopsView() {
-  const [kingdom, setKingdom] = useState("Elixer");
+  const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "Elixer");
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1890,7 +1906,7 @@ function TrainTroopsView() {
 }
 
 function AttackKingdomView() {
-  const [kingdom, setKingdom] = useState("Elixer");
+  const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "Elixer");
   const [data, setData] = useState<any>(null);
   const [reports, setReports] = useState<Array<any>>([]);
   const [error, setError] = useState("");
@@ -2013,9 +2029,131 @@ function AttackKingdomView() {
   );
 }
 
+function AuthGate(props: { onAuthenticated: (auth: AuthState) => void }) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [emailOrUsername, setEmailOrUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
+  const [kingdomName, setKingdomName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submitLogin(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ emailOrUsername, password }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      const auth: AuthState = {
+        token: String(j?.session?.token || ""),
+        user: {
+          id: String(j?.user?.id || ""),
+          username: String(j?.user?.username || ""),
+          email: String(j?.user?.email || ""),
+        },
+        kingdom: j?.kingdom ? { id: Number(j.kingdom.id), name: String(j.kingdom.name) } : null,
+        expiresAt: String(j?.session?.expiresAt || ""),
+      };
+      localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth));
+      if (auth.kingdom?.name) localStorage.setItem(KINGDOM_STORAGE_KEY, auth.kingdom.name);
+      props.onAuthenticated(auth);
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitRegister(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, username, password, kingdomName }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      const auth: AuthState = {
+        token: String(j?.session?.token || ""),
+        user: {
+          id: String(j?.user?.id || ""),
+          username: String(j?.user?.username || ""),
+          email: String(j?.user?.email || ""),
+        },
+        kingdom: j?.kingdom ? { id: Number(j.kingdom.id), name: String(j.kingdom.name) } : null,
+        expiresAt: String(j?.session?.expiresAt || ""),
+      };
+      localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth));
+      if (auth.kingdom?.name) localStorage.setItem(KINGDOM_STORAGE_KEY, auth.kingdom.name);
+      props.onAuthenticated(auth);
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main
+      style={{
+        minHeight: "100vh",
+        display: "grid",
+        placeItems: "center",
+        padding: 16,
+        color: TEXT_MAIN,
+        fontFamily: FONT_BODY,
+        background:
+          "radial-gradient(1200px 700px at 85% 20%, rgba(92,76,58,0.45), rgba(23,23,25,0.92)), linear-gradient(180deg, #2b2b2f 0%, #1a1a1d 48%, #161515 100%)",
+      }}
+    >
+      <div style={{ ...CARD, width: "min(560px, 96vw)" }}>
+        <div style={{ fontSize: 40, fontFamily: FONT_DISPLAY, fontWeight: 800, marginBottom: 10 }}>Crownforge</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <button onClick={() => setMode("login")} style={{ ...BTN_STYLE, background: mode === "login" ? "rgba(216,176,117,.35)" : (BTN_STYLE.background as string) }}>Login</button>
+          <button onClick={() => setMode("register")} style={{ ...BTN_STYLE, background: mode === "register" ? "rgba(216,176,117,.35)" : (BTN_STYLE.background as string) }}>Register</button>
+        </div>
+        {mode === "login" ? (
+          <form onSubmit={submitLogin} style={{ display: "grid", gap: 8 }}>
+            <input value={emailOrUsername} onChange={(e) => setEmailOrUsername(e.target.value)} placeholder="Email or Username" style={INPUT_STYLE} />
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" style={INPUT_STYLE} />
+            <button type="submit" style={BTN_STYLE} disabled={busy}>{busy ? "Logging in..." : "Login"}</button>
+          </form>
+        ) : (
+          <form onSubmit={submitRegister} style={{ display: "grid", gap: 8 }}>
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" style={INPUT_STYLE} />
+            <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Username" style={INPUT_STYLE} />
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password (8+ chars)" style={INPUT_STYLE} />
+            <input value={kingdomName} onChange={(e) => setKingdomName(e.target.value)} placeholder="Kingdom Name" style={INPUT_STYLE} />
+            <button type="submit" style={BTN_STYLE} disabled={busy}>{busy ? "Creating account..." : "Create Account"}</button>
+          </form>
+        )}
+        {error ? <div style={{ color: "#ffb5a5", marginTop: 8 }}>{error}</div> : null}
+      </div>
+    </main>
+  );
+}
+
 function App() {
   const [activeId, setActiveId] = useState("overview");
   const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
+  const [auth, setAuth] = useState<AuthState | null>(() => {
+    try {
+      const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+      return raw ? (JSON.parse(raw) as AuthState) : null;
+    } catch {
+      return null;
+    }
+  });
 
   const active = useMemo(() => NAV_ITEMS.find((x) => x.id === activeId) || NAV_ITEMS[0], [activeId]);
   const topNav = NAV_ITEMS.filter((x) => x.group === "top");
@@ -2028,6 +2166,45 @@ function App() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  useEffect(() => {
+    const token = auth?.token;
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const j = await r.json();
+        if (cancelled) return;
+        if (!r.ok || !j?.ok) {
+          localStorage.removeItem(AUTH_STORAGE_KEY);
+          setAuth(null);
+          return;
+        }
+        if (j?.kingdom?.name) localStorage.setItem(KINGDOM_STORAGE_KEY, String(j.kingdom.name));
+      } catch {
+        if (cancelled) return;
+        localStorage.removeItem(AUTH_STORAGE_KEY);
+        setAuth(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [auth?.token]);
+
+  if (!auth) {
+    return <AuthGate onAuthenticated={(a) => setAuth(a)} />;
+  }
+
+  if (active.id === "logout") {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+    setAuth(null);
+    setActiveId("overview");
+    return null;
+  }
 
   return (
     <main
