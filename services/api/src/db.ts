@@ -438,6 +438,74 @@ export async function ensureSchema(): Promise<void> {
       PRIMARY KEY (alliance_id, building_code)
     );
 
+    CREATE TABLE IF NOT EXISTS alliance_forum_threads (
+      id BIGSERIAL PRIMARY KEY,
+      alliance_id BIGINT NOT NULL REFERENCES alliances(id) ON DELETE CASCADE,
+      author_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      author_kingdom_name TEXT NOT NULL,
+      author_username TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      pinned BOOLEAN NOT NULL DEFAULT FALSE,
+      locked BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS alliance_forum_posts (
+      id BIGSERIAL PRIMARY KEY,
+      thread_id BIGINT NOT NULL REFERENCES alliance_forum_threads(id) ON DELETE CASCADE,
+      author_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      author_kingdom_name TEXT NOT NULL,
+      author_username TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS diplomat_missions (
+      id BIGSERIAL PRIMARY KEY,
+      from_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      to_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      mission_type TEXT NOT NULL CHECK (mission_type IN ('peace','trade','intel')),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','declined','cancelled','expired')),
+      note TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      responded_at TIMESTAMPTZ
+    );
+
+    CREATE TABLE IF NOT EXISTS kingdom_spell_casts (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      spell_code TEXT NOT NULL,
+      mana_spent BIGINT NOT NULL DEFAULT 0,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS kingdom_status_effects (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      effect_code TEXT NOT NULL,
+      source_kind TEXT NOT NULL DEFAULT 'system',
+      source_ref BIGINT,
+      magnitude NUMERIC(12,4) NOT NULL DEFAULT 0,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      starts_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      ends_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS alliance_forum_moderation_log (
+      id BIGSERIAL PRIMARY KEY,
+      alliance_id BIGINT NOT NULL REFERENCES alliances(id) ON DELETE CASCADE,
+      actor_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      thread_id BIGINT REFERENCES alliance_forum_threads(id) ON DELETE CASCADE,
+      post_id BIGINT REFERENCES alliance_forum_posts(id) ON DELETE CASCADE,
+      action TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS attack_reports (
       id BIGSERIAL PRIMARY KEY,
       attacker_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
@@ -506,6 +574,14 @@ export async function ensureSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS troop_movements_due_idx ON troop_movements(status, returns_at);
     CREATE INDEX IF NOT EXISTS troop_movements_owner_idx ON troop_movements(owner_kingdom_id, status, returns_at DESC);
     CREATE INDEX IF NOT EXISTS troop_movements_owner_due_idx ON troop_movements(owner_kingdom_id, status, returns_at);
+    CREATE INDEX IF NOT EXISTS alliance_forum_threads_alliance_idx ON alliance_forum_threads(alliance_id, pinned DESC, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS alliance_forum_posts_thread_idx ON alliance_forum_posts(thread_id, created_at ASC);
+    CREATE INDEX IF NOT EXISTS diplomat_missions_from_idx ON diplomat_missions(from_kingdom_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS diplomat_missions_to_idx ON diplomat_missions(to_kingdom_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS kingdom_spell_casts_kingdom_idx ON kingdom_spell_casts(kingdom_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS kingdom_status_effects_kingdom_idx ON kingdom_status_effects(kingdom_id, effect_code, ends_at DESC);
+    CREATE INDEX IF NOT EXISTS kingdom_status_effects_active_idx ON kingdom_status_effects(effect_code, ends_at);
+    CREATE INDEX IF NOT EXISTS alliance_forum_modlog_alliance_idx ON alliance_forum_moderation_log(alliance_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS kingdom_networth_history_kingdom_idx ON kingdom_networth_history(kingdom_id, recorded_at DESC);
     CREATE INDEX IF NOT EXISTS kingdom_mail_kingdom_idx ON kingdom_mail(kingdom_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS kingdom_mail_unread_idx ON kingdom_mail(kingdom_id, read_at, created_at DESC);

@@ -20,6 +20,14 @@ import {
   taxGoldMultiplier,
 } from "../../../packages/shared/src/index.js";
 import { ensureSchema, pool, withTx } from "./db.js";
+import {
+  HOLY_SPELL_COSTS,
+  computeSabotageStolen,
+  isAllianceModerator,
+  resolveHolySpellDelta,
+  resolveSabotageOutcome,
+} from "./gameplay.js";
+import { evaluateOpsAlerts } from "./ops.js";
 
 dotenv.config();
 
@@ -32,6 +40,74 @@ app.use((req, res, next) => {
   return next();
 });
 app.use(express.json());
+
+type RouteSample = { ms: number; at: number; status: number };
+const routeSamples = new Map<string, RouteSample[]>();
+const MAX_SAMPLES_PER_ROUTE = 400;
+const PERF_BUDGET_P95_MS = 120;
+function percentile(values: number[], p: number) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+  return sorted[idx];
+}
+function recordRouteSample(key: string, sample: RouteSample) {
+  const arr = routeSamples.get(key) || [];
+  arr.push(sample);
+  if (arr.length > MAX_SAMPLES_PER_ROUTE) arr.splice(0, arr.length - MAX_SAMPLES_PER_ROUTE);
+  routeSamples.set(key, arr);
+}
+
+const kingdomStreamClients = new Map<string, Set<express.Response>>();
+function streamSetFor(kingdomName: string) {
+  const key = String(kingdomName || "").trim().toLowerCase();
+  if (!kingdomStreamClients.has(key)) kingdomStreamClients.set(key, new Set());
+  return kingdomStreamClients.get(key)!;
+}
+function publishKingdomEvent(kingdomName: string, evt: string, payload: Record<string, unknown> = {}) {
+  const key = String(kingdomName || "").trim().toLowerCase();
+  if (!key) return;
+  const listeners = kingdomStreamClients.get(key);
+  if (!listeners || listeners.size === 0) return;
+  const body = `event: ${evt}\ndata: ${JSON.stringify({ at: new Date().toISOString(), ...payload })}\n\n`;
+  for (const client of listeners) {
+    try {
+      client.write(body);
+    } catch {
+      // ignore disconnected client
+    }
+  }
+}
+
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.on("finish", () => {
+    const key = `${req.method} ${req.path}`;
+    recordRouteSample(key, { ms: Date.now() - startedAt, at: Date.now(), status: res.statusCode });
+  });
+  next();
+});
+
+app.use((req, res, next) => {
+  res.on("finish", () => {
+    if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return;
+    if (res.statusCode >= 500) return;
+    const candidates = new Set<string>();
+    const p = req.params as Record<string, string | undefined>;
+    const b = (req.body || {}) as Record<string, unknown>;
+    const maybeAdd = (v: unknown) => {
+      const s = String(v || "").trim();
+      if (s) candidates.add(s);
+    };
+    maybeAdd(p?.name);
+    maybeAdd(p?.kingdom);
+    maybeAdd(p?.attacker);
+    maybeAdd((b as any)?.defenderKingdom);
+    maybeAdd((b as any)?.toKingdom);
+    for (const k of candidates) publishKingdomEvent(k, "refresh", { reason: `${req.method} ${req.path}` });
+  });
+  next();
+});
 
 // ── Rate limiting ────────────────────────────────────────────────────────────
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, message: { ok: false, error: "Too many attempts. Please wait 15 minutes." } });
@@ -62,6 +138,7 @@ const EXPLORE_MIN_RETURN_SECONDS = LOCAL_DEMO_FAST ? 12 : 5 * 60;
 const EXPLORE_MAX_RETURN_SECONDS = LOCAL_DEMO_FAST ? 40 : 8 * 3600;
 const SPY_RETURN_SECONDS = LOCAL_DEMO_FAST ? 15 : 25 * 60;
 const DAILY_STREAK_CAP = 365;
+const OBS_TICK_INTERVAL_SECONDS = Math.max(1, Number(process.env.TICK_INTERVAL_SECONDS || (LOCAL_DEMO_FAST ? 5 : 300)));
 
 const registerBody = z.object({
   userId: z.string().min(1),
@@ -200,6 +277,51 @@ const allianceContribBody = z.object({
   wood: z.number().int().min(0).optional().default(0),
 });
 
+const allianceForumCreateThreadBody = z.object({
+  title: z.string().min(3).max(120),
+  body: z.string().min(1).max(8000),
+  pinned: z.boolean().optional().default(false),
+});
+
+const allianceForumCreatePostBody = z.object({
+  body: z.string().min(1).max(8000),
+});
+
+const allianceForumModerateThreadBody = z.object({
+  pinned: z.boolean().optional(),
+  locked: z.boolean().optional(),
+  deleteThread: z.boolean().optional(),
+}).refine((d) => d.pinned !== undefined || d.locked !== undefined || d.deleteThread === true, {
+  message: "at least one moderation action is required",
+});
+
+const allianceForumModeratePostBody = z.object({
+  deletePost: z.literal(true),
+});
+
+const embassySendMissionBody = z.object({
+  targetKingdom: z.string().min(2),
+  missionType: z.enum(["peace", "trade", "intel"]),
+  note: z.string().max(600).optional().default(""),
+});
+
+const embassyRespondMissionBody = z.object({
+  missionId: z.number().int().positive(),
+  action: z.enum(["accepted", "declined"]),
+});
+
+const guildSabotageBody = z.object({
+  defenderKingdom: z.string().min(2),
+  spiesToSend: z.number().int().min(1).max(50000),
+  resource: z.enum(["gold", "food", "wood", "stone"]).optional().default("gold"),
+  operation: z.enum(["resource_heist", "priest_assassination"]).optional().default("resource_heist"),
+});
+
+const holyCircleCastBody = z.object({
+  spellCode: z.enum(["mana_surge", "blessing_of_plenty", "stoneskin", "war_zeal", "divine_barrier", "blight", "mana_leech"]),
+  targetKingdom: z.string().min(2).max(64).optional(),
+});
+
 
 const TROOP_TRAIN_REQUIREMENTS: Record<string, { buildingCode: string; buildingName: string; minLevel: number }> = {
   footmen: { buildingCode: "barracks", buildingName: "Barracks", minLevel: 1 },
@@ -207,7 +329,7 @@ const TROOP_TRAIN_REQUIREMENTS: Record<string, { buildingCode: string; buildingN
   light_cavalry: { buildingCode: "stables", buildingName: "Stables", minLevel: 1 },
   heavy_cavalry: { buildingCode: "stables", buildingName: "Stables", minLevel: 1 },
   knights: { buildingCode: "castles", buildingName: "Castles", minLevel: 1 },
-  spies: { buildingCode: "guildhall", buildingName: "Guildhall", minLevel: 1 },
+  spies: { buildingCode: "guildhalls", buildingName: "Guildhall", minLevel: 1 },
 };
 
 const FOOTMAN_ELITE_PROMOTION_RATE = clamp(Number(process.env.FOOTMAN_ELITE_PROMOTION_RATE || 0.0025), 0, 0.05);
@@ -315,6 +437,90 @@ function extractAuthToken(req: express.Request) {
   if (h.toLowerCase().startsWith("bearer ")) return h.slice(7).trim();
   const alt = String(req.headers["x-auth-token"] || "").trim();
   return alt || "";
+}
+
+async function getAllianceMembershipByKingdom(q: { query: PoolClient["query"] }, kingdom: string) {
+  const membership = await q.query(
+    `
+    SELECT
+      k.id AS kingdom_id,
+      k.name AS kingdom_name,
+      u.username,
+      am.role,
+      a.id AS alliance_id,
+      a.slug AS alliance_slug,
+      a.name AS alliance_name
+    FROM kingdoms k
+    JOIN app_users u ON u.id = k.user_id
+    JOIN alliance_members am ON am.kingdom_id = k.id
+    JOIN alliances a ON a.id = am.alliance_id
+    WHERE LOWER(k.name)=LOWER($1)
+    LIMIT 1
+    `,
+    [kingdom],
+  );
+  if (!membership.rowCount) throw new Error("kingdom is not in an alliance");
+  const m = membership.rows[0];
+  return {
+    kingdomId: Number(m.kingdom_id),
+    kingdomName: String(m.kingdom_name || ""),
+    username: String(m.username || ""),
+    role: String(m.role || "member"),
+    allianceId: Number(m.alliance_id),
+    allianceSlug: String(m.alliance_slug || ""),
+    allianceName: String(m.alliance_name || ""),
+  };
+}
+
+async function cleanupExpiredEffectsTx(c: PoolClient, kingdomId?: number) {
+  if (kingdomId && Number.isFinite(kingdomId)) {
+    await c.query(`DELETE FROM kingdom_status_effects WHERE kingdom_id=$1 AND ends_at <= now()`, [kingdomId]);
+    return;
+  }
+  await c.query(`DELETE FROM kingdom_status_effects WHERE ends_at <= now()`);
+}
+
+async function activeEffectMagnitudeTx(c: PoolClient, kingdomId: number, effectCode: string) {
+  const q = await c.query(
+    `
+    SELECT COALESCE(SUM(magnitude),0)::numeric AS mag
+    FROM kingdom_status_effects
+    WHERE kingdom_id=$1 AND effect_code=$2 AND ends_at > now()
+    `,
+    [kingdomId, effectCode],
+  );
+  return Number(q.rows[0]?.mag || 0);
+}
+
+async function addTimedEffectTx(
+  c: PoolClient,
+  input: {
+    kingdomId: number;
+    effectCode: string;
+    magnitude: number;
+    hours: number;
+    sourceKind: string;
+    sourceRef?: number | null;
+    payload?: Record<string, unknown>;
+  },
+) {
+  const expiresAt = new Date(Date.now() + Math.max(1, input.hours) * 3600 * 1000).toISOString();
+  await c.query(
+    `
+    INSERT INTO kingdom_status_effects(kingdom_id, effect_code, source_kind, source_ref, magnitude, payload, ends_at)
+    VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7)
+    `,
+    [
+      input.kingdomId,
+      input.effectCode,
+      input.sourceKind,
+      input.sourceRef ?? null,
+      input.magnitude,
+      JSON.stringify(input.payload || {}),
+      expiresAt,
+    ],
+  );
+  return { expiresAt };
 }
 
 function seasonByIndex(index: number) {
@@ -939,6 +1145,33 @@ app.get("/api/auth/me", async (req, res) => {
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
+});
+
+app.get("/api/stream/:kingdom", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+
+  const clients = streamSetFor(kingdom);
+  clients.add(res);
+  res.write(`event: connected\ndata: ${JSON.stringify({ ok: true, kingdom, at: new Date().toISOString() })}\n\n`);
+
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(`event: heartbeat\ndata: ${JSON.stringify({ at: new Date().toISOString() })}\n\n`);
+    } catch {
+      // ignore write race while closing
+    }
+  }, 15000);
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    clients.delete(res);
+  });
 });
 
 app.get("/api/account/referral", requireAuth, async (req, res) => {
@@ -3925,6 +4158,658 @@ app.get("/api/admin/stats", requireAdmin, async (_req, res) => {
   } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
 });
 
+app.get("/api/admin/metrics", requireAdmin, async (_req, res) => {
+  try {
+    const metrics = Array.from(routeSamples.entries()).map(([route, samples]) => {
+      const ms = samples.map((s) => s.ms);
+      const errors = samples.filter((s) => s.status >= 500).length;
+      const p50 = Number(percentile(ms, 50).toFixed(2));
+      const p95 = Number(percentile(ms, 95).toFixed(2));
+      return {
+        route,
+        count: samples.length,
+        errors,
+        p50,
+        p95,
+        budgetMs: PERF_BUDGET_P95_MS,
+        budgetOk: p95 <= PERF_BUDGET_P95_MS,
+      };
+    }).sort((a, b) => b.p95 - a.p95);
+    const violating = metrics.filter((m) => !m.budgetOk).map((m) => m.route);
+    return res.json({
+      ok: true,
+      budget: { p95Ms: PERF_BUDGET_P95_MS },
+      routes: metrics,
+      violating,
+      capturedAt: new Date().toISOString(),
+    });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/admin/alerts", requireAdmin, async (_req, res) => {
+  try {
+    const metrics = Array.from(routeSamples.entries()).map(([route, samples]) => {
+      const ms = samples.map((s) => s.ms);
+      const errors = samples.filter((s) => s.status >= 500).length;
+      return {
+        route,
+        count: samples.length,
+        errors,
+        p95: Number(percentile(ms, 95).toFixed(2)),
+        budgetMs: PERF_BUDGET_P95_MS,
+      };
+    });
+    const gs = await pool.query(`SELECT worker_last_tick_at FROM game_state WHERE id=1 LIMIT 1`);
+    const lastTickAt = new Date(gs.rows[0]?.worker_last_tick_at || Date.now());
+    const tickLagSeconds = Math.max(0, Math.floor((Date.now() - lastTickAt.getTime()) / 1000));
+    const tickIntervalSeconds = OBS_TICK_INTERVAL_SECONDS;
+    const alerts = evaluateOpsAlerts({ routes: metrics, tickLagSeconds, tickIntervalSeconds });
+    return res.json({
+      ok: true,
+      alerts,
+      context: {
+        capturedAt: new Date().toISOString(),
+        tickLagSeconds,
+        tickIntervalSeconds,
+        lastWorkerTickAt: lastTickAt.toISOString(),
+      },
+    });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/alliance-forums/:kingdom", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const search = String(req.query.q || "").trim();
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  try {
+    const membership = await getAllianceMembershipByKingdom(pool, kingdom);
+    const params: any[] = [membership.allianceId];
+    let filter = "";
+    if (search.length >= 2) {
+      params.push(`%${search}%`);
+      filter = `
+        AND (
+          t.title ILIKE $2
+          OR t.body ILIKE $2
+          OR EXISTS (
+            SELECT 1 FROM alliance_forum_posts sp
+            WHERE sp.thread_id = t.id AND sp.body ILIKE $2
+          )
+        )
+      `;
+    }
+    const threads = await pool.query(
+      `
+      SELECT t.id, t.title, t.body, t.pinned, t.locked, t.author_kingdom_name, t.author_username, t.created_at, t.updated_at,
+             COALESCE(COUNT(p.id),0)::int AS post_count,
+             MAX(p.created_at) AS last_post_at
+      FROM alliance_forum_threads t
+      LEFT JOIN alliance_forum_posts p ON p.thread_id = t.id
+      WHERE t.alliance_id=$1
+      ${filter}
+      GROUP BY t.id
+      ORDER BY t.pinned DESC, COALESCE(MAX(p.created_at), t.updated_at) DESC
+      LIMIT 200
+      `,
+      params,
+    );
+    return res.json({
+      ok: true,
+      alliance: { id: membership.allianceId, slug: membership.allianceSlug, name: membership.allianceName },
+      viewerRole: membership.role,
+      canModerate: isAllianceModerator(membership.role),
+      threads: threads.rows,
+    });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/alliance-forums/:kingdom/search", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const q = String(req.query.q || "").trim();
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (q.length < 2) return res.json({ ok: true, q, threads: [], posts: [] });
+  try {
+    const membership = await getAllianceMembershipByKingdom(pool, kingdom);
+    const like = `%${q}%`;
+    const [threads, posts] = await Promise.all([
+      pool.query(
+        `
+        SELECT id, title, author_kingdom_name, updated_at
+        FROM alliance_forum_threads
+        WHERE alliance_id=$1
+          AND (title ILIKE $2 OR body ILIKE $2)
+        ORDER BY pinned DESC, updated_at DESC
+        LIMIT 30
+        `,
+        [membership.allianceId, like],
+      ),
+      pool.query(
+        `
+        SELECT p.id, p.thread_id, t.title AS thread_title, p.author_kingdom_name, p.body, p.created_at
+        FROM alliance_forum_posts p
+        JOIN alliance_forum_threads t ON t.id = p.thread_id
+        WHERE t.alliance_id=$1
+          AND p.body ILIKE $2
+        ORDER BY p.created_at DESC
+        LIMIT 50
+        `,
+        [membership.allianceId, like],
+      ),
+    ]);
+    return res.json({
+      ok: true,
+      q,
+      threads: threads.rows,
+      posts: posts.rows,
+    });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/alliance-forums/:kingdom/mod-log", requireAuth, async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  try {
+    const membership = await getAllianceMembershipByKingdom(pool, kingdom);
+    if (!isAllianceModerator(membership.role)) return res.status(403).json({ ok: false, error: "moderator permissions required" });
+    const q = await pool.query(
+      `
+      SELECT l.id, l.action, l.thread_id, l.post_id, l.payload, l.created_at, k.name AS actor_kingdom
+      FROM alliance_forum_moderation_log l
+      JOIN kingdoms k ON k.id = l.actor_kingdom_id
+      WHERE l.alliance_id=$1
+      ORDER BY l.created_at DESC
+      LIMIT $2
+      `,
+      [membership.allianceId, limit],
+    );
+    return res.json({ ok: true, items: q.rows });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/alliance-forums/:kingdom/threads", requireAuth, async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = allianceForumCreateThreadBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  try {
+    const out = await withTx(async (c) => {
+      const m = await getAllianceMembershipByKingdom(c, kingdom);
+      const canPin = isAllianceModerator(m.role);
+      const ins = await c.query(
+        `
+        INSERT INTO alliance_forum_threads(alliance_id, author_kingdom_id, author_kingdom_name, author_username, title, body, pinned)
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        RETURNING id, title, body, pinned, locked, created_at, updated_at
+        `,
+        [
+          m.allianceId,
+          m.kingdomId,
+          m.kingdomName,
+          m.username,
+          parsed.data.title.trim(),
+          parsed.data.body.trim(),
+          canPin ? Boolean(parsed.data.pinned) : false,
+        ],
+      );
+      const threadId = Number(ins.rows[0].id);
+      await c.query(
+        `
+        INSERT INTO alliance_forum_posts(thread_id, author_kingdom_id, author_kingdom_name, author_username, body)
+        VALUES ($1,$2,$3,$4,$5)
+        `,
+        [threadId, m.kingdomId, m.kingdomName, m.username, parsed.data.body.trim()],
+      );
+      return { thread: ins.rows[0] };
+    });
+    publishKingdomEvent(kingdom, "alliance_forum_thread_created", { threadId: out.thread.id });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/alliance-forums/:kingdom/threads/:threadId", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const threadId = Number(req.params.threadId || 0);
+  if (!kingdom || !threadId) return res.status(400).json({ ok: false, error: "kingdom and threadId required" });
+  try {
+    const membership = await getAllianceMembershipByKingdom(pool, kingdom);
+    const thread = await pool.query(
+      `SELECT id, title, body, pinned, locked, author_kingdom_name, author_username, created_at, updated_at
+       FROM alliance_forum_threads
+       WHERE id=$1 AND alliance_id=$2
+       LIMIT 1`,
+      [threadId, membership.allianceId],
+    );
+    if (!thread.rowCount) return res.status(404).json({ ok: false, error: "thread not found" });
+    const posts = await pool.query(
+      `
+      SELECT id, author_kingdom_id, author_kingdom_name, author_username, body, created_at
+      FROM alliance_forum_posts
+      WHERE thread_id=$1
+      ORDER BY created_at ASC
+      LIMIT 1000
+      `,
+      [threadId],
+    );
+    return res.json({
+      ok: true,
+      thread: thread.rows[0],
+      posts: posts.rows,
+      viewerRole: membership.role,
+      canModerate: isAllianceModerator(membership.role),
+      viewerKingdomId: membership.kingdomId,
+    });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/alliance-forums/:kingdom/threads/:threadId/posts", requireAuth, async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const threadId = Number(req.params.threadId || 0);
+  const parsed = allianceForumCreatePostBody.safeParse(req.body || {});
+  if (!kingdom || !threadId) return res.status(400).json({ ok: false, error: "kingdom and threadId required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  try {
+    const out = await withTx(async (c) => {
+      const m = await getAllianceMembershipByKingdom(c, kingdom);
+      const t = await c.query(`SELECT id, locked FROM alliance_forum_threads WHERE id=$1 AND alliance_id=$2 FOR UPDATE`, [threadId, m.allianceId]);
+      if (!t.rowCount) throw new Error("thread not found");
+      if (Boolean(t.rows[0].locked)) throw new Error("thread is locked");
+      const ins = await c.query(
+        `
+        INSERT INTO alliance_forum_posts(thread_id, author_kingdom_id, author_kingdom_name, author_username, body)
+        VALUES ($1,$2,$3,$4,$5)
+        RETURNING id, created_at
+        `,
+        [threadId, m.kingdomId, m.kingdomName, m.username, parsed.data.body.trim()],
+      );
+      await c.query(`UPDATE alliance_forum_threads SET updated_at=now() WHERE id=$1`, [threadId]);
+      return { post: ins.rows[0] };
+    });
+    publishKingdomEvent(kingdom, "alliance_forum_post_created", { threadId });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/alliance-forums/:kingdom/threads/:threadId/moderate", requireAuth, async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const threadId = Number(req.params.threadId || 0);
+  const parsed = allianceForumModerateThreadBody.safeParse(req.body || {});
+  if (!kingdom || !threadId) return res.status(400).json({ ok: false, error: "kingdom and threadId required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  try {
+    const out = await withTx(async (c) => {
+      const m = await getAllianceMembershipByKingdom(c, kingdom);
+      if (!isAllianceModerator(m.role)) throw new Error("moderator permissions required");
+      const t = await c.query(`SELECT id, pinned, locked FROM alliance_forum_threads WHERE id=$1 AND alliance_id=$2 FOR UPDATE`, [threadId, m.allianceId]);
+      if (!t.rowCount) throw new Error("thread not found");
+      if (parsed.data.deleteThread) {
+        await c.query(`DELETE FROM alliance_forum_threads WHERE id=$1`, [threadId]);
+        await c.query(
+          `INSERT INTO alliance_forum_moderation_log(alliance_id, actor_kingdom_id, thread_id, action, payload) VALUES($1,$2,$3,$4,$5::jsonb)`,
+          [m.allianceId, m.kingdomId, threadId, "thread_delete", JSON.stringify({})],
+        );
+        return { deleted: true };
+      }
+      const nextPinned = parsed.data.pinned ?? Boolean(t.rows[0].pinned);
+      const nextLocked = parsed.data.locked ?? Boolean(t.rows[0].locked);
+      const u = await c.query(
+        `UPDATE alliance_forum_threads SET pinned=$2, locked=$3, updated_at=now() WHERE id=$1 RETURNING id, pinned, locked, updated_at`,
+        [threadId, nextPinned, nextLocked],
+      );
+      await c.query(
+        `INSERT INTO alliance_forum_moderation_log(alliance_id, actor_kingdom_id, thread_id, action, payload) VALUES($1,$2,$3,$4,$5::jsonb)`,
+        [m.allianceId, m.kingdomId, threadId, "thread_update", JSON.stringify({ pinned: nextPinned, locked: nextLocked })],
+      );
+      return { deleted: false, thread: u.rows[0] };
+    });
+    publishKingdomEvent(kingdom, "alliance_forum_thread_moderated", { threadId, deleted: out.deleted });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/alliance-forums/:kingdom/posts/:postId/moderate", requireAuth, async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const postId = Number(req.params.postId || 0);
+  const parsed = allianceForumModeratePostBody.safeParse(req.body || {});
+  if (!kingdom || !postId) return res.status(400).json({ ok: false, error: "kingdom and postId required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  try {
+    const out = await withTx(async (c) => {
+      const m = await getAllianceMembershipByKingdom(c, kingdom);
+      const p = await c.query(
+        `
+        SELECT p.id, p.thread_id, p.author_kingdom_id, t.alliance_id
+        FROM alliance_forum_posts p
+        JOIN alliance_forum_threads t ON t.id = p.thread_id
+        WHERE p.id=$1
+        FOR UPDATE
+        `,
+        [postId],
+      );
+      if (!p.rowCount) throw new Error("post not found");
+      const row = p.rows[0];
+      if (Number(row.alliance_id) !== m.allianceId) throw new Error("post not in your alliance");
+      const canModerate = isAllianceModerator(m.role);
+      const canDeleteOwn = Number(row.author_kingdom_id) === m.kingdomId;
+      if (!canModerate && !canDeleteOwn) throw new Error("not permitted to delete this post");
+      await c.query(`DELETE FROM alliance_forum_posts WHERE id=$1`, [postId]);
+      await c.query(`UPDATE alliance_forum_threads SET updated_at=now() WHERE id=$1`, [Number(row.thread_id)]);
+      await c.query(
+        `INSERT INTO alliance_forum_moderation_log(alliance_id, actor_kingdom_id, thread_id, post_id, action, payload) VALUES($1,$2,$3,$4,$5,$6::jsonb)`,
+        [m.allianceId, m.kingdomId, Number(row.thread_id), postId, canModerate ? "post_delete_moderator" : "post_delete_author", JSON.stringify({})],
+      );
+      return { threadId: Number(row.thread_id) };
+    });
+    publishKingdomEvent(kingdom, "alliance_forum_post_deleted", { postId, threadId: out.threadId });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/embassy/:kingdom", async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  try {
+    const k = await pool.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const kingdomId = Number(k.rows[0].id);
+    await withTx(async (c) => {
+      await cleanupExpiredEffectsTx(c, kingdomId);
+      return 0;
+    });
+    const [incoming, outgoing, activeEffects] = await Promise.all([
+      pool.query(
+        `
+        SELECT m.id, fk.name AS from_kingdom, tk.name AS to_kingdom, m.mission_type, m.status, m.note, m.created_at, m.responded_at
+        FROM diplomat_missions m
+        JOIN kingdoms fk ON fk.id = m.from_kingdom_id
+        JOIN kingdoms tk ON tk.id = m.to_kingdom_id
+        WHERE m.to_kingdom_id=$1
+        ORDER BY m.created_at DESC
+        LIMIT 100
+        `,
+        [kingdomId],
+      ),
+      pool.query(
+        `
+        SELECT m.id, fk.name AS from_kingdom, tk.name AS to_kingdom, m.mission_type, m.status, m.note, m.created_at, m.responded_at
+        FROM diplomat_missions m
+        JOIN kingdoms fk ON fk.id = m.from_kingdom_id
+        JOIN kingdoms tk ON tk.id = m.to_kingdom_id
+        WHERE m.from_kingdom_id=$1
+        ORDER BY m.created_at DESC
+        LIMIT 100
+        `,
+        [kingdomId],
+      ),
+      pool.query(
+        `
+        SELECT effect_code, magnitude, payload, starts_at, ends_at
+        FROM kingdom_status_effects
+        WHERE kingdom_id=$1 AND ends_at > now()
+        ORDER BY ends_at ASC
+        LIMIT 50
+        `,
+        [kingdomId],
+      ),
+    ]);
+    return res.json({ ok: true, incoming: incoming.rows, outgoing: outgoing.rows, activeEffects: activeEffects.rows });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/embassy/:kingdom/send", requireAuth, async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = embassySendMissionBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  try {
+    const out = await withTx(async (c) => {
+      const fromK = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!fromK.rowCount) throw new Error("kingdom not found");
+      const toK = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [parsed.data.targetKingdom]);
+      if (!toK.rowCount) throw new Error("target kingdom not found");
+      if (Number(fromK.rows[0].id) === Number(toK.rows[0].id)) throw new Error("cannot send diplomats to yourself");
+      const dup = await c.query(
+        `
+        SELECT id
+        FROM diplomat_missions
+        WHERE from_kingdom_id=$1 AND to_kingdom_id=$2 AND mission_type=$3 AND status='pending'
+        LIMIT 1
+        `,
+        [Number(fromK.rows[0].id), Number(toK.rows[0].id), parsed.data.missionType],
+      );
+      if (dup.rowCount) throw new Error("a pending mission of this type already exists for that target");
+      const ins = await c.query(
+        `
+        INSERT INTO diplomat_missions(from_kingdom_id, to_kingdom_id, mission_type, note)
+        VALUES ($1,$2,$3,$4)
+        RETURNING id, status, created_at
+        `,
+        [Number(fromK.rows[0].id), Number(toK.rows[0].id), parsed.data.missionType, parsed.data.note.trim()],
+      );
+      await sendNoticeTx(
+        c,
+        Number(toK.rows[0].id),
+        "info",
+        `${fromK.rows[0].name} sent a ${parsed.data.missionType} diplomatic mission.`,
+        { missionId: Number(ins.rows[0].id), from: fromK.rows[0].name, type: parsed.data.missionType },
+      );
+      return { mission: ins.rows[0], toKingdom: String(toK.rows[0].name) };
+    });
+    publishKingdomEvent(parsed.data.targetKingdom, "embassy_mission_received", { missionId: out.mission.id });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/embassy/:kingdom/respond", requireAuth, async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = embassyRespondMissionBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const toKingdomId = Number(k.rows[0].id);
+      const mission = await c.query(
+        `
+        UPDATE diplomat_missions
+        SET status=$3, responded_at=now()
+        WHERE id=$1 AND to_kingdom_id=$2 AND status='pending'
+        RETURNING id, from_kingdom_id, to_kingdom_id, mission_type, status
+        `,
+        [parsed.data.missionId, toKingdomId, parsed.data.action],
+      );
+      if (!mission.rowCount) throw new Error("mission not found or no longer pending");
+      const m = mission.rows[0];
+      const fromKingdomId = Number(m.from_kingdom_id);
+      const fromNameQ = await c.query(`SELECT name FROM kingdoms WHERE id=$1 LIMIT 1`, [fromKingdomId]);
+      const fromKingdomName = String(fromNameQ.rows[0]?.name || "");
+      const appliedEffects: any[] = [];
+      if (parsed.data.action === "accepted") {
+        await cleanupExpiredEffectsTx(c, fromKingdomId);
+        await cleanupExpiredEffectsTx(c, toKingdomId);
+        if (String(m.mission_type) === "trade") {
+          const fromEff = await addTimedEffectTx(c, {
+            kingdomId: fromKingdomId,
+            effectCode: "trade_surplus",
+            magnitude: 0.06,
+            hours: 24,
+            sourceKind: "embassy_trade",
+            sourceRef: Number(m.id),
+            payload: { withKingdomId: toKingdomId },
+          });
+          const toEff = await addTimedEffectTx(c, {
+            kingdomId: toKingdomId,
+            effectCode: "trade_surplus",
+            magnitude: 0.06,
+            hours: 24,
+            sourceKind: "embassy_trade",
+            sourceRef: Number(m.id),
+            payload: { withKingdomId: fromKingdomId },
+          });
+          await c.query(`UPDATE kingdoms SET gold = gold + 2500 WHERE id=$1`, [fromKingdomId]);
+          await c.query(`UPDATE kingdoms SET gold = gold + 2500 WHERE id=$1`, [toKingdomId]);
+          appliedEffects.push({ effectCode: "trade_surplus", expiresAt: fromEff.expiresAt });
+          appliedEffects.push({ effectCode: "trade_surplus", expiresAt: toEff.expiresAt });
+        } else if (String(m.mission_type) === "peace") {
+          const fromEff = await addTimedEffectTx(c, {
+            kingdomId: fromKingdomId,
+            effectCode: "peace_pact",
+            magnitude: 0.08,
+            hours: 24,
+            sourceKind: "embassy_peace",
+            sourceRef: Number(m.id),
+            payload: { withKingdomId: toKingdomId },
+          });
+          const toEff = await addTimedEffectTx(c, {
+            kingdomId: toKingdomId,
+            effectCode: "peace_pact",
+            magnitude: 0.08,
+            hours: 24,
+            sourceKind: "embassy_peace",
+            sourceRef: Number(m.id),
+            payload: { withKingdomId: fromKingdomId },
+          });
+          appliedEffects.push({ effectCode: "peace_pact", expiresAt: fromEff.expiresAt });
+          appliedEffects.push({ effectCode: "peace_pact", expiresAt: toEff.expiresAt });
+        } else if (String(m.mission_type) === "intel") {
+          const fromEff = await addTimedEffectTx(c, {
+            kingdomId: fromKingdomId,
+            effectCode: "intel_vision",
+            magnitude: 0.12,
+            hours: 18,
+            sourceKind: "embassy_intel",
+            sourceRef: Number(m.id),
+            payload: { targetKingdomId: toKingdomId },
+          });
+          appliedEffects.push({ effectCode: "intel_vision", expiresAt: fromEff.expiresAt });
+        }
+      }
+      await sendNoticeTx(
+        c,
+        fromKingdomId,
+        "info",
+        `${k.rows[0].name} ${parsed.data.action} your ${m.mission_type} diplomatic mission.`,
+        { missionId: Number(m.id), action: parsed.data.action },
+      );
+      return { mission: mission.rows[0], appliedEffects, fromKingdomName };
+    });
+    publishKingdomEvent(kingdom, "embassy_mission_responded", { missionId: out.mission.id, status: out.mission.status });
+    if (out.fromKingdomName) publishKingdomEvent(out.fromKingdomName, "embassy_mission_response", { missionId: out.mission.id, status: out.mission.status });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/guildhall/:kingdom/sabotage", requireAuth, async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = guildSabotageBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  try {
+    const out = await withTx(async (c) => {
+      const atk = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!atk.rowCount) throw new Error("attacker kingdom not found");
+      const def = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [parsed.data.defenderKingdom]);
+      if (!def.rowCount) throw new Error("defender kingdom not found");
+      if (Number(atk.rows[0].id) === Number(def.rows[0].id)) throw new Error("cannot sabotage your own kingdom");
+      const attackerId = Number(atk.rows[0].id);
+      const defenderId = Number(def.rows[0].id);
+
+      await cleanupExpiredEffectsTx(c, attackerId);
+      await cleanupExpiredEffectsTx(c, defenderId);
+
+      const spiesAtk = await c.query(`SELECT amount FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='spies' FOR UPDATE`, [attackerId]);
+      const spiesDef = await c.query(`SELECT amount FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='spies' FOR UPDATE`, [defenderId]);
+      const atkHave = Number(spiesAtk.rows[0]?.amount || 0);
+      const defHave = Number(spiesDef.rows[0]?.amount || 0);
+      if (atkHave < parsed.data.spiesToSend) throw new Error(`not enough spies (have ${atkHave}, need ${parsed.data.spiesToSend})`);
+      const attackBonus = await activeEffectMagnitudeTx(c, attackerId, "intel_vision");
+      const defenseBonus = await activeEffectMagnitudeTx(c, defenderId, "divine_barrier") + await activeEffectMagnitudeTx(c, defenderId, "peace_pact");
+
+      const outcome = resolveSabotageOutcome({
+        spiesToSend: parsed.data.spiesToSend,
+        defenderSpiesHome: defHave,
+        defenderResourceAmount: 0,
+        attackBonus,
+        defenseBonus,
+        random: Math.random,
+      });
+      let { success, spyLosses, survivors } = outcome;
+      await c.query(`UPDATE kingdom_troops SET amount=amount-$2 WHERE kingdom_id=$1 AND troop_code='spies'`, [attackerId, parsed.data.spiesToSend]);
+      if (survivors > 0) await c.query(`UPDATE kingdom_troops SET amount=amount+$2 WHERE kingdom_id=$1 AND troop_code='spies'`, [attackerId, survivors]);
+
+      let stolen = 0;
+      let priestsLost = 0;
+      if (success && parsed.data.operation === "resource_heist") {
+        const defResQ = await c.query(`SELECT ${parsed.data.resource} AS amount FROM kingdoms WHERE id=$1 FOR UPDATE`, [defenderId]);
+        const defAmt = Number(defResQ.rows[0]?.amount || 0);
+        const barrierFactor = Math.max(0.25, 1 - Math.max(0, defenseBonus));
+        stolen = Math.floor(computeSabotageStolen(parsed.data.spiesToSend, defAmt) * barrierFactor);
+        if (stolen > 0) {
+          await c.query(`UPDATE kingdoms SET ${parsed.data.resource} = ${parsed.data.resource} - $2 WHERE id=$1`, [defenderId, stolen]);
+          await c.query(`UPDATE kingdoms SET ${parsed.data.resource} = ${parsed.data.resource} + $2 WHERE id=$1`, [attackerId, stolen]);
+        }
+      } else if (success && parsed.data.operation === "priest_assassination") {
+        const priestsQ = await c.query(`SELECT amount FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='priests' FOR UPDATE`, [defenderId]);
+        const priestsHave = Number(priestsQ.rows[0]?.amount || 0);
+        const cap = Math.max(8, Math.floor(parsed.data.spiesToSend * 0.5));
+        priestsLost = Math.min(priestsHave, cap);
+        if (priestsLost > 0) {
+          await c.query(`UPDATE kingdom_troops SET amount=amount-$2 WHERE kingdom_id=$1 AND troop_code='priests'`, [defenderId, priestsLost]);
+        }
+      }
+      await sendNoticeTx(
+        c,
+        defenderId,
+        success ? "warning" : "info",
+        `${atk.rows[0].name} attempted a ${parsed.data.operation} sabotage operation.`,
+        { success, operation: parsed.data.operation, resource: parsed.data.resource, stolen, priestsLost, spyLosses, attackBonus, defenseBonus },
+      );
+      return {
+        success,
+        operation: parsed.data.operation,
+        resource: parsed.data.resource,
+        stolen,
+        priestsLost,
+        spyLosses,
+        survivors,
+        attackBonus,
+        defenseBonus,
+      };
+    });
+    publishKingdomEvent(parsed.data.defenderKingdom, "guild_sabotage", { success: out.success, operation: out.operation, resource: out.resource, stolen: out.stolen, priestsLost: out.priestsLost });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 app.get("/api/admin/kingdoms", requireAdmin, async (req, res) => {
   const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
   const offset = Math.max(0, Number(req.query.offset || 0));
@@ -4009,12 +4894,40 @@ app.get("/api/pray/:kingdom", async (req, res) => {
 
     // Clean up expired prayers
     await pool.query(`DELETE FROM kingdom_prayers WHERE kingdom_id=$1 AND ends_at <= now()`, [kRow.id]);
+    await pool.query(`DELETE FROM kingdom_status_effects WHERE kingdom_id=$1 AND ends_at <= now()`, [kRow.id]);
 
     const prayers = await pool.query(
       `SELECT id, prayer_code, started_at, ends_at, mana_spent FROM kingdom_prayers WHERE kingdom_id=$1 ORDER BY started_at ASC`,
       [kRow.id],
     );
-    return res.json({ ok: true, mana: Number(kRow.mana || 0), priests, priestCap, manaPerHour, activePrayers: prayers.rows });
+    const casts = await pool.query(
+      `SELECT id, spell_code, mana_spent, payload, created_at
+       FROM kingdom_spell_casts
+       WHERE kingdom_id=$1
+       ORDER BY created_at DESC
+       LIMIT 25`,
+      [kRow.id],
+    );
+    const effects = await pool.query(
+      `
+      SELECT effect_code, magnitude, payload, starts_at, ends_at
+      FROM kingdom_status_effects
+      WHERE kingdom_id=$1 AND ends_at > now()
+      ORDER BY ends_at ASC
+      LIMIT 50
+      `,
+      [kRow.id],
+    );
+    return res.json({
+      ok: true,
+      mana: Number(kRow.mana || 0),
+      priests,
+      priestCap,
+      manaPerHour,
+      activePrayers: prayers.rows,
+      recentCasts: casts.rows,
+      activeEffects: effects.rows,
+    });
   } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
 });
 
@@ -4056,6 +4969,94 @@ app.post("/api/pray/:kingdom/stop", requireAuth, async (req, res) => {
     if (!r.rowCount) return res.status(404).json({ ok: false, error: "prayer not found" });
     return res.json({ ok: true });
   } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.post("/api/pray/:kingdom/cast", requireAuth, async (req, res) => {
+  const parsed = holyCircleCastBody.safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const spellCode = parsed.data.spellCode;
+  const targetKingdom = String(parsed.data.targetKingdom || "").trim();
+  if ((spellCode === "blight" || spellCode === "mana_leech") && !targetKingdom) {
+    return res.status(400).json({ ok: false, error: "targetKingdom is required for this spell" });
+  }
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id, mana, food, stone, gold FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [req.params.kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kr = k.rows[0];
+      await cleanupExpiredEffectsTx(c, Number(kr.id));
+      const manaHave = Number(kr.mana || 0);
+      const manaCost = Number(HOLY_SPELL_COSTS[spellCode] || 0);
+      if (manaHave < manaCost) throw new Error(`not enough mana (need ${manaCost}, have ${manaHave})`);
+      await c.query(`UPDATE kingdoms SET mana=mana-$2 WHERE id=$1`, [kr.id, manaCost]);
+
+      const delta = resolveHolySpellDelta(spellCode, Math.random);
+      let target: { id: number; name: string } | null = null;
+      if (targetKingdom) {
+        const tq = await c.query(`SELECT id, name, mana, food FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [targetKingdom]);
+        if (!tq.rowCount) throw new Error("target kingdom not found");
+        target = { id: Number(tq.rows[0].id), name: String(tq.rows[0].name || targetKingdom) };
+        if (target.id === Number(kr.id)) throw new Error("cannot target your own kingdom");
+      }
+
+      if (delta.mana) await c.query(`UPDATE kingdoms SET mana=mana+$2 WHERE id=$1`, [kr.id, delta.mana]);
+      if (delta.food) await c.query(`UPDATE kingdoms SET food=food+$2 WHERE id=$1`, [kr.id, delta.food]);
+      if (delta.stone) await c.query(`UPDATE kingdoms SET stone=stone+$2 WHERE id=$1`, [kr.id, delta.stone]);
+      if (delta.gold) await c.query(`UPDATE kingdoms SET gold=gold+$2 WHERE id=$1`, [kr.id, delta.gold]);
+
+      if (spellCode === "divine_barrier") {
+        const eff = await addTimedEffectTx(c, {
+          kingdomId: Number(kr.id),
+          effectCode: "divine_barrier",
+          magnitude: Number(delta.sabotageDefenseBonus || 0.22),
+          hours: Number(delta.barrierHours || 12),
+          sourceKind: "spell_cast",
+          sourceRef: null,
+          payload: {},
+        });
+        (delta as any).barrierExpiresAt = eff.expiresAt;
+      }
+
+      if (spellCode === "blight" && target) {
+        const q = await c.query(`SELECT food FROM kingdoms WHERE id=$1 FOR UPDATE`, [target.id]);
+        const have = Number(q.rows[0]?.food || 0);
+        const drained = Math.min(have, Number(delta.foodDrain || 0));
+        if (drained > 0) await c.query(`UPDATE kingdoms SET food=food-$2 WHERE id=$1`, [target.id, drained]);
+        (delta as any).foodDrained = drained;
+      }
+
+      if (spellCode === "mana_leech" && target) {
+        const q = await c.query(`SELECT mana FROM kingdoms WHERE id=$1 FOR UPDATE`, [target.id]);
+        const have = Number(q.rows[0]?.mana || 0);
+        const drained = Math.min(have, Number(delta.manaDrain || 0));
+        const gained = Math.floor(drained * Number(delta.manaGainFactor || 0.6));
+        if (drained > 0) await c.query(`UPDATE kingdoms SET mana=mana-$2 WHERE id=$1`, [target.id, drained]);
+        if (gained > 0) await c.query(`UPDATE kingdoms SET mana=mana+$2 WHERE id=$1`, [kr.id, gained]);
+        (delta as any).manaDrained = drained;
+        (delta as any).manaGained = gained;
+      }
+
+      await c.query(
+        `INSERT INTO kingdom_spell_casts(kingdom_id, spell_code, mana_spent, payload) VALUES($1,$2,$3,$4::jsonb)`,
+        [kr.id, spellCode, manaCost, JSON.stringify({ ...delta, targetKingdom: target?.name || null })],
+      );
+      if (target) {
+        await sendNoticeTx(
+          c,
+          target.id,
+          "warning",
+          `${req.params.kingdom} cast ${spellCode} on your kingdom.`,
+          { spellCode, from: req.params.kingdom, delta },
+        );
+      }
+      return { spellCode, manaCost, delta, targetKingdom: target?.name || null };
+    });
+    publishKingdomEvent(req.params.kingdom, "spell_cast", { spellCode: out.spellCode, delta: out.delta });
+    if (out.targetKingdom) publishKingdomEvent(out.targetKingdom, "spell_hit", { spellCode: out.spellCode, delta: out.delta });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
 });
 
 // ── Marketplace endpoints ─────────────────────────────────────────────────────

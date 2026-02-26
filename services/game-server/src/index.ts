@@ -9,6 +9,7 @@ import {
   type SeasonCode,
 } from "../../../packages/shared/src/index.js";
 import { ensureSchemaLite, pool, withTx } from "./db.js";
+import { computeCatchupBatch } from "./catchup.js";
 
 dotenv.config();
 
@@ -539,9 +540,12 @@ async function runDueTicks() {
     const lastTickAt = new Date(q.rows[0]?.worker_last_tick_at || Date.now());
     const intervalSec = Math.max(1, TICK_INTERVAL_SECONDS);
     const nowMs = Date.now();
-    const elapsedSec = Math.floor((nowMs - lastTickAt.getTime()) / 1000);
-    const dueTicks = Math.floor(elapsedSec / intervalSec);
-    const runCount = Math.max(0, Math.min(MAX_CATCHUP_TICKS, dueTicks));
+    const { dueTicks, runCount, backlog, capped } = computeCatchupBatch({
+      lastTickAtMs: lastTickAt.getTime(),
+      nowMs,
+      intervalSec,
+      maxCatchupTicks: MAX_CATCHUP_TICKS,
+    });
     if (runCount <= 0) return 0;
 
     let totalTickDurationMs = 0;
@@ -569,15 +573,12 @@ async function runDueTicks() {
       const nextLastTickAt = new Date(lastTickAt.getTime() + (i + 1) * intervalSec * 1000);
       await pool.query(`UPDATE game_state SET worker_last_tick_at=$2, updated_at=now() WHERE id=$1`, [1, nextLastTickAt.toISOString()]);
     }
-    if (dueTicks > runCount) {
+    if (capped) {
       await pool.query(`UPDATE game_state SET worker_last_tick_at=now(), updated_at=now() WHERE id=$1`, [1]);
       console.warn(`[tick] catch-up capped: due=${dueTicks} processed=${runCount} cap=${MAX_CATCHUP_TICKS} stale_backlog_skipped=1`);
     }
     console.log(
-      `[tick-batch] ${new Date().toISOString()} due=${dueTicks} processed=${runCount} backlog=${Math.max(
-        0,
-        dueTicks - runCount,
-      )} tick_ms_total=${totalTickDurationMs} batch_ms=${Date.now() - batchStartedAt} totals(build=${totals.builds},train=${
+      `[tick-batch] ${new Date().toISOString()} due=${dueTicks} processed=${runCount} backlog=${backlog} tick_ms_total=${totalTickDurationMs} batch_ms=${Date.now() - batchStartedAt} totals(build=${totals.builds},train=${
         totals.trains
       },research=${totals.research},settlement=${totals.settlementBuilds},shield=${totals.shieldTransitions},returns=${
         totals.returns

@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./base.css";
+import { paginationWindow, splitPigeonMessages } from "./view-models";
 
 function getToken(): string {
   try { return JSON.parse(localStorage.getItem("gg:auth") || "{}").token || ""; } catch { return ""; }
@@ -10,6 +11,22 @@ function authHeaders(): Record<string, string> {
   return t
     ? { "Content-Type": "application/json", Authorization: `Bearer ${t}` }
     : { "Content-Type": "application/json" };
+}
+
+function useKingdomStream(kingdom: string, onRefresh: () => void) {
+  const cbRef = useRef(onRefresh);
+  useEffect(() => { cbRef.current = onRefresh; }, [onRefresh]);
+  useEffect(() => {
+    const k = String(kingdom || "").trim();
+    if (!k) return;
+    const es = new EventSource(`${API_BASE}/api/stream/${encodeURIComponent(k)}`);
+    const handler = () => cbRef.current();
+    es.addEventListener("refresh", handler as EventListener);
+    return () => {
+      es.removeEventListener("refresh", handler as EventListener);
+      es.close();
+    };
+  }, [kingdom]);
 }
 
 type NavItem = { id: string; label: string; group: "top" | "kingdom" };
@@ -1932,127 +1949,237 @@ function ForumsView() {
 
 function AllianceForumsView() {
   const kingdom = localStorage.getItem(KINGDOM_STORAGE_KEY) || "";
-  const [allianceData, setAllianceData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"roster" | "message">("roster");
-  const [to, setTo] = useState("");
-  const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
-  const [sending, setSending] = useState(false);
-  const [msg, setMsg] = useState("");
+  const [threads, setThreads] = useState<any[]>([]);
+  const [allianceName, setAllianceName] = useState("");
+  const [selectedThreadId, setSelectedThreadId] = useState<number | null>(null);
+  const [threadMeta, setThreadMeta] = useState<any>(null);
+  const [posts, setPosts] = useState<any[]>([]);
+  const [threadTitle, setThreadTitle] = useState("");
+  const [threadBody, setThreadBody] = useState("");
+  const [threadPinned, setThreadPinned] = useState(false);
+  const [postBody, setPostBody] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [searchQ, setSearchQ] = useState("");
+  const [viewerRole, setViewerRole] = useState("member");
+  const [canModerate, setCanModerate] = useState(false);
+  const [viewerKingdomId, setViewerKingdomId] = useState<number | null>(null);
+  const [modLog, setModLog] = useState<any[]>([]);
+  const [statusMsg, setStatusMsg] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    async function load() {
-      if (!kingdom) { setLoading(false); return; }
-      try {
-        const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}`);
-        const j = await r.json();
-        if (j.ok) setAllianceData(j);
-      } catch { /* silent */ }
-      finally { setLoading(false); }
-    }
-    void load();
-  }, [kingdom]);
-
-  async function sendPigeon(e: React.FormEvent) {
-    e.preventDefault();
-    if (!to.trim() || !subject.trim() || !body.trim()) { setMsg("Fill in all fields."); return; }
-    setSending(true); setMsg("");
+  async function loadThreads(q = searchQ) {
+    if (!kingdom) { setLoading(false); return; }
+    setLoading(true);
+    setError("");
     try {
-      const token = (() => { try { return JSON.parse(localStorage.getItem("gg:auth") || "{}").token; } catch { return ""; } })();
-      const r = await fetch(`${API_BASE}/api/pigeons/${encodeURIComponent(kingdom)}/send`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ toKingdom: to.trim(), subject: subject.trim(), body: body.trim() }),
-      });
+      const r = await fetch(`${API_BASE}/api/alliance-forums/${encodeURIComponent(kingdom)}${q ? `?q=${encodeURIComponent(q)}` : ""}`);
       const j = await r.json();
-      if (!j.ok) throw new Error(j.error || "Failed to send");
-      setMsg("Message sent!"); setTo(""); setSubject(""); setBody("");
-    } catch (e: any) { setMsg(`Error: ${String(e?.message || e)}`); }
-    finally { setSending(false); }
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setThreads(j.threads || []);
+      setAllianceName(String(j?.alliance?.name || ""));
+      setViewerRole(String(j?.viewerRole || "member"));
+      setCanModerate(Boolean(j?.canModerate));
+      if (!selectedThreadId && (j.threads || []).length > 0) setSelectedThreadId(Number(j.threads[0].id));
+      if (Boolean(j?.canModerate)) await loadModLog();
+    } catch (e: any) {
+      setThreads([]);
+      setError(String(e?.message || e));
+    } finally {
+      setLoading(false);
+    }
   }
 
-  const TAB_BTN = (id: "roster" | "message", label: string) => (
-    <button onClick={() => setTab(id)} style={{ ...BTN_STYLE, background: tab === id ? "rgba(216,176,117,.4)" : "rgba(216,176,117,.1)", borderColor: tab === id ? "rgba(216,176,117,.8)" : "rgba(216,176,117,.3)", fontSize: 14 }}>
-      {label}
-    </button>
-  );
+  async function loadThreadPosts(threadId: number) {
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance-forums/${encodeURIComponent(kingdom)}/threads/${threadId}`);
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setThreadMeta(j.thread || null);
+      setPosts(j.posts || []);
+      setCanModerate(Boolean(j?.canModerate));
+      setViewerKingdomId(Number(j?.viewerKingdomId || 0) || null);
+      setViewerRole(String(j?.viewerRole || viewerRole));
+    } catch (e: any) {
+      setThreadMeta(null);
+      setPosts([]);
+      setError(String(e?.message || e));
+    }
+  }
 
-  const members: any[] = allianceData?.members || [];
-  const allianceName: string = allianceData?.alliance?.name || "";
+  async function loadModLog() {
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance-forums/${encodeURIComponent(kingdom)}/mod-log?limit=20`, { headers: authHeaders() });
+      const j = await r.json();
+      if (r.ok && j?.ok) setModLog(Array.isArray(j.items) ? j.items : []);
+    } catch {}
+  }
+
+  useEffect(() => { void loadThreads(); }, [kingdom]);
+  useEffect(() => { if (selectedThreadId) void loadThreadPosts(selectedThreadId); }, [selectedThreadId]);
+  useKingdomStream(kingdom, () => {
+    void loadThreads();
+    if (selectedThreadId) void loadThreadPosts(selectedThreadId);
+  });
+
+  async function createThread(e: React.FormEvent) {
+    e.preventDefault();
+    if (!threadTitle.trim() || !threadBody.trim()) return;
+    setBusy(true);
+    setStatusMsg("");
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance-forums/${encodeURIComponent(kingdom)}/threads`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ title: threadTitle.trim(), body: threadBody.trim(), pinned: threadPinned }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setThreadTitle("");
+      setThreadBody("");
+      setThreadPinned(false);
+      setStatusMsg("Thread created.");
+      await loadThreads();
+      if (j?.thread?.id) setSelectedThreadId(Number(j.thread.id));
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createPost(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selectedThreadId || !postBody.trim()) return;
+    setBusy(true);
+    setStatusMsg("");
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance-forums/${encodeURIComponent(kingdom)}/threads/${selectedThreadId}/posts`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ body: postBody.trim() }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setPostBody("");
+      setStatusMsg("Reply posted.");
+      await loadThreadPosts(selectedThreadId);
+      await loadThreads();
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
       <div style={CARD}>
         <div style={{ fontFamily: FONT_DISPLAY, fontSize: 26, fontWeight: 800, marginBottom: 4 }}>
-          Alliance Forums {allianceName ? `— ${allianceName}` : ""}
+          Alliance Forums {allianceName ? `- ${allianceName}` : ""}
         </div>
         <div style={{ color: TEXT_MUTED, fontSize: 13, marginBottom: 12 }}>
-          Coordinate with your allies — view the roster or send a private message.
+          Dedicated alliance threads and replies for strategy, war planning, and logistics.
         </div>
-        <div style={{ display: "flex", gap: 8 }}>{TAB_BTN("roster", "Alliance Roster")}{TAB_BTN("message", "Message Ally")}</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <button onClick={() => void loadThreads()} style={{ ...BTN_STYLE, fontSize: 13 }}>Refresh Threads</button>
+          <span style={{ fontSize: 12, color: TEXT_MUTED }}>Role: {viewerRole}</span>
+        </div>
+        <form onSubmit={runSearch} style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+          <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search threads/posts..." style={{ ...INPUT_STYLE, minWidth: 220 }} />
+          <button type="submit" style={{ ...BTN_STYLE, fontSize: 13 }}>Search</button>
+          {searchQ ? <button type="button" onClick={() => { setSearchInput(""); setSearchQ(""); void loadThreads(""); }} style={{ ...BTN_STYLE, fontSize: 13 }}>Clear</button> : null}
+        </form>
       </div>
+      {statusMsg ? <div style={{ ...CARD, color: "#c8e7b1" }}>{statusMsg}</div> : null}
+      {error ? <div style={{ ...CARD, color: "#ffae9a" }}>{error}</div> : null}
+      {loading ? <div style={{ ...CARD, color: TEXT_MUTED }}>Loading...</div> : null}
 
-      {loading ? (
-        <div style={{ ...CARD, color: TEXT_MUTED }}>Loading…</div>
-      ) : !allianceData?.alliance ? (
-        <div style={{ ...CARD, color: TEXT_MUTED }}>You are not in an alliance. Join or create one in the Alliance tab.</div>
-      ) : (
-        <>
-          {tab === "roster" && (
-            <div style={CARD}>
-              <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 10 }}>Members ({members.length})</div>
-              {members.length === 0 ? (
-                <div style={{ color: TEXT_MUTED }}>No members.</div>
-              ) : (
-                <div style={{ display: "grid", gap: 6 }}>
-                  {members.map((m: any) => (
-                    <div key={m.kingdom_name} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, background: "rgba(216,176,117,.05)", border: "1px solid rgba(216,176,117,.1)" }}>
-                      <div style={{ flex: 1 }}>
-                        <span style={{ fontWeight: 700, color: TEXT_MAIN }}>{m.kingdom_name}</span>
-                        {m.role === "leader" && <span style={{ marginLeft: 6, fontSize: 11, color: "#f5c842", fontWeight: 700, textTransform: "uppercase" }}>Leader</span>}
-                        {m.role === "officer" && <span style={{ marginLeft: 6, fontSize: 11, color: ACCENT, fontWeight: 700, textTransform: "uppercase" }}>Officer</span>}
-                      </div>
-                      <div style={{ fontSize: 13, color: TEXT_MUTED }}>{m.username}</div>
-                      <button
-                        onClick={() => { setTab("message"); setTo(m.kingdom_name); }}
-                        style={{ ...BTN_STYLE, fontSize: 11, padding: "4px 8px" }}
-                      >
-                        Message
-                      </button>
-                    </div>
-                  ))}
+      <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: 12 }}>
+        <div style={{ ...CARD, alignContent: "start", display: "grid", gap: 10 }}>
+          <div style={{ fontWeight: 800, fontSize: 16 }}>Threads</div>
+          <div style={{ display: "grid", gap: 6, maxHeight: 420, overflowY: "auto" }}>
+            {threads.map((t: any) => (
+              <button
+                key={t.id}
+                onClick={() => setSelectedThreadId(Number(t.id))}
+                style={{ ...BTN_STYLE, textAlign: "left", background: selectedThreadId === Number(t.id) ? "rgba(216,176,117,.35)" : "rgba(8,8,10,.52)" }}
+              >
+                <div style={{ fontWeight: 700 }}>{Boolean(t.pinned) ? "[PIN] " : ""}{Boolean(t.locked) ? "[LOCK] " : ""}{String(t.title || "")}</div>
+                <div style={{ fontSize: 11, color: TEXT_MUTED }}>by {String(t.author_kingdom_name || "")} - {Number(t.post_count || 0)} posts</div>
+              </button>
+            ))}
+          </div>
+          <form onSubmit={createThread} style={{ display: "grid", gap: 8, marginTop: 8 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>Create Thread</div>
+            <input value={threadTitle} onChange={(e) => setThreadTitle(e.target.value)} placeholder="Thread title" style={INPUT_STYLE} />
+            <textarea value={threadBody} onChange={(e) => setThreadBody(e.target.value)} placeholder="Thread opening post..." rows={4} style={{ ...INPUT_STYLE, resize: "vertical" }} />
+            {canModerate ? (
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: TEXT_MUTED }}>
+                <input type="checkbox" checked={threadPinned} onChange={(e) => setThreadPinned(e.target.checked)} />
+                Pin on creation
+              </label>
+            ) : null}
+            <button type="submit" disabled={busy} style={{ ...BTN_STYLE, fontSize: 13 }}>{busy ? "Posting..." : "Post Thread"}</button>
+          </form>
+        </div>
+
+        <div style={{ ...CARD, display: "grid", gap: 10 }}>
+          <div style={{ fontWeight: 800, fontSize: 16 }}>{selectedThreadId ? String(threadMeta?.title || `Thread #${selectedThreadId}`) : "Select a thread"}</div>
+          {canModerate && selectedThreadId ? (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={() => void moderateThread({ pinned: !Boolean(threadMeta?.pinned) })} disabled={busy} style={{ ...BTN_STYLE, fontSize: 12 }}>
+                {Boolean(threadMeta?.pinned) ? "Unpin" : "Pin"}
+              </button>
+              <button onClick={() => void moderateThread({ locked: !Boolean(threadMeta?.locked) })} disabled={busy} style={{ ...BTN_STYLE, fontSize: 12 }}>
+                {Boolean(threadMeta?.locked) ? "Unlock" : "Lock"}
+              </button>
+              <button onClick={() => void moderateThread({ deleteThread: true })} disabled={busy} style={{ ...BTN_STYLE, fontSize: 12, background: "rgba(180,60,60,.55)" }}>
+                Delete Thread
+              </button>
+            </div>
+          ) : null}
+          <div style={{ display: "grid", gap: 8, maxHeight: 420, overflowY: "auto" }}>
+            {posts.map((p: any) => (
+              <div key={p.id} style={{ border: "1px solid rgba(216,176,117,.15)", borderRadius: 8, padding: "10px 12px", background: "rgba(0,0,0,.2)" }}>
+                <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 4 }}>
+                  {String(p.author_kingdom_name || p.author_username || "Unknown")} - {p.created_at ? new Date(String(p.created_at)).toLocaleString() : ""}
                 </div>
-              )}
+                <div style={{ fontSize: 14, color: TEXT_MAIN, whiteSpace: "pre-wrap", lineHeight: 1.45 }}>{String(p.body || "")}</div>
+                {(canModerate || Number(p.author_kingdom_id || 0) === Number(viewerKingdomId || 0)) ? (
+                  <div style={{ marginTop: 8 }}>
+                    <button onClick={() => void deletePost(Number(p.id))} disabled={busy} style={{ ...BTN_STYLE, fontSize: 11, padding: "3px 8px", background: "rgba(180,60,60,.45)" }}>Delete</button>
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+          <form onSubmit={createPost} style={{ display: "grid", gap: 8 }}>
+            <textarea value={postBody} onChange={(e) => setPostBody(e.target.value)} placeholder="Write a reply..." rows={4} style={{ ...INPUT_STYLE, resize: "vertical" }} disabled={!selectedThreadId} />
+            <button type="submit" disabled={busy || !selectedThreadId} style={{ ...BTN_STYLE, fontSize: 13 }}>{busy ? "Sending..." : "Reply"}</button>
+          </form>
+          {canModerate ? (
+            <div style={{ marginTop: 8, borderTop: "1px solid rgba(216,176,117,.15)", paddingTop: 8 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Moderation Log</div>
+              <div style={{ display: "grid", gap: 4, maxHeight: 140, overflowY: "auto" }}>
+                {modLog.map((m: any) => (
+                  <div key={m.id} style={{ fontSize: 12, color: TEXT_MUTED }}>
+                    {String(m.action)} by {String(m.actor_kingdom || "Unknown")} - {m.created_at ? new Date(String(m.created_at)).toLocaleString() : ""}
+                  </div>
+                ))}
+                {modLog.length === 0 ? <div style={{ fontSize: 12, color: TEXT_MUTED }}>No moderation actions yet.</div> : null}
+              </div>
             </div>
-          )}
-
-          {tab === "message" && (
-            <div style={{ ...CARD, maxWidth: 520 }}>
-              <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 12 }}>Send Message to Ally</div>
-              <form onSubmit={sendPigeon} style={{ display: "grid", gap: 10 }}>
-                <label style={{ fontSize: 13, color: TEXT_MUTED }}>
-                  To Kingdom
-                  <select value={to} onChange={(e) => setTo(e.target.value)} style={{ ...INPUT_STYLE, display: "block", width: "100%", marginTop: 4 }}>
-                    <option value="">— select ally —</option>
-                    {members.filter((m: any) => m.kingdom_name.toLowerCase() !== kingdom.toLowerCase()).map((m: any) => (
-                      <option key={m.kingdom_name} value={m.kingdom_name}>{m.kingdom_name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label style={{ fontSize: 13, color: TEXT_MUTED }}>Subject<input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" style={{ ...INPUT_STYLE, display: "block", width: "100%", marginTop: 4, boxSizing: "border-box" }} /></label>
-                <label style={{ fontSize: 13, color: TEXT_MUTED }}>Message<textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="Your message…" rows={5} style={{ ...INPUT_STYLE, display: "block", width: "100%", marginTop: 4, boxSizing: "border-box", resize: "vertical" as const }} /></label>
-                {msg && <div style={{ fontSize: 13, color: msg.startsWith("Error") ? "#ffb5a5" : "#a8e6a3" }}>{msg}</div>}
-                <button type="submit" style={BTN_STYLE} disabled={sending}>{sending ? "Sending…" : "Send Message"}</button>
-              </form>
-            </div>
-          )}
-        </>
-      )}
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }
-
 function WarRoomView() {
   const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "Elixer");
   const [data, setData] = useState<any>(null);
@@ -3022,6 +3149,15 @@ const PRAYER_DEFS: Record<string, { name: string; effect: string; manaPerDay: nu
   springs_effect:     { name: "Springs Effect",      effect: "Increases the amount of animals produced by Kingdom farms (9%)",    manaPerDay: 1000, icon: "🌊" },
   traders_whip:       { name: "Trader's Whip",       effect: "Increases the speed that market wagons purchase from market (25%)", manaPerDay: 1000, icon: "🛒" },
 };
+const HOLY_SPELL_DEFS: Record<string, { name: string; manaCost: number; effect: string; requiresTarget?: boolean }> = {
+  mana_surge: { name: "Mana Surge", manaCost: 1200, effect: "Converts prayer energy into an immediate mana gain." },
+  blessing_of_plenty: { name: "Blessing of Plenty", manaCost: 1600, effect: "Creates an immediate food surge." },
+  stoneskin: { name: "Stoneskin", manaCost: 1500, effect: "Conjures defensive stone stores." },
+  war_zeal: { name: "War Zeal", manaCost: 2200, effect: "Converts zeal into immediate gold." },
+  divine_barrier: { name: "Divine Barrier", manaCost: 1800, effect: "Applies a temporary anti-sabotage ward to your kingdom." },
+  blight: { name: "Blight", manaCost: 2100, effect: "Curses a target kingdom and drains food reserves.", requiresTarget: true },
+  mana_leech: { name: "Mana Leech", manaCost: 1900, effect: "Drains mana from a target kingdom and siphons a portion.", requiresTarget: true },
+};
 
 function PrayView() {
   const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "");
@@ -3030,6 +3166,8 @@ function PrayView() {
   const [error, setError] = useState("");
   const [actionMsg, setActionMsg] = useState("");
   const [selectedPrayer, setSelectedPrayer] = useState(Object.keys(PRAYER_DEFS)[0]);
+  const [selectedSpell, setSelectedSpell] = useState(Object.keys(HOLY_SPELL_DEFS)[0]);
+  const [spellTarget, setSpellTarget] = useState("");
   const [days, setDays] = useState(7);
   const [busy, setBusy] = useState(false);
 
@@ -3047,6 +3185,7 @@ function PrayView() {
   }
 
   useEffect(() => { void load(); }, []);
+  useKingdomStream(kingdom, () => { void load(); });
 
   async function startPrayer(e: React.FormEvent) {
     e.preventDefault();
@@ -3084,11 +3223,97 @@ function PrayView() {
     finally { setBusy(false); }
   }
 
+  async function castSpell(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/pray/${encodeURIComponent(kingdom)}/cast`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          spellCode: selectedSpell,
+          targetKingdom: HOLY_SPELL_DEFS[selectedSpell]?.requiresTarget ? spellTarget.trim() : undefined,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const delta = j.delta || {};
+      const gains = Object.entries(delta)
+        .map(([k, v]) => `+${Number(v).toLocaleString()} ${String(k)}`)
+        .join(", ");
+      setActionMsg(`${HOLY_SPELL_DEFS[selectedSpell]?.name || selectedSpell} cast${gains ? `: ${gains}` : "."}`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Error: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function moderateThread(action: { pinned?: boolean; locked?: boolean; deleteThread?: boolean }) {
+    if (!selectedThreadId) return;
+    if (action.deleteThread && !window.confirm("Delete this thread and all replies?")) return;
+    setBusy(true);
+    setStatusMsg("");
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance-forums/${encodeURIComponent(kingdom)}/threads/${selectedThreadId}/moderate`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify(action),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setStatusMsg(action.deleteThread ? "Thread deleted." : "Thread moderation updated.");
+      if (action.deleteThread) setSelectedThreadId(null);
+      await loadThreads();
+      if (!action.deleteThread && selectedThreadId) await loadThreadPosts(selectedThreadId);
+      await loadModLog();
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deletePost(postId: number) {
+    setBusy(true);
+    setStatusMsg("");
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance-forums/${encodeURIComponent(kingdom)}/posts/${postId}/moderate`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ deletePost: true }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setStatusMsg("Post deleted.");
+      if (selectedThreadId) await loadThreadPosts(selectedThreadId);
+      await loadThreads();
+      await loadModLog();
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function runSearch(e: React.FormEvent) {
+    e.preventDefault();
+    const q = searchInput.trim();
+    setSearchQ(q);
+    void loadThreads(q);
+  }
+
   const mana: number = data?.mana ?? 0;
   const priests: number = data?.priests ?? 0;
   const priestCap: number = data?.priestCap ?? 0;
   const manaPerHour: number = data?.manaPerHour ?? 0;
   const activePrayers: any[] = data?.activePrayers ?? [];
+  const recentCasts: any[] = data?.recentCasts ?? [];
+  const activeEffects: any[] = data?.activeEffects ?? [];
   const selDef = PRAYER_DEFS[selectedPrayer];
   const totalManaCost = selDef ? selDef.manaPerDay * days : 0;
   const canAfford = mana >= totalManaCost;
@@ -3222,6 +3447,63 @@ function PrayView() {
             </div>
           )}
         </form>
+      </div>
+
+      <div style={CARD}>
+        <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 12 }}>Cast Spell</div>
+        <form onSubmit={castSpell} style={{ display: "grid", gap: 10 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <select value={selectedSpell} onChange={(e) => setSelectedSpell(e.target.value)} style={{ ...INPUT_STYLE, minWidth: 240 }}>
+              {Object.entries(HOLY_SPELL_DEFS).map(([code, def]) => (
+                <option key={code} value={code}>{def.name} ({def.manaCost.toLocaleString()} mana)</option>
+              ))}
+            </select>
+            {HOLY_SPELL_DEFS[selectedSpell]?.requiresTarget ? (
+              <input value={spellTarget} onChange={(e) => setSpellTarget(e.target.value)} placeholder="Target kingdom" style={{ ...INPUT_STYLE, minWidth: 180 }} />
+            ) : null}
+            <button
+              type="submit"
+              style={BTN_STYLE}
+              disabled={
+                busy
+                || mana < Number(HOLY_SPELL_DEFS[selectedSpell]?.manaCost || 0)
+                || (HOLY_SPELL_DEFS[selectedSpell]?.requiresTarget && !spellTarget.trim())
+              }
+            >
+              {busy ? "Casting..." : "Cast"}
+            </button>
+          </div>
+          <div style={{ fontSize: 13, color: TEXT_MUTED }}>
+            {HOLY_SPELL_DEFS[selectedSpell]?.effect} Cost: {Number(HOLY_SPELL_DEFS[selectedSpell]?.manaCost || 0).toLocaleString()} mana.
+          </div>
+        </form>
+        <div style={{ marginTop: 14, display: "grid", gap: 6 }}>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>Recent Casts</div>
+          {recentCasts.length === 0 ? (
+            <div style={{ fontSize: 13, color: TEXT_MUTED }}>No spells cast yet.</div>
+          ) : (
+            recentCasts.map((c: any) => (
+              <div key={c.id} style={{ fontSize: 13, color: TEXT_MUTED, border: "1px solid rgba(216,176,117,.12)", borderRadius: 6, padding: "8px 10px" }}>
+                <span style={{ color: TEXT_MAIN, fontWeight: 700 }}>{HOLY_SPELL_DEFS[String(c.spell_code)]?.name || String(c.spell_code)}</span>
+                {` - spent ${Number(c.mana_spent || 0).toLocaleString()} mana`}
+                {` - ${c.created_at ? new Date(String(c.created_at)).toLocaleString() : ""}`}
+              </div>
+            ))
+          )}
+        </div>
+        <div style={{ marginTop: 12, display: "grid", gap: 6 }}>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>Active Effects</div>
+          {activeEffects.length === 0 ? (
+            <div style={{ fontSize: 13, color: TEXT_MUTED }}>No active timed effects.</div>
+          ) : (
+            activeEffects.map((e: any, idx: number) => (
+              <div key={`${e.effect_code}-${idx}`} style={{ fontSize: 13, color: TEXT_MUTED }}>
+                <span style={{ color: TEXT_MAIN, fontWeight: 700 }}>{String(e.effect_code || "")}</span>
+                {` (${Number(e.magnitude || 0).toFixed(2)}) until ${e.ends_at ? new Date(String(e.ends_at)).toLocaleString() : ""}`}
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
       {/* All prayers reference table */}
@@ -3972,6 +4254,7 @@ function RankingsView() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const PAGE_SIZE = 20;
+  const pageWindow = paginationWindow(total, page, PAGE_SIZE);
 
   const myKingdom = localStorage.getItem(KINGDOM_STORAGE_KEY) || "";
 
@@ -4012,6 +4295,7 @@ function RankingsView() {
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, page, search]);
+  useKingdomStream(myKingdom, () => { void load(page, search, tab); });
 
   function doSearch() {
     setSearch(searchInput);
@@ -4040,7 +4324,7 @@ function RankingsView() {
             {loading ? <div style={{ color: TEXT_MUTED }}>Loading...</div> : null}
 
             <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 8 }}>
-              Showing {total ? page * PAGE_SIZE + 1 : 0}-{Math.min((page + 1) * PAGE_SIZE, total)} of {total.toLocaleString()} alliances
+              Showing {pageWindow.start}-{pageWindow.end} of {total.toLocaleString()} alliances
             </div>
 
             <div style={{ overflowX: "auto" }}>
@@ -4092,7 +4376,7 @@ function RankingsView() {
             {loading ? <div style={{ color: TEXT_MUTED }}>Loading...</div> : null}
 
             <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 8 }}>
-              Showing {total ? page * PAGE_SIZE + 1 : 0}-{Math.min((page + 1) * PAGE_SIZE, total)} of {total.toLocaleString()} kingdoms
+              Showing {pageWindow.start}-{pageWindow.end} of {total.toLocaleString()} kingdoms
             </div>
 
             <div style={{ overflowX: "auto" }}>
@@ -4175,6 +4459,7 @@ function PigeonsView() {
   }
 
   useEffect(() => { void load(); }, []);
+  useKingdomStream(kingdom, () => { void load(); });
 
   async function markRead(id: number) {
     try {
@@ -4216,8 +4501,7 @@ function PigeonsView() {
     }
   }
 
-  const inbox = messages.filter((m: any) => !String(m.subject || "").startsWith("Sent:"));
-  const outbox = messages.filter((m: any) => String(m.subject || "").startsWith("Sent:"));
+  const { inbox, outbox } = splitPigeonMessages(messages);
   const displayed = tab === "inbox" ? inbox : outbox;
   const unreadCount = inbox.filter((m: any) => !m.read_at).length;
 
@@ -4307,6 +4591,10 @@ function GuildhallView() {
   const [trainAmt, setTrainAmt] = useState(1);
   const [defenderKingdom, setDefenderKingdom] = useState("");
   const [spiesToSend, setSpiesToSend] = useState(1);
+  const [sabotageTarget, setSabotageTarget] = useState("");
+  const [sabotageSpies, setSabotageSpies] = useState(10);
+  const [sabotageOperation, setSabotageOperation] = useState<"resource_heist" | "priest_assassination">("resource_heist");
+  const [sabotageResource, setSabotageResource] = useState<"gold" | "food" | "wood" | "stone">("gold");
   const [busy, setBusy] = useState(false);
 
   async function load() {
@@ -4331,6 +4619,7 @@ function GuildhallView() {
   }
 
   useEffect(() => { void load(); }, []);
+  useKingdomStream(kingdom, () => { void load(); });
 
   const spiesTroop = (data?.troops || []).find((t: any) => String(t.troopCode || t.troop_code || t.code) === "spies");
   const trainQueue = (data?.training || []).filter((q: any) => String(q.troop_code) === "spies" && String(q.status) === "queued");
@@ -4374,6 +4663,41 @@ function GuildhallView() {
       await load();
     } catch (e: any) {
       setActionMsg(`Spy failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sabotage(e: React.FormEvent) {
+    e.preventDefault();
+    if (!sabotageTarget.trim()) return;
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/guildhall/${encodeURIComponent(kingdom)}/sabotage`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          defenderKingdom: sabotageTarget.trim(),
+          spiesToSend: sabotageSpies,
+          resource: sabotageResource,
+          operation: sabotageOperation,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      if (sabotageOperation === "priest_assassination") {
+        setActionMsg(j.success
+          ? `Operation succeeded: enemy priests lost ${Number(j.priestsLost || 0)}. Spy losses ${Number(j.spyLosses || 0)}.`
+          : `Operation failed: spy losses ${Number(j.spyLosses || 0)}.`);
+      } else {
+        setActionMsg(j.success
+          ? `Sabotage success: stole ${Number(j.stolen || 0).toLocaleString()} ${sabotageResource}; losses ${Number(j.spyLosses || 0)} spies.`
+          : `Sabotage failed: losses ${Number(j.spyLosses || 0)} spies.`);
+      }
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Sabotage failed: ${String(e?.message || e)}`);
     } finally {
       setBusy(false);
     }
@@ -4470,6 +4794,31 @@ function GuildhallView() {
             ) : null}
           </div>
 
+          <div style={CARD}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Sabotage Mission</div>
+            <form onSubmit={sabotage} style={{ display: "grid", gap: 8 }}>
+              <input value={sabotageTarget} onChange={(e) => setSabotageTarget(e.target.value)} placeholder="Target Kingdom" style={INPUT_STYLE} required />
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 13, color: TEXT_MUTED }}>Operation</span>
+                <select value={sabotageOperation} onChange={(e) => setSabotageOperation(e.target.value as "resource_heist" | "priest_assassination")} style={INPUT_STYLE}>
+                  <option value="resource_heist">Resource Heist</option>
+                  <option value="priest_assassination">Priest Assassination</option>
+                </select>
+                <span style={{ fontSize: 13, color: TEXT_MUTED }}>Resource</span>
+                <select disabled={sabotageOperation !== "resource_heist"} value={sabotageResource} onChange={(e) => setSabotageResource(e.target.value as "gold" | "food" | "wood" | "stone")} style={INPUT_STYLE}>
+                  <option value="gold">Gold</option>
+                  <option value="food">Food</option>
+                  <option value="wood">Wood</option>
+                  <option value="stone">Stone</option>
+                </select>
+                <span style={{ fontSize: 13, color: TEXT_MUTED }}>Spies</span>
+                <input type="number" min={1} value={sabotageSpies} onChange={(e) => setSabotageSpies(Math.max(1, Number(e.target.value || 1)))} style={{ ...INPUT_STYLE, width: 90 }} />
+              </div>
+              <button type="submit" disabled={busy} style={{ ...BTN_STYLE, width: "fit-content", fontSize: 13 }}>
+                {busy ? "Executing..." : "Run Sabotage"}
+              </button>
+            </form>
+          </div>
           {reports.length > 0 ? (
             <div style={CARD}>
               <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Recent Spy Reports</div>
@@ -4495,16 +4844,26 @@ function EmbassyView() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [statusMsg, setStatusMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [missionType, setMissionType] = useState<"peace" | "trade" | "intel">("peace");
+  const [targetKingdom, setTargetKingdom] = useState("");
+  const [missionNote, setMissionNote] = useState("");
 
   async function load() {
     if (!kingdom.trim()) return;
     setLoading(true);
     setError("");
     try {
-      const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`);
-      const j = await r.json();
-      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setData(j);
+      const [warRes, embRes] = await Promise.all([
+        fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`),
+        fetch(`${API_BASE}/api/embassy/${encodeURIComponent(kingdom)}`),
+      ]);
+      const warJson = await warRes.json();
+      const embJson = await embRes.json();
+      if (!warRes.ok || !warJson?.ok) throw new Error(warJson?.error || `HTTP ${warRes.status}`);
+      if (!embRes.ok || !embJson?.ok) throw new Error(embJson?.error || `HTTP ${embRes.status}`);
+      setData({ war: warJson, embassy: embJson });
     } catch (e: any) {
       setError(String(e?.message || e));
     } finally {
@@ -4513,11 +4872,61 @@ function EmbassyView() {
   }
 
   useEffect(() => { void load(); }, []);
+  useKingdomStream(kingdom, () => { void load(); });
 
-  const diplomats = (data?.troops || []).find((t: any) => String(t.troop_code || t.code) === "diplomats");
-  const incomingDiplomats = (data?.diplomats || []) as Array<any>;
-  const rankNum = Number(data?.kingdom?.rank || 0);
-  const allianceTag = String(data?.kingdom?.allianceTag || "").trim();
+  const diplomats = (data?.war?.troops || []).find((t: any) => String(t.troop_code || t.code || t.troopCode) === "diplomats");
+  const incomingMissions = (data?.embassy?.incoming || []) as Array<any>;
+  const outgoingMissions = (data?.embassy?.outgoing || []) as Array<any>;
+  const activeEffects = (data?.embassy?.activeEffects || []) as Array<any>;
+  const rankNum = Number(data?.war?.kingdom?.rank || 0);
+  const allianceTag = String(data?.war?.kingdom?.allianceTag || "").trim();
+
+  async function sendMission(e: React.FormEvent) {
+    e.preventDefault();
+    if (!targetKingdom.trim()) return;
+    setBusy(true);
+    setStatusMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/embassy/${encodeURIComponent(kingdom)}/send`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ targetKingdom: targetKingdom.trim(), missionType, note: missionNote.trim() }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setStatusMsg(`Diplomatic mission sent to ${targetKingdom.trim()}.`);
+      setTargetKingdom("");
+      setMissionNote("");
+      await load();
+    } catch (e: any) {
+      setStatusMsg(`Mission failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function respondMission(missionId: number, action: "accepted" | "declined") {
+    setBusy(true);
+    setStatusMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/embassy/${encodeURIComponent(kingdom)}/respond`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ missionId, action }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      const applied = Array.isArray(j?.appliedEffects) && j.appliedEffects.length > 0
+        ? ` Effects: ${j.appliedEffects.map((x: any) => String(x.effectCode || "")).join(", ")}.`
+        : "";
+      setStatusMsg(`Mission ${action}.${applied}`);
+      await load();
+    } catch (e: any) {
+      setStatusMsg(`Respond failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const TH: React.CSSProperties = { padding: "6px 10px", textAlign: "left", color: ACCENT, fontSize: 12, borderBottom: "1px solid rgba(216,176,117,.2)" };
   const TD: React.CSSProperties = { padding: "6px 10px", fontSize: 13, borderBottom: "1px solid rgba(255,255,255,.05)" };
@@ -4536,6 +4945,7 @@ function EmbassyView() {
         </div>
         {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading...</div> : null}
         {error ? <div style={{ marginTop: 8, color: "#ffae9a" }}>{error}</div> : null}
+        {statusMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{statusMsg}</div> : null}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -4574,7 +4984,7 @@ function EmbassyView() {
         <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
           <div style={CARD}>
             <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Foreign Diplomats</div>
-            {incomingDiplomats.length === 0 ? (
+            {incomingMissions.length === 0 ? (
               <div style={{ color: TEXT_MUTED, fontSize: 14 }}>No diplomats currently deployed to this kingdom.</div>
             ) : (
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -4583,20 +4993,75 @@ function EmbassyView() {
                     <th style={TH}>Kingdom</th>
                     <th style={TH}>Status</th>
                     <th style={TH}>Count</th>
+                    <th style={TH}>Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {incomingDiplomats.map((d: any, i: number) => (
+                  {incomingMissions.map((d: any, i: number) => (
                     <tr key={i}>
-                      <td style={TD}>{String(d.from_kingdom || d.kingdom || "Unknown")}</td>
-                      <td style={{ ...TD, color: d.status === "war" ? "#ff7f7f" : d.status === "peace" ? "#a8e6a3" : TEXT_MUTED }}>
-                        {d.status === "war" ? "At War" : d.status === "peace" ? "At Peace" : "Neutral"}
+                      <td style={TD}>{String(d.from_kingdom || "Unknown")}</td>
+                      <td style={{ ...TD, color: d.status === "accepted" ? "#a8e6a3" : d.status === "declined" ? "#ff7f7f" : TEXT_MUTED }}>
+                        {String(d.mission_type || "").toUpperCase()} • {String(d.status || "")}
                       </td>
-                      <td style={TD}>{Number(d.count || d.quantity || 1).toLocaleString()}</td>
+                      <td style={TD}>{String(d.note || "-")}</td>
+                      <td style={TD}>
+                        {String(d.status) === "pending" ? (
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button disabled={busy} onClick={() => void respondMission(Number(d.id), "accepted")} style={{ ...BTN_STYLE, fontSize: 11, padding: "3px 8px" }}>Accept</button>
+                            <button disabled={busy} onClick={() => void respondMission(Number(d.id), "declined")} style={{ ...BTN_STYLE, fontSize: 11, padding: "3px 8px", background: "rgba(180,60,60,.5)" }}>Decline</button>
+                          </div>
+                        ) : <span style={{ fontSize: 12, color: TEXT_MUTED }}>Closed</span>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            )}
+          </div>
+
+          <div style={CARD}>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Send Diplomatic Mission</div>
+            <form onSubmit={sendMission} style={{ display: "grid", gap: 8 }}>
+              <input value={targetKingdom} onChange={(e) => setTargetKingdom(e.target.value)} placeholder="Target kingdom" style={INPUT_STYLE} required />
+              <select value={missionType} onChange={(e) => setMissionType(e.target.value as any)} style={INPUT_STYLE}>
+                <option value="peace">Peace Proposal</option>
+                <option value="trade">Trade Delegation</option>
+                <option value="intel">Intel Exchange</option>
+              </select>
+              <textarea value={missionNote} onChange={(e) => setMissionNote(e.target.value)} placeholder="Optional note" rows={3} style={{ ...INPUT_STYLE, resize: "vertical" }} />
+              <button type="submit" disabled={busy} style={{ ...BTN_STYLE, width: "fit-content", fontSize: 13 }}>{busy ? "Sending..." : "Send Mission"}</button>
+            </form>
+          </div>
+
+          <div style={CARD}>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Outgoing Missions</div>
+            {outgoingMissions.length === 0 ? <div style={{ color: TEXT_MUTED, fontSize: 14 }}>No outgoing missions.</div> : (
+              <div style={{ display: "grid", gap: 6 }}>
+                {outgoingMissions.slice(0, 8).map((m: any) => (
+                  <div key={m.id} style={{ border: "1px solid rgba(216,176,117,.15)", borderRadius: 8, padding: "8px 10px", fontSize: 13 }}>
+                    <div style={{ color: TEXT_MAIN }}>{String(m.mission_type || "").toUpperCase()} to {String(m.to_kingdom || "Unknown")}</div>
+                    <div style={{ color: TEXT_MUTED }}>{String(m.status || "")} • {m.created_at ? new Date(String(m.created_at)).toLocaleString() : ""}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={CARD}>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Active Diplomatic Effects</div>
+            {activeEffects.length === 0 ? (
+              <div style={{ color: TEXT_MUTED, fontSize: 14 }}>No active diplomatic effects.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 6 }}>
+                {activeEffects.map((e: any, idx: number) => (
+                  <div key={`${e.effect_code}-${idx}`} style={{ border: "1px solid rgba(216,176,117,.15)", borderRadius: 8, padding: "8px 10px", fontSize: 13 }}>
+                    <div style={{ color: TEXT_MAIN }}>{String(e.effect_code || "")}</div>
+                    <div style={{ color: TEXT_MUTED }}>
+                      magnitude {Number(e.magnitude || 0).toFixed(2)} • expires {e.ends_at ? new Date(String(e.ends_at)).toLocaleString() : ""}
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>
@@ -5197,3 +5662,4 @@ function App() {
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
+
