@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "harness:tick": "tsx src/index.ts --harness"
   },
   "dependencies": {
+    "@game-game/shared": "0.1.0",
     "dotenv": "^16.4.5",
     "pg": "^8.13.3"
   },

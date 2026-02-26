@@ -1,24 +1,130 @@
-﻿export const GAME_NAME = "Game Game";
+export const GAME_NAME = "Game Game";
 
-export const SEASONS = ["spring", "summer", "autumn", "winter"] as const;
+export type SeasonCode = "spring" | "summer" | "autumn" | "winter";
 
-export type Season = (typeof SEASONS)[number];
-
-export type BuildingCode = "farm" | "lumberyard" | "quarry" | "barracks" | "stables" | "castles";
-
-export type BuildingDef = {
-  code: BuildingCode;
+export const SEASONS: Array<{
+  code: SeasonCode;
   name: string;
-  woodCost: number;
-  stoneCost: number;
-  baseBuildSeconds: number;
+  flavor: string;
+  modifiers: { food: number; gold: number; wood: number; stone: number };
+}> = [
+  {
+    code: "spring",
+    name: "Spring",
+    flavor: "A new year dawns. Food growth increases and armies recover momentum.",
+    modifiers: { food: 1.25, gold: 1.0, wood: 1.0, stone: 1.0 },
+  },
+  {
+    code: "summer",
+    name: "Summer",
+    flavor: "Trade roads are clear. Gold, food, and wood all gain momentum.",
+    modifiers: { food: 1.1, gold: 1.05, wood: 1.05, stone: 1.0 },
+  },
+  {
+    code: "autumn",
+    name: "Autumn",
+    flavor: "Harvest season peaks. Food and wood stocks climb quickly.",
+    modifiers: { food: 1.2, gold: 1.0, wood: 1.1, stone: 1.0 },
+  },
+  {
+    code: "winter",
+    name: "Winter",
+    flavor: "Cold strains supply lines. Food and gold soften while stone output rises.",
+    modifiers: { food: 0.85, gold: 0.95, wood: 0.95, stone: 1.05 },
+  },
+];
+
+export const ECON_BUILDING_HOURLY = {
+  farmFood: 120,
+  lumberWood: 80,
+  quarryStone: 80,
+  horseFarmHorses: 60,
+  baseGoldPerLand: 3,
+  baseFoodPerLand: 2,
+} as const;
+
+// Mana rates
+export const MANA_PER_PRIEST_PER_HOUR = 4;   // 1 priest = 4 mana/hr (slow game)
+export const PRIESTS_PER_TEMPLE = 5;          // max priests per temple built
+
+export interface PrayerDef {
+  name: string;
+  effect: string;
+  manaPerDay: number;
+  bonus: number;
+  type: string;
+}
+
+export const PRAYERS: Record<string, PrayerDef> = {
+  attacking_wrath:    { name: "Attacking Wrath",    effect: "Increases the attacking values of troops by 5%",                   manaPerDay: 500,  bonus: 0.05, type: "attack_bonus" },
+  steeds_fury:        { name: "Steed's Fury",        effect: "All mounted troops have increased attack statistics (5%)",         manaPerDay: 600,  bonus: 0.05, type: "mounted_attack_bonus" },
+  falors_gift:        { name: "Falor's Gift",        effect: "Increases the amount of Gold Generated (5%)",                     manaPerDay: 700,  bonus: 0.05, type: "gold_bonus" },
+  fertility_blessing: { name: "Fertility Blessing",  effect: "Increases the rate that population arrives (5%)",                 manaPerDay: 1000, bonus: 0.05, type: "population_bonus" },
+  masons_benefice:    { name: "Masons Benefice",     effect: "Increases the rate of stone collection (10%)",                    manaPerDay: 700,  bonus: 0.10, type: "stone_bonus" },
+  foresters_delight:  { name: "Forester's Delight",  effect: "Increases the wood collection rate (10%)",                        manaPerDay: 700,  bonus: 0.10, type: "wood_bonus" },
+  nastfurus_healing:  { name: "Nastfuru's Healing",  effect: "Reduces the casualty rate in battle (9%)",                        manaPerDay: 700,  bonus: 0.09, type: "casualty_reduction" },
+  natures_gift:       { name: "Nature's Gift",       effect: "Increases the yield of Grain (5%)",                               manaPerDay: 700,  bonus: 0.05, type: "food_bonus" },
+  springs_effect:     { name: "Springs Effect",      effect: "Increases the amount of animals produced by Kingdom farms (9%)",  manaPerDay: 1000, bonus: 0.09, type: "horse_bonus" },
+  traders_whip:       { name: "Trader's Whip",       effect: "Increases the speed that market wagons purchase from market (25%)", manaPerDay: 1000, bonus: 0.25, type: "market_bonus" },
 };
 
-export const BUILDINGS: BuildingDef[] = [
-  { code: "farm", name: "Grain Farm", woodCost: 120, stoneCost: 80, baseBuildSeconds: 90 },
-  { code: "lumberyard", name: "Lumber Yard", woodCost: 140, stoneCost: 90, baseBuildSeconds: 100 },
-  { code: "quarry", name: "Stone Quarry", woodCost: 100, stoneCost: 140, baseBuildSeconds: 110 },
-  { code: "barracks", name: "Barracks", woodCost: 220, stoneCost: 220, baseBuildSeconds: 150 },
-  { code: "stables", name: "Stables", woodCost: 260, stoneCost: 180, baseBuildSeconds: 160 },
-  { code: "castles", name: "Castles", woodCost: 900, stoneCost: 1400, baseBuildSeconds: 360 },
+export function clampNumber(v: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, v));
+}
+
+export function peasantDeltaPerHour(taxRate: number) {
+  if (taxRate < 25) return (25 - taxRate) * 50;
+  if (taxRate > 27) return -1 * (taxRate - 27) * 60;
+  return 0;
+}
+
+export function taxGoldMultiplier(taxRate: number) {
+  return clampNumber(1 + (taxRate - 25) * 0.04, 0.2, 2.2);
+}
+
+export function researchGoldCost(baseGold: number, currentLevel: number) {
+  return Math.max(1, Math.floor(baseGold * Math.pow(1.35, Math.max(0, currentLevel))));
+}
+
+export function researchSeconds(baseSeconds: number, currentLevel: number, fastSeconds?: number) {
+  const raw = Math.max(300, Math.floor(baseSeconds * Math.pow(1.25, Math.max(0, currentLevel))));
+  return typeof fastSeconds === "number" && fastSeconds > 0 ? fastSeconds : raw;
+}
+
+export const SETTLEMENT_TYPE_DEF: Record<string, { level: number; slots: number }> = {
+  small_town: { level: 1, slots: 3 },
+  medium_town: { level: 2, slots: 5 },
+  large_town: { level: 3, slots: 8 },
+  small_city: { level: 4, slots: 12 },
+  medium_city: { level: 5, slots: 17 },
+  large_city: { level: 6, slots: 25 },
+};
+
+export const SETTLEMENT_MILESTONE_PLAN: Array<{ land: number; types: string[] }> = [
+  { land: 3000, types: ["small_town"] },
+  { land: 8000, types: ["medium_town", "small_town"] },
+  { land: 14000, types: ["large_town", "medium_town", "small_town"] },
+  { land: 21000, types: ["small_city", "large_town", "medium_town", "small_town"] },
+  { land: 30000, types: ["medium_city", "small_city", "large_town", "medium_town", "small_town"] },
+  { land: 50000, types: ["large_city", "medium_city", "small_city", "large_town", "medium_town", "small_town"] },
+  { land: 100000, types: ["large_city", "large_city", "medium_city", "small_city", "large_town", "medium_town", "small_town"] },
+  { land: 250000, types: ["large_city", "large_city", "large_city", "medium_city", "small_city", "large_town", "medium_town", "small_town"] },
 ];
+
+export function expectedSettlementPlan(land: number) {
+  let plan: { land: number; types: string[] } = { land: 0, types: [] };
+  for (const p of SETTLEMENT_MILESTONE_PLAN) {
+    if (land >= p.land) plan = p;
+  }
+  return plan;
+}
+
+export function settlementTypeDisplay(size: number) {
+  if (size >= 6) return "Large City";
+  if (size >= 5) return "Medium City";
+  if (size >= 4) return "Small City";
+  if (size >= 3) return "Large Town";
+  if (size >= 2) return "Medium Town";
+  return "Small Town";
+}
+

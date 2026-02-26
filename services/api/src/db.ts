@@ -35,7 +35,7 @@ const TROOPS = [
   { code: "heavy_cavalry", name: "Heavy Cavalry", trainGoldCost: 120, trainFoodCost: 100, horseCost: 2, trainSeconds: 90, upkeepFood: 70, upkeepGold: 14, att: 7, def: 5, nw: 0.63, housing: "Cavalry, Stables", notes: "", isTrainable: true },
   { code: "knights", name: "Knights", trainGoldCost: 450, trainFoodCost: 260, horseCost: 3, trainSeconds: 160, upkeepFood: 90, upkeepGold: 50, att: 15, def: 10, nw: 1.63, housing: "Cavalry, Castles", notes: "Requires Castles to train.", isTrainable: true },
   { code: "diplomats", name: "Diplomats", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 15, upkeepGold: 15, att: 0.1, def: 0.1, nw: 0.88, housing: "N/A, Embassies", notes: "", isTrainable: false },
-  { code: "priests", name: "Priests", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 30, upkeepGold: 20, att: 0.1, def: 0.1, nw: 0.5, housing: "N/A, Temples", notes: "", isTrainable: false },
+  { code: "priests", name: "Priests", trainGoldCost: 400, trainFoodCost: 150, trainSeconds: 3600, upkeepFood: 30, upkeepGold: 20, att: 0.1, def: 0.1, nw: 0.5, housing: "Faith, Temples", notes: "Max 5 per Temple. Each priest generates 4 mana/hr.", isTrainable: true },
   { code: "spies", name: "Spies", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 18, upkeepGold: 10, att: 0.1, def: 0.1, nw: 0.38, housing: "N/A, Guildhalls", notes: "", isTrainable: false },
 ] as const;
 
@@ -219,6 +219,7 @@ export async function ensureSchema(): Promise<void> {
       season_code TEXT NOT NULL DEFAULT 'spring',
       season_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       season_ends_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '7 days'),
+      worker_last_tick_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
@@ -496,29 +497,95 @@ export async function ensureSchema(): Promise<void> {
     );
 
     CREATE INDEX IF NOT EXISTS build_queue_due_idx ON build_queue(status, completes_at);
+    CREATE INDEX IF NOT EXISTS build_queue_kingdom_due_idx ON build_queue(kingdom_id, status, completes_at);
     CREATE INDEX IF NOT EXISTS train_queue_due_idx ON train_queue(status, completes_at);
+    CREATE INDEX IF NOT EXISTS train_queue_kingdom_due_idx ON train_queue(kingdom_id, status, completes_at);
     CREATE INDEX IF NOT EXISTS attack_reports_defender_idx ON attack_reports(defender_kingdom_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS attack_reports_attacker_idx ON attack_reports(attacker_kingdom_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS troop_movements_due_idx ON troop_movements(status, returns_at);
     CREATE INDEX IF NOT EXISTS troop_movements_owner_idx ON troop_movements(owner_kingdom_id, status, returns_at DESC);
+    CREATE INDEX IF NOT EXISTS troop_movements_owner_due_idx ON troop_movements(owner_kingdom_id, status, returns_at);
     CREATE INDEX IF NOT EXISTS kingdom_networth_history_kingdom_idx ON kingdom_networth_history(kingdom_id, recorded_at DESC);
     CREATE INDEX IF NOT EXISTS kingdom_mail_kingdom_idx ON kingdom_mail(kingdom_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS kingdom_mail_unread_idx ON kingdom_mail(kingdom_id, read_at, created_at DESC);
     CREATE INDEX IF NOT EXISTS kingdom_notifications_kingdom_idx ON kingdom_notifications(kingdom_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS market_listings (
+      id BIGSERIAL PRIMARY KEY,
+      seller_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      seller_kingdom_name TEXT NOT NULL,
+      resource TEXT NOT NULL CHECK (resource IN ('food','wood','stone','horses')),
+      quantity BIGINT NOT NULL CHECK (quantity > 0),
+      quantity_remaining BIGINT NOT NULL CHECK (quantity_remaining >= 0),
+      price_per_unit INT NOT NULL CHECK (price_per_unit > 0),
+      listed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '7 days'),
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','cancelled','sold'))
+    );
+
+    CREATE TABLE IF NOT EXISTS market_trades (
+      id BIGSERIAL PRIMARY KEY,
+      listing_id BIGINT NOT NULL REFERENCES market_listings(id) ON DELETE CASCADE,
+      buyer_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      buyer_kingdom_name TEXT NOT NULL,
+      seller_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      seller_kingdom_name TEXT NOT NULL,
+      resource TEXT NOT NULL,
+      quantity BIGINT NOT NULL,
+      price_per_unit INT NOT NULL,
+      total_gold BIGINT NOT NULL,
+      seller_receives BIGINT NOT NULL,
+      traded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS market_listings_active_idx ON market_listings(status, resource, price_per_unit ASC) WHERE status='active';
+    CREATE INDEX IF NOT EXISTS market_listings_seller_idx ON market_listings(seller_kingdom_id, status);
+    CREATE INDEX IF NOT EXISTS market_trades_buyer_idx ON market_trades(buyer_kingdom_id, traded_at DESC);
+    CREATE INDEX IF NOT EXISTS market_trades_seller_idx ON market_trades(seller_kingdom_id, traded_at DESC);
+    CREATE INDEX IF NOT EXISTS market_trades_listing_idx ON market_trades(listing_id, traded_at DESC);
+
+    CREATE TABLE IF NOT EXISTS kingdom_prayers (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      prayer_code TEXT NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      ends_at TIMESTAMPTZ NOT NULL,
+      mana_spent BIGINT NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS kingdom_prayers_kingdom_idx ON kingdom_prayers(kingdom_id, ends_at DESC);
+    CREATE INDEX IF NOT EXISTS kingdom_prayers_active_idx ON kingdom_prayers(kingdom_id, ends_at);
+
+    CREATE TABLE IF NOT EXISTS email_verification_tokens (
+      token TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '24 hours'),
+      used_at TIMESTAMPTZ
+    );
+
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      token TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '1 hour'),
+      used_at TIMESTAMPTZ
+    );
+
     CREATE INDEX IF NOT EXISTS kingdom_notifications_unseen_idx ON kingdom_notifications(kingdom_id, seen_at, created_at DESC);
     CREATE INDEX IF NOT EXISTS research_queue_due_idx ON research_queue(status, completes_at);
+    CREATE INDEX IF NOT EXISTS research_queue_kingdom_due_idx ON research_queue(kingdom_id, status, completes_at);
     CREATE INDEX IF NOT EXISTS settlements_kingdom_idx ON settlements(kingdom_id);
     CREATE INDEX IF NOT EXISTS settlement_build_queue_due_idx ON settlement_build_queue(status, completes_at);
+    CREATE INDEX IF NOT EXISTS settlement_build_queue_kingdom_due_idx ON settlement_build_queue(kingdom_id, status, completes_at);
     CREATE INDEX IF NOT EXISTS settlement_capture_log_def_idx ON settlement_capture_log(defender_kingdom_id, captured_at DESC);
     CREATE INDEX IF NOT EXISTS settlement_history_settlement_idx ON settlement_history(settlement_id, datetime DESC);
     CREATE INDEX IF NOT EXISTS alliance_members_kingdom_idx ON alliance_members(kingdom_id);
-    CREATE UNIQUE INDEX IF NOT EXISTS app_users_email_lower_uq ON app_users((LOWER(email))) WHERE email IS NOT NULL;
     CREATE INDEX IF NOT EXISTS auth_sessions_user_idx ON auth_sessions(user_id);
     CREATE INDEX IF NOT EXISTS auth_sessions_expires_idx ON auth_sessions(expires_at);
   `);
 
   await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS email TEXT`);
   await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS password_hash TEXT`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS app_users_email_lower_uq ON app_users((LOWER(email))) WHERE email IS NOT NULL`);
 
   await pool.query(`
     ALTER TABLE building_types
@@ -549,12 +616,22 @@ export async function ensureSchema(): Promise<void> {
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_cooldown_ends_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS daily_login_streak INT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS daily_last_claimed_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS mana BIGINT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS blue_gems INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS green_gems INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT false`);
+  await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT false`);
+  await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN NOT NULL DEFAULT false`);
+  await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS banned_reason TEXT`);
+  // Ensure priests are trainable (in case old seed set is_trainable=false)
+  await pool.query(`UPDATE troop_types SET is_trainable = TRUE, gold_cost = 400, food_cost = 150, train_seconds = 3600, notes = 'Max 5 per Temple. Each priest generates 4 mana/hr.' WHERE code = 'priests' AND is_trainable = FALSE`);
   await pool.query(`ALTER TABLE settlement_building_types ADD COLUMN IF NOT EXISTS required_settlement_size INT NOT NULL DEFAULT 1`);
   await pool.query(`ALTER TABLE settlement_building_types ADD COLUMN IF NOT EXISTS base_build_seconds INT NOT NULL DEFAULT 10800`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_index INT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_code TEXT NOT NULL DEFAULT 'spring'`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_started_at TIMESTAMPTZ NOT NULL DEFAULT now()`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_ends_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '7 days')`);
+  await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS worker_last_tick_at TIMESTAMPTZ NOT NULL DEFAULT now()`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`);
   await pool.query(
     `

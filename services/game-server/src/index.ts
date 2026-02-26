@@ -1,4 +1,13 @@
-﻿import dotenv from "dotenv";
+import dotenv from "dotenv";
+import {
+  ECON_BUILDING_HOURLY,
+  PRAYERS,
+  SEASONS,
+  clampNumber,
+  peasantDeltaPerHour,
+  taxGoldMultiplier,
+  type SeasonCode,
+} from "../../../packages/shared/src/index.js";
 import { ensureSchemaLite, pool, withTx } from "./db.js";
 
 dotenv.config();
@@ -7,34 +16,11 @@ const LOCAL_DEMO_FAST = String(process.env.LOCAL_DEMO_FAST || "").trim() === "1"
 const TICK_INTERVAL_SECONDS = Number(process.env.TICK_INTERVAL_SECONDS || (LOCAL_DEMO_FAST ? 5 : 300));
 const TICK_ALIGN_SECONDS = Number(process.env.TICK_ALIGN_SECONDS || (LOCAL_DEMO_FAST ? 5 : 300));
 const TICK_HOURS = Math.max(1, TICK_INTERVAL_SECONDS) / 3600;
+const MAX_CATCHUP_TICKS = Math.max(1, Number(process.env.MAX_CATCHUP_TICKS || 24));
 const SEASON_LENGTH_SECONDS = Math.max(30, Number(process.env.SEASON_LENGTH_SECONDS || (LOCAL_DEMO_FAST ? 60 : 7 * 24 * 3600)));
 const TAX_MIN = 0;
 const TAX_MAX = 40;
 
-const ECON_BUILDING_HOURLY = {
-  farmFood: 120,
-  lumberWood: 80,
-  quarryStone: 80,
-  horseFarmHorses: 60,
-  baseGoldPerLand: 3,
-  baseFoodPerLand: 2,
-};
-
-function clamp(v: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, v));
-}
-
-function peasantDeltaPerHour(taxRate: number) {
-  if (taxRate < 25) return (25 - taxRate) * 50;
-  if (taxRate > 27) return -1 * (taxRate - 27) * 60;
-  return 0;
-}
-
-function taxGoldMultiplier(taxRate: number) {
-  return clamp(1 + (taxRate - 25) * 0.04, 0.2, 2.2);
-}
-
-type SeasonCode = "spring" | "summer" | "autumn" | "winter";
 type SeasonState = {
   index: number;
   code: SeasonCode;
@@ -48,17 +34,6 @@ type SeasonState = {
     stone: number;
   };
 };
-
-const SEASONS: Array<{
-  code: SeasonCode;
-  name: string;
-  modifiers: { food: number; gold: number; wood: number; stone: number };
-}> = [
-  { code: "spring", name: "Spring", modifiers: { food: 1.25, gold: 1.0, wood: 1.0, stone: 1.0 } },
-  { code: "summer", name: "Summer", modifiers: { food: 1.1, gold: 1.05, wood: 1.05, stone: 1.0 } },
-  { code: "autumn", name: "Autumn", modifiers: { food: 1.2, gold: 1.0, wood: 1.1, stone: 1.0 } },
-  { code: "winter", name: "Winter", modifiers: { food: 0.85, gold: 0.95, wood: 0.95, stone: 1.05 } },
-];
 
 function seasonByIndex(index: number) {
   return SEASONS[((index % SEASONS.length) + SEASONS.length) % SEASONS.length];
@@ -335,7 +310,7 @@ async function processShieldStateTick(): Promise<number> {
 
 async function processEconomyTick(season: SeasonState): Promise<number> {
   return withTx(async (c) => {
-    const kingdoms = await c.query(`SELECT id, land, gold, food, wood, stone, tax_rate FROM kingdoms ORDER BY id ASC`);
+    const kingdoms = await c.query(`SELECT id, land, gold, food, wood, stone, horses, mana, tax_rate FROM kingdoms ORDER BY id ASC`);
     if (!kingdoms.rowCount) return 0;
 
     let updated = 0;
@@ -346,7 +321,8 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
           COALESCE(MAX(CASE WHEN building_code='farm' THEN level END),0) AS farm,
           COALESCE(MAX(CASE WHEN building_code='lumberyard' THEN level END),0) AS lumberyard,
           COALESCE(MAX(CASE WHEN building_code='quarry' THEN level END),0) AS quarry,
-          COALESCE(MAX(CASE WHEN building_code='horse_farms' THEN level END),0) AS horse_farms
+          COALESCE(MAX(CASE WHEN building_code='horse_farms' THEN level END),0) AS horse_farms,
+          COALESCE(MAX(CASE WHEN building_code='temples' THEN level END),0) AS temples
         FROM kingdom_buildings
         WHERE kingdom_id = $1
         `,
@@ -391,12 +367,38 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       const lumber = Number(b.rows[0]?.lumberyard || 0);
       const quarry = Number(b.rows[0]?.quarry || 0);
       const horseFarms = Number(b.rows[0]?.horse_farms || 0);
+      const temples = Number(b.rows[0]?.temples || 0);
 
-      const foodIncomePerHour = Number(k.land || 0) * ECON_BUILDING_HOURLY.baseFoodPerLand + farm * ECON_BUILDING_HOURLY.farmFood;
-      const goldIncomePerHour = Number(k.land || 0) * ECON_BUILDING_HOURLY.baseGoldPerLand;
-      const woodIncomePerHour = lumber * ECON_BUILDING_HOURLY.lumberWood;
-      const stoneIncomePerHour = quarry * ECON_BUILDING_HOURLY.quarryStone;
-      const horseIncomePerHour = horseFarms * ECON_BUILDING_HOURLY.horseFarmHorses;
+      // Count priests (capped at 5 per temple)
+      const priestRow = await c.query(
+        `SELECT COALESCE(SUM(amount),0) AS priests FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='priests'`,
+        [k.id],
+      );
+      const priestCount = Math.min(Number(priestRow.rows[0]?.priests || 0), temples * 5);
+
+      // Collect active prayer bonuses for this kingdom
+      await c.query(`DELETE FROM kingdom_prayers WHERE kingdom_id=$1 AND ends_at <= now()`, [k.id]);
+      const prayerRows = await c.query(
+        `SELECT prayer_code FROM kingdom_prayers WHERE kingdom_id=$1 AND ends_at > now()`,
+        [k.id],
+      );
+      let prayerFoodBonus = 1, prayerGoldBonus = 1, prayerWoodBonus = 1, prayerStoneBonus = 1, prayerHorseBonus = 1, prayerPopBonus = 1;
+      for (const pr of prayerRows.rows) {
+        const def = PRAYERS[pr.prayer_code as string];
+        if (!def) continue;
+        if (def.type === "food_bonus")       prayerFoodBonus  += def.bonus;
+        if (def.type === "gold_bonus")       prayerGoldBonus  += def.bonus;
+        if (def.type === "wood_bonus")       prayerWoodBonus  += def.bonus;
+        if (def.type === "stone_bonus")      prayerStoneBonus += def.bonus;
+        if (def.type === "horse_bonus")      prayerHorseBonus += def.bonus;
+        if (def.type === "population_bonus") prayerPopBonus   += def.bonus;
+      }
+
+      const foodIncomePerHour = (Number(k.land || 0) * ECON_BUILDING_HOURLY.baseFoodPerLand + farm * ECON_BUILDING_HOURLY.farmFood) * prayerFoodBonus;
+      const goldIncomePerHour = Number(k.land || 0) * ECON_BUILDING_HOURLY.baseGoldPerLand * prayerGoldBonus;
+      const woodIncomePerHour = lumber * ECON_BUILDING_HOURLY.lumberWood * prayerWoodBonus;
+      const stoneIncomePerHour = quarry * ECON_BUILDING_HOURLY.quarryStone * prayerStoneBonus;
+      const horseIncomePerHour = horseFarms * ECON_BUILDING_HOURLY.horseFarmHorses * prayerHorseBonus;
 
       let foodUpkeepPerHour = 0;
       let goldUpkeepPerHour = 0;
@@ -409,7 +411,7 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       }
 
       const seasonFoodIncome = foodIncomePerHour * Number(season.modifiers.food || 1);
-      const taxRate = clamp(Math.floor(Number(k.tax_rate || 25)), TAX_MIN, TAX_MAX);
+      const taxRate = clampNumber(Math.floor(Number(k.tax_rate || 25)), TAX_MIN, TAX_MAX);
       const seasonGoldIncome = goldIncomePerHour * Number(season.modifiers.gold || 1) * taxGoldMultiplier(taxRate);
       const seasonWoodIncome = woodIncomePerHour * Number(season.modifiers.wood || 1);
       const seasonStoneIncome = stoneIncomePerHour * Number(season.modifiers.stone || 1);
@@ -419,6 +421,7 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       const woodDelta = Math.floor(seasonWoodIncome * TICK_HOURS);
       const stoneDelta = Math.floor(seasonStoneIncome * TICK_HOURS);
       const horsesDelta = Math.floor(horseIncomePerHour * TICK_HOURS);
+      const manaDelta = Math.floor(priestCount * 4 * TICK_HOURS); // 4 mana/hr per priest
       const newFood = Math.max(0, Number(k.food || 0) + foodDelta);
       const newGold = Math.max(0, Number(k.gold || 0) + goldDelta);
       const newWood = Math.max(0, Number(k.wood || 0) + woodDelta);
@@ -433,13 +436,14 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
           wood = GREATEST(0, wood + $4),
           stone = GREATEST(0, stone + $5),
           horses = GREATEST(0, horses + $6),
+          mana = GREATEST(0, mana + $7),
           last_tick_at = now()
         WHERE id = $1
         `,
-        [k.id, foodDelta, goldDelta, woodDelta, stoneDelta, horsesDelta],
+        [k.id, foodDelta, goldDelta, woodDelta, stoneDelta, horsesDelta, manaDelta],
       );
 
-      const peasPerHour = peasantDeltaPerHour(taxRate);
+      const peasPerHour = peasantDeltaPerHour(taxRate) * (peasantDeltaPerHour(taxRate) > 0 ? prayerPopBonus : 1);
       const peasDelta = Math.floor(peasPerHour * TICK_HOURS);
       if (peasDelta !== 0) {
         await c.query(
@@ -472,22 +476,152 @@ function nextAlignedDelayMs(nowMs: number, alignSeconds: number): number {
 }
 
 async function runTick() {
+  const startedAt = Date.now();
+  const season = await processSeasonTick();
+  const builds = await processBuildQueueTick();
+  const trains = await processTrainQueueTick();
+  const research = await processResearchQueueTick();
+  const settlementBuilds = await processSettlementBuildQueueTick();
+  const shieldTransitions = await processShieldStateTick();
+  const returns = await processTroopReturnsTick();
+  const economies = await processEconomyTick(season);
+  if (builds > 0 || trains > 0 || research > 0 || settlementBuilds > 0 || shieldTransitions > 0 || returns > 0 || economies > 0) {
+    console.log(
+      `[tick] ${new Date().toISOString()} season=${season.code}(${season.remainingSeconds}s) completed builds=${builds}, trainings=${trains}, research=${research}, settlement_builds=${settlementBuilds}, shields=${shieldTransitions}, returns=${returns}, economy=${economies}`,
+    );
+  }
+  return {
+    season: season.code,
+    seasonRemainingSeconds: season.remainingSeconds,
+    builds,
+    trains,
+    research,
+    settlementBuilds,
+    shieldTransitions,
+    returns,
+    economies,
+    durationMs: Date.now() - startedAt,
+  };
+}
+
+async function withTickLock<T>(fn: () => Promise<T>) {
+  const lockClient = await pool.connect();
   try {
-    const season = await processSeasonTick();
-    const builds = await processBuildQueueTick();
-    const trains = await processTrainQueueTick();
-    const research = await processResearchQueueTick();
-    const settlementBuilds = await processSettlementBuildQueueTick();
-    const shieldTransitions = await processShieldStateTick();
-    const returns = await processTroopReturnsTick();
-    const economies = await processEconomyTick(season);
-    if (builds > 0 || trains > 0 || research > 0 || settlementBuilds > 0 || shieldTransitions > 0 || returns > 0 || economies > 0) {
-      console.log(
-        `[tick] ${new Date().toISOString()} season=${season.code}(${season.remainingSeconds}s) completed builds=${builds}, trainings=${trains}, research=${research}, settlement_builds=${settlementBuilds}, shields=${shieldTransitions}, returns=${returns}, economy=${economies}`,
-      );
+    const lock = await lockClient.query(`SELECT pg_try_advisory_lock($1) AS locked`, [94021001]);
+    if (!Boolean(lock.rows[0]?.locked)) return null;
+    return await fn();
+  } finally {
+    try {
+      await lockClient.query(`SELECT pg_advisory_unlock($1)`, [94021001]);
+    } catch {
+      // ignore unlock errors during shutdown races
     }
-  } catch (e) {
-    console.error("[tick] error", e);
+    lockClient.release();
+  }
+}
+
+async function runDueTicks() {
+  return withTickLock(async () => {
+    await withTx(async (c) => {
+      await c.query(
+        `
+        INSERT INTO game_state(id, season_index, season_code, season_started_at, season_ends_at, updated_at, worker_last_tick_at)
+        VALUES (1, 0, 'spring', now(), now() + ($1 || ' seconds')::interval, now(), now())
+        ON CONFLICT (id) DO NOTHING
+        `,
+        [SEASON_LENGTH_SECONDS],
+      );
+      return 0;
+    });
+
+    const batchStartedAt = Date.now();
+    const q = await pool.query(`SELECT worker_last_tick_at FROM game_state WHERE id=1 LIMIT 1`);
+    const lastTickAt = new Date(q.rows[0]?.worker_last_tick_at || Date.now());
+    const nowMs = Date.now();
+    const elapsedSec = Math.floor((nowMs - lastTickAt.getTime()) / 1000);
+    const dueTicks = Math.floor(elapsedSec / Math.max(1, TICK_INTERVAL_SECONDS));
+    const runCount = Math.max(0, Math.min(MAX_CATCHUP_TICKS, dueTicks));
+    if (runCount <= 0) return 0;
+
+    let totalTickDurationMs = 0;
+    let totals = {
+      builds: 0,
+      trains: 0,
+      research: 0,
+      settlementBuilds: 0,
+      shieldTransitions: 0,
+      returns: 0,
+      economies: 0,
+    };
+    for (let i = 0; i < runCount; i += 1) {
+      const result = await runTick();
+      totalTickDurationMs += Number(result.durationMs || 0);
+      totals = {
+        builds: totals.builds + Number(result.builds || 0),
+        trains: totals.trains + Number(result.trains || 0),
+        research: totals.research + Number(result.research || 0),
+        settlementBuilds: totals.settlementBuilds + Number(result.settlementBuilds || 0),
+        shieldTransitions: totals.shieldTransitions + Number(result.shieldTransitions || 0),
+        returns: totals.returns + Number(result.returns || 0),
+        economies: totals.economies + Number(result.economies || 0),
+      };
+    }
+
+    const nextLastTickAt = new Date(lastTickAt.getTime() + runCount * Math.max(1, TICK_INTERVAL_SECONDS) * 1000);
+    await pool.query(`UPDATE game_state SET worker_last_tick_at=$2 WHERE id=$1`, [1, nextLastTickAt.toISOString()]);
+    if (dueTicks > runCount) {
+      console.warn(`[tick] catch-up capped: due=${dueTicks} processed=${runCount} cap=${MAX_CATCHUP_TICKS}`);
+    }
+    console.log(
+      `[tick-batch] ${new Date().toISOString()} due=${dueTicks} processed=${runCount} backlog=${Math.max(
+        0,
+        dueTicks - runCount,
+      )} tick_ms_total=${totalTickDurationMs} batch_ms=${Date.now() - batchStartedAt} totals(build=${totals.builds},train=${
+        totals.trains
+      },research=${totals.research},settlement=${totals.settlementBuilds},shield=${totals.shieldTransitions},returns=${
+        totals.returns
+      },economy=${totals.economies})`,
+    );
+    return runCount;
+  });
+}
+
+async function runTickDeterminismHarness() {
+  await ensureSchemaLite();
+  await withTx(async (c) => {
+    await c.query(
+      `
+      INSERT INTO game_state(id, season_index, season_code, season_started_at, season_ends_at, updated_at, worker_last_tick_at)
+      VALUES (1, 0, 'spring', now(), now() + ($1 || ' seconds')::interval, now(), now())
+      ON CONFLICT (id) DO NOTHING
+      `,
+      [SEASON_LENGTH_SECONDS],
+    );
+    await c.query(
+      `UPDATE game_state SET worker_last_tick_at = now() - ($2 || ' seconds')::interval, updated_at=now() WHERE id=$1`,
+      [1, Math.max(1, TICK_INTERVAL_SECONDS) * 3],
+    );
+    return 0;
+  });
+
+  const before = await pool.query(`SELECT worker_last_tick_at FROM game_state WHERE id=1`);
+  const first = await runDueTicks();
+  const afterFirst = await pool.query(`SELECT worker_last_tick_at FROM game_state WHERE id=1`);
+  await pool.query(`UPDATE game_state SET worker_last_tick_at=now(), updated_at=now() WHERE id=1`);
+  const second = await runDueTicks();
+  const afterSecond = await pool.query(`SELECT worker_last_tick_at FROM game_state WHERE id=1`);
+
+  console.log(
+    `[harness] before=${before.rows[0]?.worker_last_tick_at} first_processed=${first} after_first=${afterFirst.rows[0]?.worker_last_tick_at} second_processed=${second} after_second=${afterSecond.rows[0]?.worker_last_tick_at}`,
+  );
+  const firstProcessed = Number(first || 0);
+  const secondProcessed = Number(second || 0);
+  const pass = firstProcessed > 0 && secondProcessed === 0;
+  console.log(`[harness] assertion first_processed>0 && second_processed===0 => ${pass ? "PASS" : "FAIL"}`);
+  if (!pass) {
+    throw new Error(
+      `tick harness failed: expected first>0 and second=0, got first=${firstProcessed} second=${secondProcessed}`,
+    );
   }
 }
 
@@ -498,7 +632,11 @@ async function main() {
   );
 
   const schedule = async () => {
-    await runTick();
+    try {
+      await runDueTicks();
+    } catch (e) {
+      console.error("[tick] scheduler error", e);
+    }
     const delay = nextAlignedDelayMs(Date.now(), TICK_ALIGN_SECONDS);
     setTimeout(schedule, delay);
   };
@@ -512,7 +650,18 @@ async function main() {
   });
 }
 
-main().catch((e) => {
-  console.error("Worker bootstrap failed", e);
-  process.exit(1);
-});
+if (process.argv.includes("--harness")) {
+  runTickDeterminismHarness()
+    .catch((e) => {
+      console.error("Worker harness failed", e);
+      process.exit(1);
+    })
+    .finally(async () => {
+      await pool.end();
+    });
+} else {
+  main().catch((e) => {
+    console.error("Worker bootstrap failed", e);
+    process.exit(1);
+  });
+}

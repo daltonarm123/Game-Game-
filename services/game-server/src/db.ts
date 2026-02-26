@@ -50,6 +50,7 @@ export async function ensureSchemaLite(): Promise<void> {
       season_code TEXT NOT NULL DEFAULT 'spring',
       season_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       season_ends_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '7 days'),
+      worker_last_tick_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
@@ -189,11 +190,16 @@ export async function ensureSchemaLite(): Promise<void> {
     );
 
     CREATE INDEX IF NOT EXISTS build_queue_due_idx ON build_queue(status, completes_at);
+    CREATE INDEX IF NOT EXISTS build_queue_kingdom_due_idx ON build_queue(kingdom_id, status, completes_at);
     CREATE INDEX IF NOT EXISTS train_queue_due_idx ON train_queue(status, completes_at);
+    CREATE INDEX IF NOT EXISTS train_queue_kingdom_due_idx ON train_queue(kingdom_id, status, completes_at);
     CREATE INDEX IF NOT EXISTS troop_movements_due_idx ON troop_movements(status, returns_at);
+    CREATE INDEX IF NOT EXISTS troop_movements_owner_due_idx ON troop_movements(owner_kingdom_id, status, returns_at);
     CREATE INDEX IF NOT EXISTS kingdom_networth_history_kingdom_idx ON kingdom_networth_history(kingdom_id, recorded_at DESC);
     CREATE INDEX IF NOT EXISTS research_queue_due_idx ON research_queue(status, completes_at);
+    CREATE INDEX IF NOT EXISTS research_queue_kingdom_due_idx ON research_queue(kingdom_id, status, completes_at);
     CREATE INDEX IF NOT EXISTS settlement_build_queue_due_idx ON settlement_build_queue(status, completes_at);
+    CREATE INDEX IF NOT EXISTS settlement_build_queue_kingdom_due_idx ON settlement_build_queue(kingdom_id, status, completes_at);
     CREATE INDEX IF NOT EXISTS settlement_history_settlement_idx ON settlement_history(settlement_id, datetime DESC);
   `);
 
@@ -214,6 +220,7 @@ export async function ensureSchemaLite(): Promise<void> {
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_code TEXT NOT NULL DEFAULT 'spring'`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_started_at TIMESTAMPTZ NOT NULL DEFAULT now()`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_ends_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '7 days')`);
+  await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS worker_last_tick_at TIMESTAMPTZ NOT NULL DEFAULT now()`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`);
   await pool.query(
     `

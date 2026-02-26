@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Crownforge",
+    "slug": "crownforge",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0f0f12",
+    "splash": {
+      "backgroundColor": "#0f0f12",
+      "resizeMode": "contain"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.crownforge.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0f0f12"
+      },
+      "package": "com.crownforge.app"
+    },
+    "platforms": ["ios", "android"]
+  }
+}

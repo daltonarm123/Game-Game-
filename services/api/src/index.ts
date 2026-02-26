@@ -1,8 +1,24 @@
 import dotenv from "dotenv";
 import express from "express";
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import rateLimit from "express-rate-limit";
+import nodemailer from "nodemailer";
 import type { PoolClient } from "pg";
 import { z } from "zod";
+import {
+  ECON_BUILDING_HOURLY,
+  MANA_PER_PRIEST_PER_HOUR,
+  PRAYERS,
+  PRIESTS_PER_TEMPLE,
+  SEASONS,
+  SETTLEMENT_TYPE_DEF,
+  clampNumber,
+  expectedSettlementPlan,
+  researchGoldCost,
+  researchSeconds,
+  settlementTypeDisplay,
+  taxGoldMultiplier,
+} from "../../../packages/shared/src/index.js";
 import { ensureSchema, pool, withTx } from "./db.js";
 
 dotenv.config();
@@ -17,11 +33,24 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 
+// ── Rate limiting ────────────────────────────────────────────────────────────
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, message: { ok: false, error: "Too many attempts. Please wait 15 minutes." } });
+const generalLimiter = rateLimit({ windowMs: 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false, message: { ok: false, error: "Too many requests. Please slow down." } });
+const actionLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false, message: { ok: false, error: "Too many actions. Please wait a moment." } });
+app.use("/api/auth/login", authLimiter);
+app.use("/api/auth/register", authLimiter);
+app.use("/api/auth/forgot-password", authLimiter);
+app.use("/api/auth/reset-password", authLimiter);
+app.use("/api/kingdom/:name/attack", actionLimiter);
+app.use("/api/kingdom/:name/spy", actionLimiter);
+app.use("/api/market/:kingdom/buy", actionLimiter);
+app.use("/api", generalLimiter);
+
 const API_PORT = Number(process.env.API_PORT || 8080);
 const ATTACK_RETURN_MINUTES = Number(process.env.ATTACK_RETURN_MINUTES || 20);
 const LOCAL_DEMO_FAST = String(process.env.LOCAL_DEMO_FAST || "").trim() === "1";
-const FAST_BUILD_SECONDS = Math.max(1, Number(process.env.FAST_BUILD_SECONDS || 5));
-const FAST_TRAIN_SECONDS = Math.max(1, Number(process.env.FAST_TRAIN_SECONDS || 5));
+const FAST_BUILD_SECONDS = Math.max(1, Number(process.env.FAST_BUILD_SECONDS || 60));
+const FAST_TRAIN_SECONDS = Math.max(1, Number(process.env.FAST_TRAIN_SECONDS || 30));
 const FAST_RESEARCH_SECONDS = Math.max(5, Number(process.env.FAST_RESEARCH_SECONDS || 15));
 const ATTACK_RETURN_SECONDS = Math.max(
   1,
@@ -170,47 +199,6 @@ const allianceContribBody = z.object({
   wood: z.number().int().min(0).optional().default(0),
 });
 
-const ECON_BUILDING_HOURLY = {
-  farmFood: 120,
-  lumberWood: 80,
-  quarryStone: 80,
-  baseGoldPerLand: 3,
-  baseFoodPerLand: 2,
-};
-
-type SeasonCode = "spring" | "summer" | "autumn" | "winter";
-
-const SEASONS: Array<{
-  code: SeasonCode;
-  name: string;
-  flavor: string;
-  modifiers: { food: number; gold: number; wood: number; stone: number };
-}> = [
-  {
-    code: "spring",
-    name: "Spring",
-    flavor: "A new year dawns. Food growth increases and armies recover momentum.",
-    modifiers: { food: 1.25, gold: 1.0, wood: 1.0, stone: 1.0 },
-  },
-  {
-    code: "summer",
-    name: "Summer",
-    flavor: "Trade roads are clear. Gold, food, and wood all gain momentum.",
-    modifiers: { food: 1.1, gold: 1.05, wood: 1.05, stone: 1.0 },
-  },
-  {
-    code: "autumn",
-    name: "Autumn",
-    flavor: "Harvest season peaks. Food and wood stocks climb quickly.",
-    modifiers: { food: 1.2, gold: 1.0, wood: 1.1, stone: 1.0 },
-  },
-  {
-    code: "winter",
-    name: "Winter",
-    flavor: "Cold strains supply lines. Food and gold soften while stone output rises.",
-    modifiers: { food: 0.85, gold: 0.95, wood: 0.95, stone: 1.05 },
-  },
-];
 
 const TROOP_TRAIN_REQUIREMENTS: Record<string, { buildingCode: string; buildingName: string; minLevel: number }> = {
   footmen: { buildingCode: "barracks", buildingName: "Barracks", minLevel: 1 },
@@ -222,6 +210,26 @@ const TROOP_TRAIN_REQUIREMENTS: Record<string, { buildingCode: string; buildingN
 
 const FOOTMAN_ELITE_PROMOTION_RATE = clamp(Number(process.env.FOOTMAN_ELITE_PROMOTION_RATE || 0.0025), 0, 0.05);
 const AUTH_SESSION_DAYS = 30;
+const APP_BASE_URL = String(process.env.APP_BASE_URL || "http://localhost:5173").replace(/\/$/, "");
+
+// ── Email transport ──────────────────────────────────────────────────────────
+const SMTP_HOST = process.env.SMTP_HOST || "";
+const emailTransport = SMTP_HOST
+  ? nodemailer.createTransport({
+      host: SMTP_HOST,
+      port: Number(process.env.SMTP_PORT || 587),
+      secure: Number(process.env.SMTP_PORT || 587) === 465,
+      auth: { user: process.env.SMTP_USER || "", pass: process.env.SMTP_PASS || "" },
+    })
+  : null;
+const EMAIL_FROM = process.env.SMTP_FROM || "Crownforge <noreply@crownforge.game>";
+async function sendEmail(to: string, subject: string, html: string) {
+  if (!emailTransport) {
+    console.log(`[EMAIL - no SMTP]\nTo: ${to}\nSubject: ${subject}\n${html.replace(/<[^>]+>/g, "")}`);
+    return;
+  }
+  await emailTransport.sendMail({ from: EMAIL_FROM, to, subject, html });
+}
 
 function normalizeEmail(input: string) {
   return String(input || "").trim().toLowerCase();
@@ -265,16 +273,25 @@ async function createAuthSession(c: PoolClient, userId: string) {
 
 async function getAuthSession(token: string) {
   const q = await pool.query(
-    `
-    SELECT s.token, s.user_id, s.created_at, s.expires_at, u.username, u.email
-    FROM auth_sessions s
-    JOIN app_users u ON u.id = s.user_id
-    WHERE s.token=$1 AND s.expires_at > now()
-    LIMIT 1
-    `,
+    `SELECT s.token, s.user_id, s.created_at, s.expires_at,
+            u.username, u.email, u.email_verified, u.is_admin, u.is_banned
+     FROM auth_sessions s
+     JOIN app_users u ON u.id = s.user_id
+     WHERE s.token=$1 AND s.expires_at > now()
+     LIMIT 1`,
     [token],
   );
   return q.rows[0] || null;
+}
+
+async function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const token = extractAuthToken(req);
+  if (!token) return res.status(401).json({ ok: false, error: "missing auth token" });
+  const session = await getAuthSession(token);
+  if (!session) return res.status(401).json({ ok: false, error: "invalid or expired session" });
+  if (!session.is_admin) return res.status(403).json({ ok: false, error: "admin access required" });
+  (req as any).adminSession = session;
+  return next();
 }
 
 function extractAuthToken(req: express.Request) {
@@ -293,7 +310,7 @@ async function getSeasonSnapshot() {
     await c.query(
       `
       INSERT INTO game_state(id, season_index, season_code, season_started_at, season_ends_at, updated_at)
-      VALUES (1, 0, 'spring', now(), now() + ($1 || ' seconds')::interval, now())
+      VALUES (1, 0, 'spring', now(), now() + ($1 * INTERVAL '1 second'), now())
       ON CONFLICT (id) DO NOTHING
       `,
       [SEASON_LENGTH_SECONDS],
@@ -433,10 +450,10 @@ function applyLosses(units: Record<string, number>, pct: number, scope?: Record<
   return { losses, remaining: result };
 }
 
-const TROOP_CLASS: Record<string, "infantry" | "archer" | "cavalry" | "support"> = {
+const TROOP_CLASS: Record<string, "infantry" | "pikemen" | "archer" | "cavalry" | "support"> = {
   peasants: "support",
   footmen: "infantry",
-  pikemen: "infantry",
+  pikemen: "pikemen",
   elites: "infantry",
   archers: "archer",
   crossbowmen: "archer",
@@ -448,16 +465,21 @@ const TROOP_CLASS: Record<string, "infantry" | "archer" | "cavalry" | "support">
   spies: "support",
 };
 
+// Correct chain: Pikemen > Cavalry > Archers > Infantry
 const RPS_MULTIPLIER: Record<string, number> = {
-  "infantry:archer": 1.28,
-  "archer:cavalry": 1.24,
-  "cavalry:infantry": 1.28,
-  "archer:infantry": 0.84,
-  "cavalry:archer": 0.86,
-  "infantry:cavalry": 0.84,
+  "archer:infantry": 1.28,
+  "cavalry:archer": 1.28,
+  "pikemen:cavalry": 1.50,
+  "infantry:archer": 0.82,
+  "archer:cavalry": 0.82,
+  "cavalry:pikemen": 0.70,
+  "cavalry:infantry": 1.12,
+  "infantry:cavalry": 0.90,
+  "pikemen:infantry": 1.10,
+  "infantry:pikemen": 0.92,
 };
 
-function classForTroop(code: string): "infantry" | "archer" | "cavalry" | "support" {
+function classForTroop(code: string): "infantry" | "pikemen" | "archer" | "cavalry" | "support" {
   return TROOP_CLASS[String(code || "").toLowerCase()] || "support";
 }
 
@@ -593,51 +615,6 @@ function computeEconomyHourly(
   };
 }
 
-function researchGoldCost(baseGold: number, currentLevel: number) {
-  return Math.max(1, Math.floor(baseGold * Math.pow(1.35, Math.max(0, currentLevel))));
-}
-
-function researchSeconds(baseSeconds: number, currentLevel: number) {
-  const raw = Math.max(300, Math.floor(baseSeconds * Math.pow(1.25, Math.max(0, currentLevel))));
-  return LOCAL_DEMO_FAST ? FAST_RESEARCH_SECONDS : raw;
-}
-
-const SETTLEMENT_TYPE_DEF: Record<string, { level: number; slots: number }> = {
-  small_town: { level: 1, slots: 3 },
-  medium_town: { level: 2, slots: 5 },
-  large_town: { level: 3, slots: 8 },
-  small_city: { level: 4, slots: 12 },
-  medium_city: { level: 5, slots: 17 },
-  large_city: { level: 6, slots: 25 },
-};
-
-const SETTLEMENT_MILESTONE_PLAN: Array<{ land: number; types: string[] }> = [
-  { land: 3000, types: ["small_town"] },
-  { land: 8000, types: ["medium_town", "small_town"] },
-  { land: 14000, types: ["large_town", "medium_town", "small_town"] },
-  { land: 21000, types: ["small_city", "large_town", "medium_town", "small_town"] },
-  { land: 30000, types: ["medium_city", "small_city", "large_town", "medium_town", "small_town"] },
-  { land: 50000, types: ["large_city", "medium_city", "small_city", "large_town", "medium_town", "small_town"] },
-  { land: 100000, types: ["large_city", "large_city", "medium_city", "small_city", "large_town", "medium_town", "small_town"] },
-  { land: 250000, types: ["large_city", "large_city", "large_city", "medium_city", "small_city", "large_town", "medium_town", "small_town"] },
-];
-
-function expectedSettlementPlan(land: number) {
-  let plan: { land: number; types: string[] } = { land: 0, types: [] };
-  for (const p of SETTLEMENT_MILESTONE_PLAN) {
-    if (land >= p.land) plan = p;
-  }
-  return plan;
-}
-
-function settlementTypeDisplay(size: number) {
-  if (size >= 6) return "Large City";
-  if (size >= 5) return "Medium City";
-  if (size >= 4) return "Small City";
-  if (size >= 3) return "Large Town";
-  if (size >= 2) return "Medium Town";
-  return "Small Town";
-}
 
 async function ensureSettlementsForKingdom(c: PoolClient, kingdomId: number, kingdomName: string, land: number) {
   const current = await c.query(`SELECT id, name FROM settlements WHERE kingdom_id=$1 ORDER BY id ASC`, [kingdomId]);
@@ -894,23 +871,22 @@ app.post("/api/auth/login", async (req, res) => {
   try {
     const out = await withTx(async (c) => {
       const u = await c.query(
-        `
-        SELECT id, username, email, password_hash
-        FROM app_users
-        WHERE LOWER(email)=LOWER($1) OR LOWER(username)=LOWER($1)
-        LIMIT 1
-        `,
+        `SELECT id, username, email, password_hash, email_verified, is_admin, is_banned, banned_reason
+         FROM app_users
+         WHERE LOWER(email)=LOWER($1) OR LOWER(username)=LOWER($1)
+         LIMIT 1`,
         [emailOrUsername],
       );
       if (!u.rowCount) throw new Error("invalid credentials");
       const user = u.rows[0];
       if (!verifyPassword(password, user.password_hash)) throw new Error("invalid credentials");
+      if (user.is_banned) throw new Error(`Account banned${user.banned_reason ? ": " + String(user.banned_reason) : ""}`);
       const k = await c.query(`SELECT id, name FROM kingdoms WHERE user_id=$1 LIMIT 1`, [user.id]);
       if (!k.rowCount) throw new Error("account has no kingdom");
       const session = await createAuthSession(c, String(user.id));
       return {
         session,
-        user: { id: String(user.id), username: String(user.username), email: String(user.email || "") },
+        user: { id: String(user.id), username: String(user.username), email: String(user.email || ""), emailVerified: Boolean(user.email_verified), isAdmin: Boolean(user.is_admin) },
         kingdom: { id: Number(k.rows[0].id), name: String(k.rows[0].name) },
       };
     });
@@ -939,6 +915,8 @@ app.get("/api/auth/me", async (req, res) => {
         id: String(session.user_id),
         username: String(session.username),
         email: String(session.email || ""),
+        emailVerified: Boolean(session.email_verified),
+        isAdmin: Boolean(session.is_admin),
       },
       kingdom: kingdom.rowCount ? { id: Number(kingdom.rows[0].id), name: String(kingdom.rows[0].name) } : null,
     });
@@ -956,6 +934,72 @@ app.post("/api/auth/logout", async (req, res) => {
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
+});
+
+app.post("/api/auth/verify-email", async (req, res) => {
+  const token = String(req.body?.token || "").trim();
+  if (!token) return res.status(400).json({ ok: false, error: "token required" });
+  try {
+    const t = await pool.query(`SELECT user_id, expires_at, used_at FROM email_verification_tokens WHERE token=$1 LIMIT 1`, [token]);
+    if (!t.rowCount) return res.status(400).json({ ok: false, error: "Invalid or expired verification link." });
+    const row = t.rows[0];
+    if (row.used_at) return res.status(400).json({ ok: false, error: "This link has already been used." });
+    if (new Date(row.expires_at) < new Date()) return res.status(400).json({ ok: false, error: "Verification link expired." });
+    await pool.query(`UPDATE app_users SET email_verified=TRUE WHERE id=$1`, [row.user_id]);
+    await pool.query(`UPDATE email_verification_tokens SET used_at=now() WHERE token=$1`, [token]);
+    return res.json({ ok: true, message: "Email verified successfully." });
+  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.post("/api/auth/resend-verification", async (req, res) => {
+  const token = extractAuthToken(req);
+  if (!token) return res.status(401).json({ ok: false, error: "not authenticated" });
+  try {
+    const session = await getAuthSession(token);
+    if (!session) return res.status(401).json({ ok: false, error: "invalid session" });
+    const u = await pool.query(`SELECT id, email, username, email_verified FROM app_users WHERE id=$1`, [session.user_id]);
+    if (!u.rowCount) return res.status(404).json({ ok: false, error: "user not found" });
+    const user = u.rows[0];
+    if (user.email_verified) return res.status(400).json({ ok: false, error: "Email is already verified." });
+    await pool.query(`DELETE FROM email_verification_tokens WHERE user_id=$1 AND used_at IS NULL`, [user.id]);
+    const verifyToken = randomBytes(32).toString("hex");
+    await pool.query(`INSERT INTO email_verification_tokens(token, user_id) VALUES($1,$2)`, [verifyToken, user.id]);
+    void sendEmail(user.email, "Verify your Crownforge email", `<p>Hi ${String(user.username)},</p><p><a href="${APP_BASE_URL}/?verify=${verifyToken}">Verify Email</a></p><p>Expires in 24 hours.</p>`);
+    return res.json({ ok: true, message: "Verification email sent." });
+  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.post("/api/auth/forgot-password", async (req, res) => {
+  const email = String(req.body?.email || "").toLowerCase().trim();
+  if (!email) return res.status(400).json({ ok: false, error: "email required" });
+  try {
+    const u = await pool.query(`SELECT id, username, email FROM app_users WHERE LOWER(email)=LOWER($1) LIMIT 1`, [email]);
+    if (!u.rowCount) return res.json({ ok: true, message: "If that email exists, a reset link has been sent." });
+    const user = u.rows[0];
+    await pool.query(`DELETE FROM password_reset_tokens WHERE user_id=$1 AND used_at IS NULL`, [user.id]);
+    const resetToken = randomBytes(32).toString("hex");
+    await pool.query(`INSERT INTO password_reset_tokens(token, user_id) VALUES($1,$2)`, [resetToken, user.id]);
+    void sendEmail(user.email, "Reset your Crownforge password", `<p>Hi ${String(user.username)},</p><p><a href="${APP_BASE_URL}/?reset=${resetToken}">Reset Password</a></p><p>Expires in 1 hour.</p><p style="color:#888;font-size:12px">If you didn't request this, ignore this email.</p>`);
+    return res.json({ ok: true, message: "If that email exists, a reset link has been sent." });
+  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.post("/api/auth/reset-password", async (req, res) => {
+  const token = String(req.body?.token || "").trim();
+  const newPassword = String(req.body?.newPassword || "");
+  if (!token) return res.status(400).json({ ok: false, error: "token required" });
+  if (newPassword.length < 8) return res.status(400).json({ ok: false, error: "Password must be at least 8 characters." });
+  try {
+    const t = await pool.query(`SELECT user_id, expires_at, used_at FROM password_reset_tokens WHERE token=$1 LIMIT 1`, [token]);
+    if (!t.rowCount) return res.status(400).json({ ok: false, error: "Invalid or expired reset link." });
+    const row = t.rows[0];
+    if (row.used_at) return res.status(400).json({ ok: false, error: "This reset link has already been used." });
+    if (new Date(row.expires_at) < new Date()) return res.status(400).json({ ok: false, error: "Reset link expired." });
+    await pool.query(`UPDATE app_users SET password_hash=$1 WHERE id=$2`, [hashPassword(newPassword), row.user_id]);
+    await pool.query(`UPDATE password_reset_tokens SET used_at=now() WHERE token=$1`, [token]);
+    await pool.query(`DELETE FROM auth_sessions WHERE user_id=$1`, [row.user_id]);
+    return res.json({ ok: true, message: "Password reset successfully. Please log in." });
+  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
 });
 
 app.post("/api/dev/demo-reset", async (req, res) => {
@@ -1303,7 +1347,7 @@ app.post("/api/kingdom/:name/build", async (req, res) => {
       const seconds = LOCAL_DEMO_FAST ? FAST_BUILD_SECONDS : Number(def.base_build_seconds) * nextLevel;
       const ins = await c.query(
         `INSERT INTO build_queue(kingdom_id, building_code, target_level, started_at, completes_at, status)
-         VALUES ($1,$2,$3, now(), now() + ($4 || ' seconds')::interval, 'queued')
+         VALUES ($1,$2,$3, now(), now() + ($4 * INTERVAL '1 second'), 'queued')
          RETURNING id, kingdom_id, building_code, target_level, started_at, completes_at, status`,
         [kingdom.id, buildingCode, nextLevel, seconds],
       );
@@ -1361,7 +1405,7 @@ app.post("/api/kingdom/:name/train", async (req, res) => {
       const totalSeconds = LOCAL_DEMO_FAST ? FAST_TRAIN_SECONDS : Math.max(1, Number(def.train_seconds) * qty);
       const ins = await c.query(
         `INSERT INTO train_queue(kingdom_id, troop_code, quantity, started_at, completes_at, status)
-         VALUES ($1,$2,$3, now(), now() + ($4 || ' seconds')::interval, 'queued')
+         VALUES ($1,$2,$3, now(), now() + ($4 * INTERVAL '1 second'), 'queued')
          RETURNING id, kingdom_id, troop_code, quantity, started_at, completes_at, status`,
         [kingdom.id, troopCode, qty, totalSeconds],
       );
@@ -1675,7 +1719,7 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
             `SELECT id, name, settlement_type, level, slots_total, wall_level
              FROM settlements
              WHERE kingdom_id=$1
-             ORDER BY random()
+             ORDER BY (level * (random() + 0.5)) ASC
              LIMIT 1`,
             [def.id],
           );
@@ -1684,10 +1728,12 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
           const overflow = Math.max(0, Number(allDefSetts.rows[0]?.n || 0) - allowedDef);
           if (defSetts.rowCount) {
             const s = defSetts.rows[0];
-            const wallReduction = Math.min(0.75, Number(s.wall_level || 0) / 100);
+            const wallReduction = Math.min(0.75, Number(s.wall_level || 0) * 0.03);
+            const LEVEL_RESISTANCE = [1.0, 0.80, 0.60, 0.45, 0.30, 0.20];
+            const levelResistance = LEVEL_RESISTANCE[Math.min(5, Math.max(0, Number(s.level || 1) - 1))];
             const landFactor = defenderLand > 0 ? landTaken / defenderLand : 0;
-            const baseChance = 0.03 + Math.min(0.14, landFactor * 0.7) + (overflow > 0 ? 0.2 : 0);
-            const captureChance = Math.max(0, Math.min(0.9, baseChance * (1 - wallReduction)));
+            const baseChance = 0.02 + Math.min(0.10, landFactor * 0.5) + (overflow > 0 ? 0.15 : 0);
+            const captureChance = Math.max(0, Math.min(0.85, baseChance * levelResistance * (1 - wallReduction)));
             if (Math.random() < captureChance) {
               await c.query(
                 `UPDATE settlements
@@ -1741,7 +1787,7 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
         if (Number(survivors) <= 0) continue;
         await c.query(
           `INSERT INTO troop_movements(owner_kingdom_id, owner_kingdom_name, target_kingdom_id, target_kingdom_name, troop_code, quantity, departed_at, returns_at, status, source_attack_report_id)
-           VALUES ($1,$2,$3,$4,$5,$6,now(), now() + ($7 || ' seconds')::interval, 'out', $8)`,
+           VALUES ($1,$2,$3,$4,$5,$6,now(), now() + ($7 * INTERVAL '1 second'), 'out', $8)`,
           [atk.id, atk.name, def.id, def.name, code, Math.floor(survivors), ATTACK_RETURN_SECONDS, rep.rows[0].id],
         );
       }
@@ -1862,7 +1908,7 @@ app.post("/api/war-room/:attacker/explore", async (req, res) => {
       for (const [code, qty] of Object.entries(sentOnly)) {
         await c.query(
           `INSERT INTO troop_movements(owner_kingdom_id, owner_kingdom_name, target_kingdom_id, target_kingdom_name, troop_code, quantity, departed_at, returns_at, status)
-           VALUES ($1,$2,NULL,'Wilderness',$3,$4,now(), now() + ($5 || ' seconds')::interval, 'out')`,
+           VALUES ($1,$2,NULL,'Wilderness',$3,$4,now(), now() + ($5 * INTERVAL '1 second'), 'out')`,
           [atk.id, atk.name, code, Math.floor(Number(qty || 0)), returnSeconds],
         );
       }
@@ -1960,7 +2006,7 @@ app.post("/api/war-room/:attacker/spy", async (req, res) => {
       if (survivors > 0) {
         await c.query(
           `INSERT INTO troop_movements(owner_kingdom_id, owner_kingdom_name, target_kingdom_id, target_kingdom_name, troop_code, quantity, departed_at, returns_at, status)
-           VALUES ($1,$2,$3,$4,'spies',$5,now(), now() + ($6 || ' seconds')::interval, 'out')`,
+           VALUES ($1,$2,$3,$4,'spies',$5,now(), now() + ($6 * INTERVAL '1 second'), 'out')`,
           [atk.id, atk.name, def.id, def.name, survivors, SPY_RETURN_SECONDS],
         );
       }
@@ -2567,7 +2613,7 @@ app.get("/api/research/:kingdom", async (req, res) => {
       const missing = reqs.filter((r) => Number(r.currentLevel || 0) < Number(r.requiredLevel || 0));
       const isMaxed = currentLevel >= maxLevel;
       const nextGold = isMaxed ? 0 : researchGoldCost(Number(s.base_gold || 0), currentLevel);
-      const nextSeconds = isMaxed ? 0 : researchSeconds(Number(s.base_seconds || 0), currentLevel);
+      const nextSeconds = isMaxed ? 0 : researchSeconds(Number(s.base_seconds || 0), currentLevel, LOCAL_DEMO_FAST ? FAST_RESEARCH_SECONDS : undefined);
       const queueSlotsUsed = queue.rows.length;
       const canResearch = !isMaxed && missing.length === 0 && !queuedSet.has(code) && queueSlotsUsed < 2 && Number(kingdomRow.gold || 0) >= nextGold;
       return {
@@ -2663,12 +2709,12 @@ app.post("/api/research/:kingdom/start", async (req, res) => {
       if (Number(kr.gold || 0) < goldCost) throw new Error(`not enough gold (need ${goldCost})`);
 
       await c.query(`UPDATE kingdoms SET gold = gold - $2 WHERE id=$1`, [kr.id, goldCost]);
-      const seconds = researchSeconds(Number(def.base_seconds || 3600), curLevel);
+      const seconds = researchSeconds(Number(def.base_seconds || 3600), curLevel, LOCAL_DEMO_FAST ? FAST_RESEARCH_SECONDS : undefined);
       const targetLevel = curLevel + 1;
       const ins = await c.query(
         `
         INSERT INTO research_queue(kingdom_id, research_code, target_level, started_at, completes_at, status)
-        VALUES ($1,$2,$3,now(), now() + ($4 || ' seconds')::interval, 'queued')
+        VALUES ($1,$2,$3,now(), now() + ($4 * INTERVAL '1 second'), 'queued')
         RETURNING id, research_code, target_level, started_at, completes_at, status
         `,
         [kr.id, researchCode, targetLevel, seconds],
@@ -2973,7 +3019,7 @@ app.post("/api/settlements/:kingdom/build-building", async (req, res) => {
       const q = await c.query(
         `
         INSERT INTO settlement_build_queue(kingdom_id, settlement_id, building_code, target_level, started_at, completes_at, status)
-        VALUES ($1,$2,$3,1,now(), now() + ($4 || ' seconds')::interval, 'queued')
+        VALUES ($1,$2,$3,1,now(), now() + ($4 * INTERVAL '1 second'), 'queued')
         RETURNING id, settlement_id, building_code, target_level, started_at, completes_at, status
         `,
         [kr.id, settlementId, buildingCode, seconds],
@@ -3143,7 +3189,7 @@ app.post("/api/settlements/:kingdom/upgrade-building", async (req, res) => {
       const ins = await c.query(
         `
         INSERT INTO settlement_build_queue(kingdom_id, settlement_id, building_code, target_level, started_at, completes_at, status)
-        VALUES ($1,$2,$3,$4,now(), now() + ($5 || ' seconds')::interval, 'queued')
+        VALUES ($1,$2,$3,$4,now(), now() + ($5 * INTERVAL '1 second'), 'queued')
         RETURNING id, settlement_id, building_code, target_level, started_at, completes_at, status
         `,
         [kr.id, settlementId, def.code, nextLevel, seconds],
@@ -3751,10 +3797,315 @@ app.post("/api/alliance/:kingdom/contribute", async (req, res) => {
   }
 });
 
+// ── Admin endpoints ──────────────────────────────────────────────────────────
+app.get("/api/admin/stats", requireAdmin, async (_req, res) => {
+  try {
+    const [users, kingdoms, sessions, bans] = await Promise.all([
+      pool.query(`SELECT COUNT(*) AS cnt FROM app_users`),
+      pool.query(`SELECT COUNT(*) AS cnt FROM kingdoms`),
+      pool.query(`SELECT COUNT(*) AS cnt FROM auth_sessions WHERE expires_at > now()`),
+      pool.query(`SELECT COUNT(*) AS cnt FROM app_users WHERE is_banned=true`),
+    ]);
+    return res.json({ ok: true, stats: { totalUsers: Number(users.rows[0].cnt), totalKingdoms: Number(kingdoms.rows[0].cnt), activeSessions: Number(sessions.rows[0].cnt), bannedUsers: Number(bans.rows[0].cnt) } });
+  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.get("/api/admin/kingdoms", requireAdmin, async (req, res) => {
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+  const offset = Math.max(0, Number(req.query.offset || 0));
+  const search = String(req.query.search || "").trim();
+  try {
+    const q = await pool.query(
+      `SELECT k.id, k.name, k.land, k.gold, k.food, k.wood, k.stone, u.id AS user_id, u.username, u.email, u.is_admin, u.is_banned, u.banned_reason, k.created_at
+       FROM kingdoms k JOIN app_users u ON u.id = k.user_id
+       WHERE ($1='' OR LOWER(k.name) LIKE '%'||LOWER($1)||'%' OR LOWER(u.username) LIKE '%'||LOWER($1)||'%')
+       ORDER BY k.land DESC LIMIT $2 OFFSET $3`,
+      [search, limit, offset],
+    );
+    const total = await pool.query(`SELECT COUNT(*) AS cnt FROM kingdoms k JOIN app_users u ON u.id=k.user_id WHERE ($1='' OR LOWER(k.name) LIKE '%'||LOWER($1)||'%' OR LOWER(u.username) LIKE '%'||LOWER($1)||'%')`, [search]);
+    return res.json({ ok: true, kingdoms: q.rows, total: Number(total.rows[0].cnt) });
+  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.get("/api/admin/users", requireAdmin, async (req, res) => {
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+  const offset = Math.max(0, Number(req.query.offset || 0));
+  const search = String(req.query.search || "").trim();
+  try {
+    const q = await pool.query(
+      `SELECT u.id, u.username, u.email, u.email_verified, u.is_admin, u.is_banned, u.banned_reason, u.created_at, k.name AS kingdom_name
+       FROM app_users u LEFT JOIN kingdoms k ON k.user_id = u.id
+       WHERE ($1='' OR LOWER(u.username) LIKE '%'||LOWER($1)||'%' OR LOWER(u.email) LIKE '%'||LOWER($1)||'%')
+       ORDER BY u.created_at DESC LIMIT $2 OFFSET $3`,
+      [search, limit, offset],
+    );
+    const total = await pool.query(`SELECT COUNT(*) AS cnt FROM app_users u WHERE ($1='' OR LOWER(u.username) LIKE '%'||LOWER($1)||'%' OR LOWER(u.email) LIKE '%'||LOWER($1)||'%')`, [search]);
+    return res.json({ ok: true, users: q.rows, total: Number(total.rows[0].cnt) });
+  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.post("/api/admin/ban", requireAdmin, async (req, res) => {
+  const parsed = z.object({ userId: z.string().min(1), reason: z.string().max(500).optional() }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  try {
+    const r = await pool.query(`UPDATE app_users SET is_banned=true, banned_reason=$2 WHERE id=$1 AND is_admin=false RETURNING id`, [parsed.data.userId, parsed.data.reason || null]);
+    if (!r.rowCount) return res.status(404).json({ ok: false, error: "user not found or user is an admin" });
+    await pool.query(`DELETE FROM auth_sessions WHERE user_id=$1`, [parsed.data.userId]);
+    return res.json({ ok: true });
+  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.post("/api/admin/unban", requireAdmin, async (req, res) => {
+  const parsed = z.object({ userId: z.string().min(1) }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  try {
+    const r = await pool.query(`UPDATE app_users SET is_banned=false, banned_reason=NULL WHERE id=$1 RETURNING id`, [parsed.data.userId]);
+    if (!r.rowCount) return res.status(404).json({ ok: false, error: "user not found" });
+    return res.json({ ok: true });
+  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.post("/api/admin/set-admin", requireAdmin, async (req, res) => {
+  const parsed = z.object({ userId: z.string().min(1), grant: z.boolean() }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const self = (req as any).adminSession;
+  if (String(self.user_id) === parsed.data.userId && !parsed.data.grant) return res.status(400).json({ ok: false, error: "cannot revoke your own admin" });
+  try {
+    const r = await pool.query(`UPDATE app_users SET is_admin=$2 WHERE id=$1 RETURNING id`, [parsed.data.userId, parsed.data.grant]);
+    if (!r.rowCount) return res.status(404).json({ ok: false, error: "user not found" });
+    return res.json({ ok: true });
+  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+// ── Prayer endpoints ─────────────────────────────────────────────────────────
+app.get("/api/pray/:kingdom", async (req, res) => {
+  try {
+    const k = await pool.query(`SELECT id, mana FROM kingdoms WHERE LOWER(name)=LOWER($1)`, [req.params.kingdom]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const kRow = k.rows[0];
+
+    const [templesQ, priestsQ] = await Promise.all([
+      pool.query(`SELECT COALESCE(MAX(level),0) AS temples FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='temples'`, [kRow.id]),
+      pool.query(`SELECT COALESCE(SUM(amount),0) AS priests FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='priests'`, [kRow.id]),
+    ]);
+    const priestCap = Number(templesQ.rows[0]?.temples || 0) * PRIESTS_PER_TEMPLE;
+    const priests = Number(priestsQ.rows[0]?.priests || 0);
+    const manaPerHour = Math.min(priests, priestCap) * MANA_PER_PRIEST_PER_HOUR;
+
+    // Clean up expired prayers
+    await pool.query(`DELETE FROM kingdom_prayers WHERE kingdom_id=$1 AND ends_at <= now()`, [kRow.id]);
+
+    const prayers = await pool.query(
+      `SELECT id, prayer_code, started_at, ends_at, mana_spent FROM kingdom_prayers WHERE kingdom_id=$1 ORDER BY started_at ASC`,
+      [kRow.id],
+    );
+    return res.json({ ok: true, mana: Number(kRow.mana || 0), priests, priestCap, manaPerHour, activePrayers: prayers.rows });
+  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.post("/api/pray/:kingdom/start", async (req, res) => {
+  const parsed = z.object({ prayerCode: z.string().min(1), days: z.number().int().min(1).max(90) }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const { prayerCode, days } = parsed.data;
+  if (!PRAYERS[prayerCode]) return res.status(400).json({ ok: false, error: "unknown prayer" });
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id, mana FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [req.params.kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kRow = k.rows[0];
+      const manaCost = PRAYERS[prayerCode].manaPerDay * days;
+      const currentMana = Number(kRow.mana || 0);
+      if (currentMana < manaCost) throw new Error(`Not enough mana. Need ${manaCost}, have ${currentMana}.`);
+      await c.query(`UPDATE kingdoms SET mana = mana - $2 WHERE id=$1`, [kRow.id, manaCost]);
+      const endsAt = new Date(Date.now() + days * 86400 * 1000);
+      const ins = await c.query(
+        `INSERT INTO kingdom_prayers(kingdom_id, prayer_code, ends_at, mana_spent) VALUES($1,$2,$3,$4) RETURNING id`,
+        [kRow.id, prayerCode, endsAt, manaCost],
+      );
+      return { prayerId: ins.rows[0].id, manaCost, endsAt };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) { return res.status(400).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.post("/api/pray/:kingdom/stop", async (req, res) => {
+  const parsed = z.object({ prayerId: z.number().int().positive() }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  try {
+    const k = await pool.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1)`, [req.params.kingdom]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const r = await pool.query(
+      `DELETE FROM kingdom_prayers WHERE id=$1 AND kingdom_id=$2 RETURNING id`,
+      [parsed.data.prayerId, k.rows[0].id],
+    );
+    if (!r.rowCount) return res.status(404).json({ ok: false, error: "prayer not found" });
+    return res.json({ ok: true });
+  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+// ── Marketplace endpoints ─────────────────────────────────────────────────────
+app.get("/api/market", async (req, res) => {
+  const resource = String(req.query.resource || "").trim();
+  const validResources = ["food", "wood", "stone", "horses"];
+  try {
+    const filter = validResources.includes(resource) ? resource : null;
+    const q = await pool.query(
+      `SELECT id, seller_kingdom_name, resource, quantity, quantity_remaining, price_per_unit, expires_at
+       FROM market_listings
+       WHERE status='active' AND expires_at > now()
+       ${filter ? "AND resource=$1" : ""}
+       ORDER BY resource ASC, price_per_unit ASC
+       LIMIT 200`,
+      filter ? [filter] : [],
+    );
+    return res.json({ ok: true, listings: q.rows });
+  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.get("/api/market/:kingdom/history", async (req, res) => {
+  try {
+    const k = await pool.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1)`, [req.params.kingdom]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const kId = k.rows[0].id;
+
+    const [listingsQ, tradesQ] = await Promise.all([
+      pool.query(
+        `SELECT id, resource, quantity, quantity_remaining, price_per_unit, status, listed_at, expires_at
+         FROM market_listings WHERE seller_kingdom_id=$1 ORDER BY listed_at DESC LIMIT 100`,
+        [kId],
+      ),
+      pool.query(
+        `SELECT id,
+                CASE WHEN buyer_kingdom_id=$1 THEN 'buy' ELSE 'sell' END AS trade_side,
+                resource, quantity, price_per_unit, total_gold, seller_receives,
+                seller_kingdom_name, buyer_kingdom_name, traded_at
+         FROM market_trades
+         WHERE buyer_kingdom_id=$1 OR seller_kingdom_id=$1
+         ORDER BY traded_at DESC LIMIT 200`,
+        [kId],
+      ),
+    ]);
+    return res.json({ ok: true, myListings: listingsQ.rows, trades: tradesQ.rows });
+  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.post("/api/market/:kingdom/list", async (req, res) => {
+  const parsed = z.object({
+    resource: z.enum(["food", "wood", "stone", "horses"]),
+    quantity: z.number().int().min(100).max(1_000_000),
+    pricePerUnit: z.number().int().min(1).max(100_000),
+  }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const { resource, quantity, pricePerUnit } = parsed.data;
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id, name, ${resource} AS res_qty FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [req.params.kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kRow = k.rows[0];
+      if (Number(kRow.res_qty || 0) < quantity) throw new Error(`Not enough ${resource}. Have ${Number(kRow.res_qty||0).toLocaleString()}, need ${quantity.toLocaleString()}.`);
+      await c.query(`UPDATE kingdoms SET ${resource} = ${resource} - $2 WHERE id=$1`, [kRow.id, quantity]);
+      const ins = await c.query(
+        `INSERT INTO market_listings(seller_kingdom_id, seller_kingdom_name, resource, quantity, quantity_remaining, price_per_unit)
+         VALUES($1,$2,$3,$4,$4,$5) RETURNING id, expires_at`,
+        [kRow.id, kRow.name, resource, quantity, pricePerUnit],
+      );
+      return { listingId: ins.rows[0].id, expiresAt: ins.rows[0].expires_at };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) { return res.status(400).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.post("/api/market/:kingdom/buy", async (req, res) => {
+  const parsed = z.object({ listingId: z.number().int().positive(), quantity: z.number().int().min(1) }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const { listingId, quantity } = parsed.data;
+  try {
+    const out = await withTx(async (c) => {
+      const buyer = await c.query(`SELECT id, name, gold FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [req.params.kingdom]);
+      if (!buyer.rowCount) throw new Error("kingdom not found");
+      const buyerRow = buyer.rows[0];
+
+      const listing = await c.query(
+        `SELECT id, seller_kingdom_id, seller_kingdom_name, resource, quantity_remaining, price_per_unit FROM market_listings WHERE id=$1 AND status='active' AND expires_at > now() FOR UPDATE`,
+        [listingId],
+      );
+      if (!listing.rowCount) throw new Error("listing not found or no longer active");
+      const l = listing.rows[0];
+      if (String(l.seller_kingdom_id) === String(buyerRow.id)) throw new Error("cannot buy your own listing");
+
+      const buyQty = Math.min(quantity, Number(l.quantity_remaining));
+      if (buyQty <= 0) throw new Error("listing is sold out");
+      const totalGold = buyQty * Number(l.price_per_unit);
+      if (Number(buyerRow.gold || 0) < totalGold) throw new Error(`Not enough gold. Need ${totalGold.toLocaleString()}, have ${Number(buyerRow.gold||0).toLocaleString()}.`);
+
+      const sellerReceives = Math.floor(totalGold * 0.95);
+      const newRemaining = Number(l.quantity_remaining) - buyQty;
+
+      await c.query(`UPDATE kingdoms SET gold = gold - $2 WHERE id=$1`, [buyerRow.id, totalGold]);
+      await c.query(
+        `UPDATE kingdoms SET gold = gold + $2 WHERE id=$1`,
+        [l.seller_kingdom_id, sellerReceives],
+      );
+      await c.query(
+        `UPDATE kingdoms SET ${l.resource} = ${l.resource} + $2 WHERE id=$1`,
+        [buyerRow.id, buyQty],
+      );
+      await c.query(
+        `UPDATE market_listings SET quantity_remaining=$2, status=CASE WHEN $2=0 THEN 'sold' ELSE status END WHERE id=$1`,
+        [listingId, newRemaining],
+      );
+
+      // Lock seller kingdom for gold update (already done above, no need for separate lock)
+      const sellerK = await c.query(`SELECT id, name FROM kingdoms WHERE id=$1`, [l.seller_kingdom_id]);
+      const sellerName = sellerK.rows[0]?.name || l.seller_kingdom_name;
+
+      await c.query(
+        `INSERT INTO market_trades(listing_id, buyer_kingdom_id, buyer_kingdom_name, seller_kingdom_id, seller_kingdom_name, resource, quantity, price_per_unit, total_gold, seller_receives)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [listingId, buyerRow.id, buyerRow.name, l.seller_kingdom_id, sellerName, l.resource, buyQty, l.price_per_unit, totalGold, sellerReceives],
+      );
+      return { quantity: buyQty, resource: l.resource, totalGold, sellerReceives };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) { return res.status(400).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.post("/api/market/:kingdom/cancel", async (req, res) => {
+  const parsed = z.object({ listingId: z.number().int().positive() }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1)`, [req.params.kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const listing = await c.query(
+        `SELECT id, seller_kingdom_id, resource, quantity_remaining FROM market_listings WHERE id=$1 AND status='active' FOR UPDATE`,
+        [parsed.data.listingId],
+      );
+      if (!listing.rowCount) throw new Error("listing not found or not active");
+      const l = listing.rows[0];
+      if (String(l.seller_kingdom_id) !== String(k.rows[0].id)) throw new Error("not your listing");
+      await c.query(`UPDATE market_listings SET status='cancelled' WHERE id=$1`, [l.id]);
+      if (Number(l.quantity_remaining) > 0) {
+        await c.query(
+          `UPDATE kingdoms SET ${l.resource} = ${l.resource} + $2 WHERE id=$1`,
+          [l.seller_kingdom_id, l.quantity_remaining],
+        );
+      }
+      return { refundedQty: Number(l.quantity_remaining), resource: l.resource };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) { return res.status(400).json({ ok: false, error: String(e?.message || e) }); }
+});
+
 async function bootstrap() {
   await ensureSchema();
+  const adminUsername = String(process.env.ADMIN_USERNAME || "").trim();
+  if (adminUsername) {
+    await pool.query(`UPDATE app_users SET is_admin=true WHERE LOWER(username)=LOWER($1)`, [adminUsername]);
+    console.log(`Admin granted to: ${adminUsername}`);
+  }
   app.listen(API_PORT, () => {
-    console.log(`API listening on :${API_PORT}`);
+    console.log(`Crownforge API listening on :${API_PORT}`);
   });
 }
 
