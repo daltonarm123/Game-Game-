@@ -85,13 +85,14 @@ export const warApi = {
     get(`/api/war-room/${encodeURIComponent(kingdom)}`, token),
 
   attack: (attacker: string, target: string, troops: Record<string, number>, token: string) =>
-    post(`/api/war-room/${encodeURIComponent(attacker)}/attack`, { target, troops }, token),
+    post(`/api/war-room/${encodeURIComponent(attacker)}/attack`, { defenderKingdom: target, sentTroops: troops }, token),
 
-  explore: (attacker: string, token: string) =>
-    post(`/api/war-room/${encodeURIComponent(attacker)}/explore`, {}, token),
+  // sentTroops must have at least one troop > 0; caller should supply available troops
+  explore: (attacker: string, token: string, sentTroops: Record<string, number> = { soldiers: 1 }) =>
+    post(`/api/war-room/${encodeURIComponent(attacker)}/explore`, { sentTroops }, token),
 
   spy: (attacker: string, target: string, spyCount: number, token: string) =>
-    post(`/api/war-room/${encodeURIComponent(attacker)}/spy`, { target, spyCount }, token),
+    post(`/api/war-room/${encodeURIComponent(attacker)}/spy`, { defenderKingdom: target, spiesToSend: spyCount }, token),
 
   getReports: (kingdom: string, type: string, page: number, token?: string) =>
     get(`/api/war-room/reports/${encodeURIComponent(kingdom)}?type=${type}&page=${page}`, token),
@@ -146,7 +147,7 @@ export const researchApi = {
     get(`/api/research/${encodeURIComponent(kingdom)}`, token),
 
   start: (kingdom: string, techCode: string, token: string) =>
-    post(`/api/research/${encodeURIComponent(kingdom)}/start`, { techCode }, token),
+    post(`/api/research/${encodeURIComponent(kingdom)}/start`, { researchCode: techCode }, token),
 };
 
 // ── settlements ───────────────────────────────────────────────────────────────
@@ -164,8 +165,8 @@ export const settlementApi = {
   buildBuilding: (kingdom: string, settlementId: number, buildingCode: string, token: string) =>
     post(`/api/settlements/${encodeURIComponent(kingdom)}/build-building`, { settlementId, buildingCode }, token),
 
-  upgradeBuilding: (kingdom: string, settlementId: number, buildingId: number, token: string) =>
-    post(`/api/settlements/${encodeURIComponent(kingdom)}/upgrade-building`, { settlementId, buildingId }, token),
+  upgradeBuilding: (kingdom: string, settlementId: number, buildingCode: string, token: string) =>
+    post(`/api/settlements/${encodeURIComponent(kingdom)}/upgrade-building`, { settlementId, buildingCode }, token),
 };
 
 // ── alliance ──────────────────────────────────────────────────────────────────
@@ -175,7 +176,7 @@ export const allianceApi = {
     get(`/api/alliance/${encodeURIComponent(kingdom)}`, token),
 
   create: (kingdom: string, name: string, tag: string, token: string) =>
-    post(`/api/alliance/${encodeURIComponent(kingdom)}/create`, { name, tag }, token),
+    post(`/api/alliance/${encodeURIComponent(kingdom)}/create`, { name, slug: tag }, token),
 
   join: (kingdom: string, slug: string, token: string) =>
     post(`/api/alliance/${encodeURIComponent(kingdom)}/join`, { slug }, token),
@@ -183,8 +184,8 @@ export const allianceApi = {
   leave: (kingdom: string, token: string) =>
     post(`/api/alliance/${encodeURIComponent(kingdom)}/leave`, {}, token),
 
-  setRelation: (kingdom: string, targetAllianceId: number, relationType: string, note: string, token: string) =>
-    post(`/api/alliance/${encodeURIComponent(kingdom)}/relation`, { targetAllianceId, relationType, note }, token),
+  setRelation: (kingdom: string, targetName: string, relationType: string, note: string, token: string) =>
+    post(`/api/alliance/${encodeURIComponent(kingdom)}/relation`, { targetName, relationType, note }, token),
 
   contribute: (kingdom: string, buildingCode: string, gold: number, stone: number, wood: number, token: string) =>
     post(`/api/alliance/${encodeURIComponent(kingdom)}/contribute`, { buildingCode, gold, stone, wood }, token),

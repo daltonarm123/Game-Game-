@@ -36,7 +36,7 @@ const TROOPS = [
   { code: "knights", name: "Knights", trainGoldCost: 450, trainFoodCost: 260, horseCost: 3, trainSeconds: 160, upkeepFood: 90, upkeepGold: 50, att: 15, def: 10, nw: 1.63, housing: "Cavalry, Castles", notes: "Requires Castles to train.", isTrainable: true },
   { code: "diplomats", name: "Diplomats", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 15, upkeepGold: 15, att: 0.1, def: 0.1, nw: 0.88, housing: "N/A, Embassies", notes: "", isTrainable: false },
   { code: "priests", name: "Priests", trainGoldCost: 400, trainFoodCost: 150, trainSeconds: 3600, upkeepFood: 30, upkeepGold: 20, att: 0.1, def: 0.1, nw: 0.5, housing: "Faith, Temples", notes: "Max 5 per Temple. Each priest generates 4 mana/hr.", isTrainable: true },
-  { code: "spies", name: "Spies", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 18, upkeepGold: 10, att: 0.1, def: 0.1, nw: 0.38, housing: "N/A, Guildhalls", notes: "", isTrainable: false },
+  { code: "spies", name: "Spies", trainGoldCost: 300, trainFoodCost: 100, trainSeconds: 2400, upkeepFood: 18, upkeepGold: 10, att: 0.1, def: 0.1, nw: 0.38, housing: "N/A, Guildhalls", notes: "Requires Guildhall to train.", isTrainable: true },
 ] as const;
 
 const RESEARCH_SKILLS = [
@@ -182,6 +182,7 @@ export async function ensureSchema(): Promise<void> {
       id TEXT PRIMARY KEY,
       username TEXT NOT NULL,
       email TEXT,
+      referral_code TEXT UNIQUE,
       password_hash TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -584,8 +585,10 @@ export async function ensureSchema(): Promise<void> {
   `);
 
   await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS email TEXT`);
+  await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS referral_code TEXT`);
   await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS password_hash TEXT`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS app_users_email_lower_uq ON app_users((LOWER(email))) WHERE email IS NOT NULL`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS app_users_referral_code_uq ON app_users(referral_code) WHERE referral_code IS NOT NULL`);
 
   await pool.query(`
     ALTER TABLE building_types

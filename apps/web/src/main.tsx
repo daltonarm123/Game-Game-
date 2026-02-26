@@ -1,5 +1,16 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
+import "./base.css";
+
+function getToken(): string {
+  try { return JSON.parse(localStorage.getItem("gg:auth") || "{}").token || ""; } catch { return ""; }
+}
+function authHeaders(): Record<string, string> {
+  const t = getToken();
+  return t
+    ? { "Content-Type": "application/json", Authorization: `Bearer ${t}` }
+    : { "Content-Type": "application/json" };
+}
 
 type NavItem = { id: string; label: string; group: "top" | "kingdom" };
 
@@ -241,7 +252,7 @@ function OverviewView() {
     try {
       const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/tax`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ taxRate: v }),
       });
       const j = await r.json();
@@ -261,7 +272,7 @@ function OverviewView() {
     try {
       const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/shield/activate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
@@ -551,7 +562,7 @@ function BuildingsView() {
       for (let i = 0; i < qty; i += 1) {
         const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/build`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: authHeaders(),
           body: JSON.stringify({ buildingCode: buildCode }),
         });
         const j = await r.json();
@@ -871,7 +882,7 @@ function ResearchView() {
     try {
       const r = await fetch(`${API_BASE}/api/research/${encodeURIComponent(kingdom)}/start`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ researchCode: code }),
       });
       const j = await r.json();
@@ -1063,7 +1074,7 @@ function SettlementsView() {
     try {
       const r = await fetch(`${API_BASE}/api/settlements/${encodeURIComponent(kingdom)}/upgrade-building`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ settlementId, buildingCode }),
       });
       const j = await r.json();
@@ -1084,7 +1095,7 @@ function SettlementsView() {
     try {
       const r = await fetch(`${API_BASE}/api/settlements/${encodeURIComponent(kingdom)}/rename`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ settlementId: renameId, name: renameName.trim() }),
       });
       const j = await r.json();
@@ -1340,7 +1351,7 @@ function AllianceView() {
     try {
       const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/create`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({
           slug: createSlug,
           name: createName,
@@ -1366,7 +1377,7 @@ function AllianceView() {
     try {
       const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/join`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ allianceId: joinAllianceId }),
       });
       const j = await r.json();
@@ -1386,7 +1397,7 @@ function AllianceView() {
     try {
       const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/leave`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
@@ -1405,7 +1416,7 @@ function AllianceView() {
     try {
       const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/relation`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({
           relationType,
           targetName: relationTarget,
@@ -1431,7 +1442,7 @@ function AllianceView() {
     try {
       const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/contribute`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({
           buildingCode: contribCode,
           gold: Math.max(0, Math.floor(Number(contribGold || 0))),
@@ -2099,7 +2110,7 @@ function WarRoomView() {
     try {
       const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/train`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({
           troopCode: trainTroop,
           quantity: Math.max(1, Math.floor(Number(trainQty || 0))),
@@ -2140,7 +2151,7 @@ function WarRoomView() {
     try {
       const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/disband`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ troopCode, quantity: qty }),
       });
       const j = await r.json();
@@ -2162,7 +2173,7 @@ function WarRoomView() {
       );
       const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}/attack`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({
           defenderKingdom: attackTarget,
           sentTroops: payload,
@@ -2428,7 +2439,7 @@ function TrainTroopsView() {
     try {
       const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/train`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({
           troopCode: trainTroop,
           quantity: Math.max(1, Math.floor(Number(trainQty || 0))),
@@ -2578,7 +2589,7 @@ function AttackKingdomView() {
       const payload = Object.fromEntries(Object.entries(sentTroops).filter(([, v]) => Number(v || 0) > 0));
       const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}/attack`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({
           defenderKingdom: attackTarget,
           sentTroops: payload,
@@ -2732,7 +2743,7 @@ function AuthGate(props: { onAuthenticated: (auth: AuthState) => void }) {
       setBusy(true);
       fetch(`${API_BASE}/api/auth/verify-email`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ token: urlVerifyToken }),
       })
         .then((r) => readJsonSafe(r))
@@ -2770,7 +2781,7 @@ function AuthGate(props: { onAuthenticated: (auth: AuthState) => void }) {
     try {
       const r = await fetch(`${API_BASE}/api/auth/login`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ emailOrUsername, password }),
       });
       const j = await readJsonSafe(r);
@@ -2793,7 +2804,7 @@ function AuthGate(props: { onAuthenticated: (auth: AuthState) => void }) {
     try {
       const r = await fetch(`${API_BASE}/api/auth/register`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ email, username, password, kingdomName }),
       });
       const j = await readJsonSafe(r);
@@ -2820,7 +2831,7 @@ function AuthGate(props: { onAuthenticated: (auth: AuthState) => void }) {
     try {
       const r = await fetch(`${API_BASE}/api/auth/forgot-password`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ email }),
       });
       const j = await readJsonSafe(r);
@@ -2840,7 +2851,7 @@ function AuthGate(props: { onAuthenticated: (auth: AuthState) => void }) {
     try {
       const r = await fetch(`${API_BASE}/api/auth/reset-password`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ token: urlResetToken, newPassword }),
       });
       const j = await readJsonSafe(r);
@@ -3044,7 +3055,7 @@ function PrayView() {
     try {
       const r = await fetch(`${API_BASE}/api/pray/${encodeURIComponent(kingdom)}/start`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ prayerCode: selectedPrayer, days }),
       });
       const j = await r.json();
@@ -3062,7 +3073,7 @@ function PrayView() {
     try {
       const r = await fetch(`${API_BASE}/api/pray/${encodeURIComponent(kingdom)}/stop`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ prayerId }),
       });
       const j = await r.json();
@@ -3328,7 +3339,7 @@ function MarketplaceView() {
       if (!qty || !price) throw new Error("Enter valid quantity and price");
       const r = await fetch(`${API_BASE}/api/market/${encodeURIComponent(kingdom)}/list`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ resource: sellResource, quantity: qty, pricePerUnit: price }),
       });
       const j = await r.json();
@@ -3353,7 +3364,7 @@ function MarketplaceView() {
     try {
       const r = await fetch(`${API_BASE}/api/market/${encodeURIComponent(kingdom)}/buy`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ listingId, quantity: qty }),
       });
       const j = await r.json();
@@ -3373,7 +3384,7 @@ function MarketplaceView() {
     try {
       const r = await fetch(`${API_BASE}/api/market/${encodeURIComponent(kingdom)}/cancel`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ listingId }),
       });
       const j = await r.json();
@@ -3953,6 +3964,7 @@ function AdminView() {
 function RankingsView() {
   const [tab, setTab] = useState<"kingdoms" | "alliances">("kingdoms");
   const [kingdoms, setKingdoms] = useState<any[]>([]);
+  const [alliances, setAlliances] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState("");
@@ -3963,16 +3975,22 @@ function RankingsView() {
 
   const myKingdom = localStorage.getItem(KINGDOM_STORAGE_KEY) || "";
 
-  async function load(pg = page, q = search) {
+  async function load(pg = page, q = search, currentTab = tab) {
     setLoading(true);
     setError("");
     try {
       const offset = pg * PAGE_SIZE;
-      const url = `${API_BASE}/api/rankings/kingdoms?limit=${PAGE_SIZE}&offset=${offset}${q ? `&search=${encodeURIComponent(q)}` : ""}`;
+      const url = currentTab === "alliances"
+        ? `${API_BASE}/api/rankings/alliances?limit=${PAGE_SIZE}&offset=${offset}`
+        : `${API_BASE}/api/rankings/kingdoms?limit=${PAGE_SIZE}&offset=${offset}${q ? `&search=${encodeURIComponent(q)}` : ""}`;
       const r = await fetch(url);
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setKingdoms(j.kingdoms || []);
+      if (currentTab === "alliances") {
+        setAlliances(j.alliances || j.items || []);
+      } else {
+        setKingdoms(j.items || j.kingdoms || []);
+      }
       setTotal(Number(j.total || 0));
     } catch (e: any) {
       setError(String(e?.message || e));
@@ -3982,14 +4000,14 @@ function RankingsView() {
   }
 
   useEffect(() => {
-    if (tab === "kingdoms") void load(page, search);
+    void load(page, search, tab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, page]);
 
   // Auto-refresh every 30s so rankings update after ticks without manual reload
   useEffect(() => {
     const t = setInterval(() => {
-      if (tab === "kingdoms") void load(page, search);
+      void load(page, search, tab);
     }, 30_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4017,7 +4035,46 @@ function RankingsView() {
         </div>
 
         {tab === "alliances" ? (
-          <div style={{ color: TEXT_MUTED, padding: 20, textAlign: "center", fontSize: 18 }}>Coming Soon</div>
+          <>
+            {error ? <div style={{ color: "#ffae9a", marginBottom: 8 }}>{error}</div> : null}
+            {loading ? <div style={{ color: TEXT_MUTED }}>Loading...</div> : null}
+
+            <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 8 }}>
+              Showing {total ? page * PAGE_SIZE + 1 : 0}-{Math.min((page + 1) * PAGE_SIZE, total)} of {total.toLocaleString()} alliances
+            </div>
+
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Rank</th>
+                    <th style={TH}>Alliance</th>
+                    <th style={{ ...TH, textAlign: "right" }}>Members</th>
+                    <th style={{ ...TH, textAlign: "right" }}>Total Networth</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {alliances.map((a: any) => {
+                    const rank = Number(a.rank || 0);
+                    return (
+                      <tr key={a.id}>
+                        <td style={{ ...TD, color: rank === 1 ? "#ffd700" : rank === 2 ? "#c0c0c0" : rank === 3 ? "#cd7f32" : TEXT_MAIN, fontWeight: rank <= 3 ? 700 : 400 }}>{rank}</td>
+                        <td style={TD}>[{String(a.slug || "").toUpperCase()}] {String(a.name || "")}</td>
+                        <td style={{ ...TD, textAlign: "right" }}>{Number(a.memberCount || 0).toLocaleString()}</td>
+                        <td style={{ ...TD, textAlign: "right" }}>{Number(a.totalNetworth || 0).toLocaleString()}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12, justifyContent: "flex-end" }}>
+              <button disabled={page === 0} onClick={() => setPage(page - 1)} style={{ ...BTN_STYLE, padding: "6px 14px", fontSize: 13 }}>Prev</button>
+              <span style={{ fontSize: 13, color: TEXT_MUTED }}>Page {page + 1}</span>
+              <button disabled={(page + 1) * PAGE_SIZE >= total} onClick={() => setPage(page + 1)} style={{ ...BTN_STYLE, padding: "6px 14px", fontSize: 13 }}>Next</button>
+            </div>
+          </>
         ) : (
           <>
             <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -4035,7 +4092,7 @@ function RankingsView() {
             {loading ? <div style={{ color: TEXT_MUTED }}>Loading...</div> : null}
 
             <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 8 }}>
-              Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total.toLocaleString()} kingdoms
+              Showing {total ? page * PAGE_SIZE + 1 : 0}-{Math.min((page + 1) * PAGE_SIZE, total)} of {total.toLocaleString()} kingdoms
             </div>
 
             <div style={{ overflowX: "auto" }}>
@@ -4051,7 +4108,7 @@ function RankingsView() {
                 <tbody>
                   {kingdoms.map((k: any, i: number) => {
                     const rank = page * PAGE_SIZE + i + 1;
-                    const tag = String(k.alliance_tag || "").trim();
+                    const tag = String(k.allianceTag || k.alliance_tag || "").trim();
                     const displayName = tag ? `[${tag}] ${k.name}` : k.name;
                     const isMe = k.name === myKingdom;
                     return (
@@ -4121,7 +4178,7 @@ function PigeonsView() {
 
   async function markRead(id: number) {
     try {
-      await fetch(`${API_BASE}/api/pigeons/${encodeURIComponent(kingdom)}/${id}/read`, { method: "POST" });
+      await fetch(`${API_BASE}/api/pigeons/${encodeURIComponent(kingdom)}/${id}/read`, { method: "POST", headers: { Authorization: `Bearer ${getToken()}` } });
       setMessages((prev) => prev.map((m) => m.id === id ? { ...m, read_at: new Date().toISOString() } : m));
     } catch {}
   }
@@ -4143,7 +4200,7 @@ function PigeonsView() {
     try {
       const r = await fetch(`${API_BASE}/api/pigeons/${encodeURIComponent(kingdom)}/send`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ toKingdom: toKingdom.trim(), subject: subject.trim(), body: body.trim() }),
       });
       const j = await r.json();
@@ -4287,7 +4344,7 @@ function GuildhallView() {
     try {
       const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/train`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ troopCode: "spies", quantity: trainAmt }),
       });
       const j = await r.json();
@@ -4306,9 +4363,9 @@ function GuildhallView() {
     setBusy(true);
     setActionMsg("");
     try {
-      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/spy`, {
+      const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}/spy`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ defenderKingdom, spiesToSend }),
       });
       const j = await r.json();
@@ -4554,6 +4611,7 @@ function AccountView() {
   const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "");
   const [shieldData, setShieldData] = useState<any>(null);
   const [gemsData, setGemsData] = useState<any>(null);
+  const [referralData, setReferralData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [shieldBusy, setShieldBusy] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
@@ -4570,6 +4628,11 @@ function AccountView() {
         setShieldData(kJson?.shield || kJson?.kingdom?.shield || null);
         setGemsData({ blue_gems: kJson?.kingdom?.blue_gems, green_gems: kJson?.kingdom?.green_gems });
       }
+      const refRes = await fetch(`${API_BASE}/api/account/referral`, { headers: authHeaders() });
+      const refJson = await refRes.json();
+      if (refRes.ok && refJson?.ok) {
+        setReferralData(refJson);
+      }
     } catch {}
     finally { setLoading(false); }
   }
@@ -4582,7 +4645,7 @@ function AccountView() {
     try {
       const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/shield/activate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
@@ -4600,6 +4663,17 @@ function AccountView() {
     localStorage.removeItem("gg:auth");
     localStorage.removeItem("gg:kingdom");
     window.location.reload();
+  }
+
+  async function copyReferralLink() {
+    const link = String(referralData?.referralUrl || "");
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      setStatusMsg("Referral link copied.");
+    } catch {
+      setStatusMsg("Failed to copy referral link.");
+    }
   }
 
   return (
@@ -4653,8 +4727,22 @@ function AccountView() {
         <div style={{ fontSize: 14, color: TEXT_MUTED, lineHeight: 1.6 }}>
           Share Crownforge with friends to earn bonus gems. When a friend registers using your referral link
           and reaches a certain milestone, you will both receive blue gem rewards.
-          <br /><br />
-          Referral system coming soon.
+        </div>
+        <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+          <div style={{ fontSize: 14 }}>
+            Your Code: <span style={{ color: ACCENT, fontWeight: 700 }}>{String(referralData?.referralCode || "—")}</span>
+          </div>
+          <input
+            readOnly
+            value={String(referralData?.referralUrl || "")}
+            style={{ ...INPUT_STYLE, width: "100%" }}
+            placeholder="Referral link unavailable"
+          />
+          <div>
+            <button onClick={() => void copyReferralLink()} style={{ ...BTN_STYLE, fontSize: 13 }}>
+              Copy Referral Link
+            </button>
+          </div>
         </div>
       </div>
 

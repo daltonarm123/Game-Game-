@@ -183,8 +183,9 @@ const allianceCreateBody = z.object({
 });
 
 const allianceJoinBody = z.object({
-  allianceId: z.number().int().positive(),
-});
+  allianceId: z.number().int().positive().optional(),
+  slug: z.string().min(2).optional(),
+}).refine((d) => d.allianceId || d.slug, { message: "provide allianceId or slug" });
 
 const allianceRelationBody = z.object({
   relationType: z.enum(["ally", "nap", "enemy", "cease_fire", "joint_ops"]),
@@ -206,6 +207,7 @@ const TROOP_TRAIN_REQUIREMENTS: Record<string, { buildingCode: string; buildingN
   light_cavalry: { buildingCode: "stables", buildingName: "Stables", minLevel: 1 },
   heavy_cavalry: { buildingCode: "stables", buildingName: "Stables", minLevel: 1 },
   knights: { buildingCode: "castles", buildingName: "Castles", minLevel: 1 },
+  spies: { buildingCode: "guildhall", buildingName: "Guildhall", minLevel: 1 },
 };
 
 const FOOTMAN_ELITE_PROMOTION_RATE = clamp(Number(process.env.FOOTMAN_ELITE_PROMOTION_RATE || 0.0025), 0, 0.05);
@@ -237,6 +239,10 @@ function normalizeEmail(input: string) {
 
 function normalizeUsername(input: string) {
   return String(input || "").trim();
+}
+
+function generateReferralCode() {
+  return `GG${randomBytes(4).toString("hex").toUpperCase()}`;
 }
 
 function hashPassword(password: string) {
@@ -282,6 +288,16 @@ async function getAuthSession(token: string) {
     [token],
   );
   return q.rows[0] || null;
+}
+
+async function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const token = extractAuthToken(req);
+  if (!token) return res.status(401).json({ ok: false, error: "missing auth token" });
+  const session = await getAuthSession(token);
+  if (!session) return res.status(401).json({ ok: false, error: "invalid or expired session" });
+  if (session.is_banned) return res.status(403).json({ ok: false, error: "account is banned" });
+  (req as any).authSession = session;
+  return next();
 }
 
 async function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -925,6 +941,52 @@ app.get("/api/auth/me", async (req, res) => {
   }
 });
 
+app.get("/api/account/referral", requireAuth, async (req, res) => {
+  try {
+    const session = (req as any).authSession;
+    const userId = String(session?.user_id || "");
+    if (!userId) return res.status(401).json({ ok: false, error: "missing user session" });
+
+    const out = await withTx(async (c) => {
+      const uq = await c.query(`SELECT id, referral_code FROM app_users WHERE id=$1 LIMIT 1 FOR UPDATE`, [userId]);
+      if (!uq.rowCount) throw new Error("user not found");
+
+      let referralCode = String(uq.rows[0]?.referral_code || "").trim().toUpperCase();
+      if (!referralCode) {
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const candidate = generateReferralCode();
+          try {
+            const up = await c.query(
+              `UPDATE app_users SET referral_code=$2 WHERE id=$1 AND referral_code IS NULL RETURNING referral_code`,
+              [userId, candidate],
+            );
+            if (up.rowCount) {
+              referralCode = String(up.rows[0]?.referral_code || candidate).trim().toUpperCase();
+              break;
+            }
+            const existing = await c.query(`SELECT referral_code FROM app_users WHERE id=$1 LIMIT 1`, [userId]);
+            referralCode = String(existing.rows[0]?.referral_code || "").trim().toUpperCase();
+            if (referralCode) break;
+          } catch (e: any) {
+            if (String(e?.code || "") !== "23505") throw e;
+          }
+        }
+      }
+
+      if (!referralCode) throw new Error("failed to generate referral code");
+
+      const kq = await c.query(`SELECT name FROM kingdoms WHERE user_id=$1 LIMIT 1`, [userId]);
+      const kingdomName = String(kq.rows[0]?.name || "");
+      const referralUrl = `${APP_BASE_URL}/?ref=${encodeURIComponent(referralCode)}`;
+      return { referralCode, referralUrl, kingdomName };
+    });
+
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 app.post("/api/auth/logout", async (req, res) => {
   const token = extractAuthToken(req);
   if (!token) return res.status(400).json({ ok: false, error: "missing auth token" });
@@ -1288,7 +1350,7 @@ app.get("/api/kingdom/:name", async (req, res) => {
   }
 });
 
-app.post("/api/kingdom/:name/build", async (req, res) => {
+app.post("/api/kingdom/:name/build", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
   const parsed = buildBody.safeParse(req.body);
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
@@ -1361,7 +1423,7 @@ app.post("/api/kingdom/:name/build", async (req, res) => {
   }
 });
 
-app.post("/api/kingdom/:name/train", async (req, res) => {
+app.post("/api/kingdom/:name/train", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
   const parsed = trainBody.safeParse(req.body);
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
@@ -1419,7 +1481,7 @@ app.post("/api/kingdom/:name/train", async (req, res) => {
   }
 });
 
-app.post("/api/kingdom/:name/disband", async (req, res) => {
+app.post("/api/kingdom/:name/disband", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
   const parsed = disbandBody.safeParse(req.body);
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
@@ -1484,7 +1546,7 @@ app.get("/api/kingdom-search", async (req, res) => {
   }
 });
 
-app.post("/api/kingdom/:name/tax", async (req, res) => {
+app.post("/api/kingdom/:name/tax", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
   const parsed = taxUpdateBody.safeParse(req.body);
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
@@ -1506,7 +1568,7 @@ app.post("/api/kingdom/:name/tax", async (req, res) => {
   }
 });
 
-app.post("/api/kingdom/:name/shield/activate", async (req, res) => {
+app.post("/api/kingdom/:name/shield/activate", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
 
@@ -1544,7 +1606,7 @@ app.post("/api/kingdom/:name/shield/activate", async (req, res) => {
   }
 });
 
-app.post("/api/war-room/:attacker/attack", async (req, res) => {
+app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
   const attackerName = String(req.params.attacker || "").trim();
   const parsed = attackBody.safeParse(req.body);
   if (!attackerName) return res.status(400).json({ ok: false, error: "attacker kingdom required" });
@@ -1821,7 +1883,7 @@ app.post("/api/war-room/:attacker/attack", async (req, res) => {
   }
 });
 
-app.post("/api/war-room/:attacker/explore", async (req, res) => {
+app.post("/api/war-room/:attacker/explore", requireAuth, async (req, res) => {
   const attackerName = String(req.params.attacker || "").trim();
   const parsed = exploreBody.safeParse(req.body);
   if (!attackerName) return res.status(400).json({ ok: false, error: "attacker kingdom required" });
@@ -1943,7 +2005,7 @@ app.post("/api/war-room/:attacker/explore", async (req, res) => {
   }
 });
 
-app.post("/api/war-room/:attacker/spy", async (req, res) => {
+app.post("/api/war-room/:attacker/spy", requireAuth, async (req, res) => {
   const attackerName = String(req.params.attacker || "").trim();
   const parsed = spyBody.safeParse(req.body);
   if (!attackerName) return res.status(400).json({ ok: false, error: "attacker kingdom required" });
@@ -2397,6 +2459,51 @@ app.get("/api/rankings/kingdoms/:name/nw-history", async (req, res) => {
   }
 });
 
+app.get("/api/rankings/alliances", async (req, res) => {
+  const limit = clamp(Number(req.query.limit || 30), 1, 100);
+  const offset = Math.max(0, Math.floor(Number(req.query.offset || 0)));
+  try {
+    const rows = await pool.query(
+      `
+      SELECT
+        a.id,
+        a.slug,
+        a.name,
+        a.description,
+        COUNT(DISTINCT am.kingdom_id)::int AS member_count,
+        COALESCE(SUM(
+          k.land * 0.04 + k.food * 0.0001 + k.gold * 0.0005 + k.stone * 0.0002 + k.wood * 0.0002
+        ), 0) AS total_networth,
+        a.created_at
+      FROM alliances a
+      LEFT JOIN alliance_members am ON am.alliance_id = a.id
+      LEFT JOIN kingdoms k ON k.id = am.kingdom_id
+      GROUP BY a.id, a.slug, a.name, a.description, a.created_at
+      ORDER BY total_networth DESC
+      LIMIT $1 OFFSET $2
+      `,
+      [limit, offset],
+    );
+    const total = await pool.query(`SELECT COUNT(*) AS cnt FROM alliances`);
+    return res.json({
+      ok: true,
+      alliances: rows.rows.map((r, i) => ({
+        rank: offset + i + 1,
+        id: Number(r.id),
+        slug: r.slug,
+        name: r.name,
+        description: r.description,
+        memberCount: Number(r.member_count || 0),
+        totalNetworth: Math.round(Number(r.total_networth || 0)),
+        createdAt: r.created_at,
+      })),
+      total: Number(total.rows[0]?.cnt || 0),
+    });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 app.get("/api/pigeons/:kingdom", async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const limit = clamp(Number(req.query.limit || 100), 1, 300);
@@ -2420,7 +2527,7 @@ app.get("/api/pigeons/:kingdom", async (req, res) => {
   }
 });
 
-app.post("/api/pigeons/:kingdom/send", async (req, res) => {
+app.post("/api/pigeons/:kingdom/send", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = sendPigeonBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -2448,7 +2555,7 @@ app.post("/api/pigeons/:kingdom/send", async (req, res) => {
   }
 });
 
-app.post("/api/pigeons/:kingdom/:mailId/read", async (req, res) => {
+app.post("/api/pigeons/:kingdom/:mailId/read", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const mailId = Number(req.params.mailId || 0);
   if (!kingdom || !mailId) return res.status(400).json({ ok: false, error: "kingdom and mailId required" });
@@ -2488,7 +2595,7 @@ app.get("/api/notifications/:kingdom", async (req, res) => {
   }
 });
 
-app.post("/api/notifications/:kingdom/ack", async (req, res) => {
+app.post("/api/notifications/:kingdom/ack", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const sinceId = Number(req.body?.sinceId || 0);
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -2510,7 +2617,7 @@ app.post("/api/notifications/:kingdom/ack", async (req, res) => {
   }
 });
 
-app.post("/api/kingdom/:name/daily-bonus/claim", async (req, res) => {
+app.post("/api/kingdom/:name/daily-bonus/claim", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
 
@@ -2649,7 +2756,7 @@ app.get("/api/research/:kingdom", async (req, res) => {
   }
 });
 
-app.post("/api/research/:kingdom/start", async (req, res) => {
+app.post("/api/research/:kingdom/start", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = researchStartBody.safeParse(req.body);
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -2916,7 +3023,7 @@ app.get("/api/settlements/:kingdom/building-types", async (req, res) => {
   }
 });
 
-app.post("/api/settlements/:kingdom/found", async (req, res) => {
+app.post("/api/settlements/:kingdom/found", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementFoundBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -2964,7 +3071,7 @@ app.post("/api/settlements/:kingdom/found", async (req, res) => {
   }
 });
 
-app.post("/api/settlements/:kingdom/build-building", async (req, res) => {
+app.post("/api/settlements/:kingdom/build-building", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementBuildBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -3033,7 +3140,7 @@ app.post("/api/settlements/:kingdom/build-building", async (req, res) => {
   }
 });
 
-app.post("/api/settlements/:kingdom/upgrade-cost", async (req, res) => {
+app.post("/api/settlements/:kingdom/upgrade-cost", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementUpgradeCostBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -3095,7 +3202,7 @@ app.post("/api/settlements/:kingdom/upgrade-cost", async (req, res) => {
   }
 });
 
-app.post("/api/settlements/:kingdom/destroy-building", async (req, res) => {
+app.post("/api/settlements/:kingdom/destroy-building", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementDestroyBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -3123,7 +3230,7 @@ app.post("/api/settlements/:kingdom/destroy-building", async (req, res) => {
   }
 });
 
-app.post("/api/settlements/:kingdom/upgrade-building", async (req, res) => {
+app.post("/api/settlements/:kingdom/upgrade-building", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementUpgradeBody.safeParse(req.body);
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -3208,7 +3315,7 @@ app.post("/api/settlements/:kingdom/upgrade-building", async (req, res) => {
   }
 });
 
-app.post("/api/settlements/:kingdom/history", async (req, res) => {
+app.post("/api/settlements/:kingdom/history", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementHistoryBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -3254,7 +3361,7 @@ app.get("/api/settlements/:kingdom/:settlementId/garrison", async (req, res) => 
   }
 });
 
-app.post("/api/settlements/:kingdom/garrison/add", async (req, res) => {
+app.post("/api/settlements/:kingdom/garrison/add", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementGarrisonBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -3303,7 +3410,7 @@ app.post("/api/settlements/:kingdom/garrison/add", async (req, res) => {
   }
 });
 
-app.post("/api/settlements/:kingdom/garrison/remove", async (req, res) => {
+app.post("/api/settlements/:kingdom/garrison/remove", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementGarrisonBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -3346,7 +3453,7 @@ app.post("/api/settlements/:kingdom/garrison/remove", async (req, res) => {
   }
 });
 
-app.post("/api/settlements/:kingdom/rename", async (req, res) => {
+app.post("/api/settlements/:kingdom/rename", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementRenameBody.safeParse(req.body);
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -3525,7 +3632,7 @@ app.get("/api/alliance/:kingdom", async (req, res) => {
   }
 });
 
-app.post("/api/alliance/:kingdom/create", async (req, res) => {
+app.post("/api/alliance/:kingdom/create", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = allianceCreateBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -3579,7 +3686,7 @@ app.post("/api/alliance/:kingdom/create", async (req, res) => {
   }
 });
 
-app.post("/api/alliance/:kingdom/join", async (req, res) => {
+app.post("/api/alliance/:kingdom/join", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = allianceJoinBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -3590,10 +3697,18 @@ app.post("/api/alliance/:kingdom/join", async (req, res) => {
       const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
       if (!k.rowCount) throw new Error("kingdom not found");
       const kingdomId = Number(k.rows[0].id);
-      const allianceId = Number(parsed.data.allianceId);
 
       const existing = await c.query(`SELECT alliance_id FROM alliance_members WHERE kingdom_id=$1 LIMIT 1`, [kingdomId]);
       if (existing.rowCount) throw new Error("kingdom already in an alliance");
+
+      let allianceId: number;
+      if (parsed.data.allianceId) {
+        allianceId = Number(parsed.data.allianceId);
+      } else {
+        const al = await c.query(`SELECT id FROM alliances WHERE LOWER(slug)=LOWER($1) LIMIT 1`, [parsed.data.slug]);
+        if (!al.rowCount) throw new Error("alliance not found");
+        allianceId = Number(al.rows[0].id);
+      }
 
       const a = await c.query(`SELECT id, name FROM alliances WHERE id=$1 LIMIT 1`, [allianceId]);
       if (!a.rowCount) throw new Error("alliance not found");
@@ -3617,7 +3732,7 @@ app.post("/api/alliance/:kingdom/join", async (req, res) => {
   }
 });
 
-app.post("/api/alliance/:kingdom/leave", async (req, res) => {
+app.post("/api/alliance/:kingdom/leave", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
 
@@ -3650,7 +3765,7 @@ app.post("/api/alliance/:kingdom/leave", async (req, res) => {
   }
 });
 
-app.post("/api/alliance/:kingdom/relation", async (req, res) => {
+app.post("/api/alliance/:kingdom/relation", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = allianceRelationBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -3694,7 +3809,7 @@ app.post("/api/alliance/:kingdom/relation", async (req, res) => {
   }
 });
 
-app.post("/api/alliance/:kingdom/contribute", async (req, res) => {
+app.post("/api/alliance/:kingdom/contribute", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = allianceContribBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -3903,7 +4018,7 @@ app.get("/api/pray/:kingdom", async (req, res) => {
   } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
 });
 
-app.post("/api/pray/:kingdom/start", async (req, res) => {
+app.post("/api/pray/:kingdom/start", requireAuth, async (req, res) => {
   const parsed = z.object({ prayerCode: z.string().min(1), days: z.number().int().min(1).max(90) }).safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
   const { prayerCode, days } = parsed.data;
@@ -3928,7 +4043,7 @@ app.post("/api/pray/:kingdom/start", async (req, res) => {
   } catch (e: any) { return res.status(400).json({ ok: false, error: String(e?.message || e) }); }
 });
 
-app.post("/api/pray/:kingdom/stop", async (req, res) => {
+app.post("/api/pray/:kingdom/stop", requireAuth, async (req, res) => {
   const parsed = z.object({ prayerId: z.number().int().positive() }).safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
   try {
@@ -3989,7 +4104,7 @@ app.get("/api/market/:kingdom/history", async (req, res) => {
   } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
 });
 
-app.post("/api/market/:kingdom/list", async (req, res) => {
+app.post("/api/market/:kingdom/list", requireAuth, async (req, res) => {
   const parsed = z.object({
     resource: z.enum(["food", "wood", "stone", "horses"]),
     quantity: z.number().int().min(100).max(1_000_000),
@@ -4015,7 +4130,7 @@ app.post("/api/market/:kingdom/list", async (req, res) => {
   } catch (e: any) { return res.status(400).json({ ok: false, error: String(e?.message || e) }); }
 });
 
-app.post("/api/market/:kingdom/buy", async (req, res) => {
+app.post("/api/market/:kingdom/buy", requireAuth, async (req, res) => {
   const parsed = z.object({ listingId: z.number().int().positive(), quantity: z.number().int().min(1) }).safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
   const { listingId, quantity } = parsed.data;
@@ -4070,7 +4185,7 @@ app.post("/api/market/:kingdom/buy", async (req, res) => {
   } catch (e: any) { return res.status(400).json({ ok: false, error: String(e?.message || e) }); }
 });
 
-app.post("/api/market/:kingdom/cancel", async (req, res) => {
+app.post("/api/market/:kingdom/cancel", requireAuth, async (req, res) => {
   const parsed = z.object({ listingId: z.number().int().positive() }).safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
   try {

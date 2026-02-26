@@ -537,9 +537,10 @@ async function runDueTicks() {
     const batchStartedAt = Date.now();
     const q = await pool.query(`SELECT worker_last_tick_at FROM game_state WHERE id=1 LIMIT 1`);
     const lastTickAt = new Date(q.rows[0]?.worker_last_tick_at || Date.now());
+    const intervalSec = Math.max(1, TICK_INTERVAL_SECONDS);
     const nowMs = Date.now();
     const elapsedSec = Math.floor((nowMs - lastTickAt.getTime()) / 1000);
-    const dueTicks = Math.floor(elapsedSec / Math.max(1, TICK_INTERVAL_SECONDS));
+    const dueTicks = Math.floor(elapsedSec / intervalSec);
     const runCount = Math.max(0, Math.min(MAX_CATCHUP_TICKS, dueTicks));
     if (runCount <= 0) return 0;
 
@@ -565,12 +566,12 @@ async function runDueTicks() {
         returns: totals.returns + Number(result.returns || 0),
         economies: totals.economies + Number(result.economies || 0),
       };
+      const nextLastTickAt = new Date(lastTickAt.getTime() + (i + 1) * intervalSec * 1000);
+      await pool.query(`UPDATE game_state SET worker_last_tick_at=$2, updated_at=now() WHERE id=$1`, [1, nextLastTickAt.toISOString()]);
     }
-
-    const nextLastTickAt = new Date(lastTickAt.getTime() + runCount * Math.max(1, TICK_INTERVAL_SECONDS) * 1000);
-    await pool.query(`UPDATE game_state SET worker_last_tick_at=$2 WHERE id=$1`, [1, nextLastTickAt.toISOString()]);
     if (dueTicks > runCount) {
-      console.warn(`[tick] catch-up capped: due=${dueTicks} processed=${runCount} cap=${MAX_CATCHUP_TICKS}`);
+      await pool.query(`UPDATE game_state SET worker_last_tick_at=now(), updated_at=now() WHERE id=$1`, [1]);
+      console.warn(`[tick] catch-up capped: due=${dueTicks} processed=${runCount} cap=${MAX_CATCHUP_TICKS} stale_backlog_skipped=1`);
     }
     console.log(
       `[tick-batch] ${new Date().toISOString()} due=${dueTicks} processed=${runCount} backlog=${Math.max(

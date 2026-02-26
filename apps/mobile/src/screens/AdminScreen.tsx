@@ -37,13 +37,13 @@ export function AdminScreen() {
 
   useEffect(() => { void load(); }, [load]);
 
-  async function banUser(username: string, ban: boolean) {
+  async function banUser(userId: string, username: string, ban: boolean) {
     setBusy(username);
     try {
       if (ban) {
-        await adminApi.ban(username, "Banned by admin", auth!.token);
+        await adminApi.ban(userId, "Banned by admin", auth!.token);
       } else {
-        await adminApi.unban(username, auth!.token);
+        await adminApi.unban(userId, auth!.token);
       }
       Alert.alert("Done", `${username} has been ${ban ? "banned" : "unbanned"}.`);
       void load();
@@ -54,10 +54,10 @@ export function AdminScreen() {
     }
   }
 
-  async function toggleAdmin(username: string, makeAdmin: boolean) {
+  async function toggleAdmin(userId: string, username: string, makeAdmin: boolean) {
     setBusy(username + "_admin");
     try {
-      await adminApi.setAdmin(username, makeAdmin, auth!.token);
+      await adminApi.setAdmin(userId, makeAdmin, auth!.token);
       Alert.alert("Done", `${username} is ${makeAdmin ? "now" : "no longer"} an admin.`);
       void load();
     } catch (e: any) {
@@ -161,7 +161,7 @@ export function AdminScreen() {
                         `${u.is_banned ? "Unban" : "Ban"} ${u.username}?`,
                         [
                           { text: "Cancel", style: "cancel" },
-                          { text: "Confirm", style: "destructive", onPress: () => banUser(u.username, !u.is_banned) },
+                          { text: "Confirm", style: "destructive", onPress: () => banUser(String(u.id), u.username, !u.is_banned) },
                         ]
                       );
                     }}
@@ -178,7 +178,7 @@ export function AdminScreen() {
                         `${u.is_admin ? "Remove admin from" : "Grant admin to"} ${u.username}?`,
                         [
                           { text: "Cancel", style: "cancel" },
-                          { text: "Confirm", onPress: () => toggleAdmin(u.username, !u.is_admin) },
+                          { text: "Confirm", onPress: () => toggleAdmin(String(u.id), u.username, !u.is_admin) },
                         ]
                       );
                     }}
