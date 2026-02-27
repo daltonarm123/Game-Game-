@@ -5,7 +5,12 @@ dotenv.config();
 
 const DATABASE_URL = process.env.DATABASE_URL || "postgresql://gamegame:gamegame@localhost:5432/gamegame";
 
-export const pool = new Pool({ connectionString: DATABASE_URL });
+export const pool = new Pool({
+  connectionString: DATABASE_URL,
+  max: 20,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+});
 
 const BUILDINGS = [
   { code: "archery_ranges", name: "Archery Ranges", landCost: 5, woodCost: 20, stoneCost: 5, baseBuildSeconds: 4 * 3600 },
@@ -658,6 +663,8 @@ export async function ensureSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS alliance_members_kingdom_idx ON alliance_members(kingdom_id);
     CREATE INDEX IF NOT EXISTS auth_sessions_user_idx ON auth_sessions(user_id);
     CREATE INDEX IF NOT EXISTS auth_sessions_expires_idx ON auth_sessions(expires_at);
+    CREATE INDEX IF NOT EXISTS kingdoms_name_lower_idx ON kingdoms((LOWER(name)));
+    CREATE INDEX IF NOT EXISTS app_users_username_lower_idx ON app_users((LOWER(username)));
   `);
 
   await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS email TEXT`);
