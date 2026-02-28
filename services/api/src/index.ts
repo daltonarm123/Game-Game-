@@ -181,6 +181,10 @@ const trainBody = z.object({
   quantity: z.number().int().min(1).max(50000),
 });
 
+const queueCancelBody = z.object({
+  queueId: z.number().int().positive(),
+});
+
 const disbandBody = z.object({
   troopCode: z.string().min(1),
   quantity: z.number().int().min(1).max(50000),
@@ -1694,7 +1698,7 @@ app.get("/api/kingdom/:name", async (req, res) => {
 
   try {
     const k = await pool.query(
-      `SELECT id, user_id, name, gold, wood, stone, food, land, horses, created_at, last_tick_at, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, daily_login_streak, daily_last_claimed_at
+      `SELECT id, user_id, name, gold, wood, stone, food, land, horses, mana, created_at, last_tick_at, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, daily_login_streak, daily_last_claimed_at
        FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`,
       [name],
     );
@@ -1707,7 +1711,7 @@ app.get("/api/kingdom/:name", async (req, res) => {
       return 0;
     });
     const kresync = await pool.query(
-      `SELECT id, user_id, name, gold, wood, stone, food, land, horses, created_at, last_tick_at, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, daily_login_streak, daily_last_claimed_at
+      `SELECT id, user_id, name, gold, wood, stone, food, land, horses, mana, created_at, last_tick_at, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, daily_login_streak, daily_last_claimed_at
        FROM kingdoms
        WHERE id=$1
        LIMIT 1`,
@@ -1871,7 +1875,7 @@ app.post("/api/kingdom/:name/build", requireAuth, async (req, res) => {
 
       await c.query(`UPDATE kingdoms SET wood = wood - $2, stone = stone - $3 WHERE id=$1`, [kingdom.id, woodCost, stoneCost]);
 
-      const seconds = LOCAL_DEMO_FAST ? FAST_BUILD_SECONDS : Number(def.base_build_seconds) * nextLevel;
+      const seconds = LOCAL_DEMO_FAST ? FAST_BUILD_SECONDS : Math.max(1, Number(def.base_build_seconds || 0));
       const ins = await c.query(
         `INSERT INTO build_queue(kingdom_id, building_code, target_level, started_at, completes_at, status)
          VALUES ($1,$2,$3, now(), now() + ($4 * INTERVAL '1 second'), 'queued')
@@ -1880,6 +1884,52 @@ app.post("/api/kingdom/:name/build", requireAuth, async (req, res) => {
       );
 
       return { queue: ins.rows[0], costs: { land: landCost, wood: woodCost, stone: stoneCost } };
+    });
+
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/kingdom/:name/build/cancel", requireAuth, async (req, res) => {
+  const name = String(req.params.name || "").trim();
+  const parsed = queueCancelBody.safeParse(req.body || {});
+  if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [name]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(k.rows[0].id);
+      const queueId = Number(parsed.data.queueId);
+
+      const q = await c.query(
+        `
+        SELECT bq.id, bq.building_code, bq.target_level, bt.name AS building_name, bt.wood_cost, bt.stone_cost
+        FROM build_queue bq
+        JOIN building_types bt ON bt.code = bq.building_code
+        WHERE bq.id = $1 AND bq.kingdom_id = $2 AND bq.status = 'queued'
+        FOR UPDATE
+        `,
+        [queueId, kingdomId],
+      );
+      if (!q.rowCount) throw new Error("build queue item not found or already processed");
+      const row = q.rows[0];
+      const targetLevel = Number(row.target_level || 1);
+      const refundWood = Math.max(0, Math.floor(Number(row.wood_cost || 0) * targetLevel));
+      const refundStone = Math.max(0, Math.floor(Number(row.stone_cost || 0) * targetLevel));
+
+      await c.query(`UPDATE build_queue SET status='cancelled', completed_at=now() WHERE id=$1 AND status='queued'`, [queueId]);
+      await c.query(`UPDATE kingdoms SET wood = wood + $2, stone = stone + $3 WHERE id=$1`, [kingdomId, refundWood, refundStone]);
+
+      return {
+        queueId,
+        buildingCode: String(row.building_code || ""),
+        buildingName: String(row.building_name || row.building_code || ""),
+        refunds: { wood: refundWood, stone: refundStone },
+      };
     });
 
     return res.json({ ok: true, ...out });
@@ -1938,6 +1988,57 @@ app.post("/api/kingdom/:name/train", requireAuth, async (req, res) => {
       );
 
       return { queue: ins.rows[0], costs: { gold: totalGold, food: totalFood, horses: totalHorses } };
+    });
+
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/kingdom/:name/train/cancel", requireAuth, async (req, res) => {
+  const name = String(req.params.name || "").trim();
+  const parsed = queueCancelBody.safeParse(req.body || {});
+  if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [name]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(k.rows[0].id);
+      const queueId = Number(parsed.data.queueId);
+
+      const q = await c.query(
+        `
+        SELECT tq.id, tq.troop_code, tq.quantity, tt.name AS troop_name, tt.gold_cost, tt.food_cost, tt.horse_cost
+        FROM train_queue tq
+        JOIN troop_types tt ON tt.code = tq.troop_code
+        WHERE tq.id = $1 AND tq.kingdom_id = $2 AND tq.status = 'queued'
+        FOR UPDATE
+        `,
+        [queueId, kingdomId],
+      );
+      if (!q.rowCount) throw new Error("training queue item not found or already processed");
+      const row = q.rows[0];
+      const qty = Number(row.quantity || 0);
+      const refundGold = Math.max(0, Math.floor(Number(row.gold_cost || 0) * qty));
+      const refundFood = Math.max(0, Math.floor(Number(row.food_cost || 0) * qty));
+      const refundHorses = Math.max(0, Math.floor(Number(row.horse_cost || 0) * qty));
+
+      await c.query(`UPDATE train_queue SET status='cancelled', completed_at=now() WHERE id=$1 AND status='queued'`, [queueId]);
+      await c.query(
+        `UPDATE kingdoms SET gold = gold + $2, food = food + $3, horses = horses + $4 WHERE id=$1`,
+        [kingdomId, refundGold, refundFood, refundHorses],
+      );
+
+      return {
+        queueId,
+        troopCode: String(row.troop_code || ""),
+        troopName: String(row.troop_name || row.troop_code || ""),
+        quantity: qty,
+        refunds: { gold: refundGold, food: refundFood, horses: refundHorses },
+      };
     });
 
     return res.json({ ok: true, ...out });
@@ -2420,9 +2521,14 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
         const parts = Object.entries(losses).filter(([, v]) => v > 0).map(([k, v]) => `${v.toLocaleString()} ${k.replace(/_/g, " ")}`);
         return parts.length ? parts.join(", ") : "None";
       };
+      const fmtTroops = (troopsSent: Record<string, number>) => {
+        const parts = Object.entries(troopsSent).filter(([, v]) => Number(v || 0) > 0).map(([k, v]) => `${Number(v || 0).toLocaleString()} ${k.replace(/_/g, " ")}`);
+        return parts.length ? parts.join(", ") : "None";
+      };
 
       let attackerBody = `Attack Report: ${String(def.name)} (NW Gained: +${nwGained.toLocaleString()})\n`;
       attackerBody += `Attack Result: ${result}\n\n`;
+      attackerBody += `Troops sent: ${fmtTroops(sentOnly)}\n\n`;
       if (isWin) {
         const gains: string[] = [];
         if (landTaken > 0) gains.push(`${landTaken.toLocaleString()} Land`);
@@ -2438,6 +2544,7 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
 
       let defenderBody = `Defence Report: ${String(atk.name)} attacked you!\n`;
       defenderBody += `Attack Result: ${result}\n\n`;
+      defenderBody += `Enemy troops sent: ${fmtTroops(sentOnly)}\n\n`;
       if (isWin) {
         const lost: string[] = [];
         if (landTaken > 0) lost.push(`${landTaken.toLocaleString()} Land`);
@@ -3755,7 +3862,7 @@ app.post("/api/settlements/:kingdom/build-building", requireAuth, async (req, re
       const k = await c.query(`SELECT id, gold, stone, wood FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
       if (!k.rowCount) throw new Error("kingdom not found");
       const kr = k.rows[0];
-      const s = await c.query(`SELECT id, settlement_type, level FROM settlements WHERE id=$1 AND kingdom_id=$2 FOR UPDATE`, [settlementId, kr.id]);
+      const s = await c.query(`SELECT id, settlement_type, level, slots_total FROM settlements WHERE id=$1 AND kingdom_id=$2 FOR UPDATE`, [settlementId, kr.id]);
       if (!s.rowCount) throw new Error("settlement not found");
       const st = s.rows[0];
 
@@ -3980,6 +4087,82 @@ app.post("/api/settlements/:kingdom/upgrade-building", requireAuth, async (req, 
       );
 
       return { queue: ins.rows[0], costs: { gold: costGold, stone: costStone, wood: costWood } };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/settlements/:kingdom/cancel-build", requireAuth, async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = queueCancelBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const queueId = Number(parsed.data.queueId);
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(k.rows[0].id);
+
+      const q = await c.query(
+        `
+        SELECT q.id, q.settlement_id, q.building_code, q.target_level, q.settlement_building_id,
+               bt.name AS building_name, bt.base_gold, bt.base_stone, bt.base_wood
+        FROM settlement_build_queue q
+        JOIN settlements s ON s.id = q.settlement_id
+        JOIN settlement_building_types bt ON bt.code = q.building_code
+        WHERE q.id = $1 AND q.kingdom_id = $2 AND s.kingdom_id = $2 AND q.status = 'queued'
+        FOR UPDATE
+        `,
+        [queueId, kingdomId],
+      );
+      if (!q.rowCount) throw new Error("settlement queue item not found or already processed");
+      const row = q.rows[0];
+
+      const baseGold = Number(row.base_gold || 0);
+      const baseStone = Number(row.base_stone || 0);
+      const baseWood = Number(row.base_wood || 0);
+      const targetLevel = Number(row.target_level || 1);
+
+      let refundGold = 0;
+      let refundStone = 0;
+      let refundWood = 0;
+
+      if (row.settlement_building_id) {
+        const currentLevel = Math.max(0, targetLevel - 1);
+        refundGold = Math.floor(baseGold * Math.pow(1.3, currentLevel));
+        refundStone = Math.floor(baseStone * Math.pow(1.2, currentLevel));
+        refundWood = Math.floor(baseWood * Math.pow(1.2, currentLevel));
+      } else {
+        refundGold = Math.floor(baseGold);
+        refundStone = Math.floor(baseStone);
+        refundWood = Math.floor(baseWood);
+      }
+
+      await c.query(`UPDATE settlement_build_queue SET status='cancelled', completed_at=now() WHERE id=$1 AND status='queued'`, [queueId]);
+      await c.query(`UPDATE kingdoms SET gold = gold + $2, stone = stone + $3, wood = wood + $4 WHERE id=$1`, [kingdomId, refundGold, refundStone, refundWood]);
+      await c.query(
+        `INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`,
+        [
+          Number(row.settlement_id),
+          row.settlement_building_id
+            ? `Cancelled ${String(row.building_name || row.building_code)} upgrade`
+            : `Cancelled ${String(row.building_name || row.building_code)} construction`,
+        ],
+      );
+
+      return {
+        queueId,
+        settlementId: Number(row.settlement_id),
+        buildingCode: String(row.building_code || ""),
+        buildingName: String(row.building_name || row.building_code || ""),
+        targetLevel,
+        isUpgrade: Boolean(row.settlement_building_id),
+        refunds: { gold: Math.max(0, refundGold), stone: Math.max(0, refundStone), wood: Math.max(0, refundWood) },
+      };
     });
     return res.json({ ok: true, ...out });
   } catch (e: any) {

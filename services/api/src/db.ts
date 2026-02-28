@@ -772,6 +772,20 @@ export async function ensureSchema(): Promise<void> {
     );
   }
 
+  // Legacy queues may have been created with build time multiplied by level.
+  // Cap queued kingdom builds to a single base duration per building type.
+  await pool.query(`
+    UPDATE build_queue bq
+    SET completes_at = LEAST(
+      bq.completes_at,
+      bq.started_at + (bt.base_build_seconds * INTERVAL '1 second')
+    )
+    FROM building_types bt
+    WHERE bq.status = 'queued'
+      AND bt.code = bq.building_code
+      AND bq.completes_at > bq.started_at + (bt.base_build_seconds * INTERVAL '1 second')
+  `);
+
   for (const t of TROOPS) {
     await pool.query(
       `

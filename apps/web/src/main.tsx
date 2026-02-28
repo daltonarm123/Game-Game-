@@ -256,6 +256,8 @@ function OverviewView() {
   const [taxBusy, setTaxBusy] = useState(false);
   const [shieldBusy, setShieldBusy] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
+  const [cancelBuildId, setCancelBuildId] = useState<number | null>(null);
+  const [cancelTrainId, setCancelTrainId] = useState<number | null>(null);
   const [nextTickSecs, setNextTickSecs] = useState(() => secsToNextTick(300));
   const [isMobileOv, setIsMobileOv] = useState(() => typeof window !== "undefined" ? window.innerWidth < 900 : false);
 
@@ -380,6 +382,51 @@ function OverviewView() {
       setStatusMsg(`Shield failed: ${String(e?.message || e)}`);
     } finally {
       setShieldBusy(false);
+    }
+  }
+
+  async function cancelOverviewBuildQueueItem(queueId: number) {
+    setStatusMsg("");
+    setCancelBuildId(queueId);
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/build/cancel`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ queueId }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      const refundWood = Number(j?.refunds?.wood || 0);
+      const refundStone = Number(j?.refunds?.stone || 0);
+      setStatusMsg(`Build cancelled. Refunded wood ${refundWood.toLocaleString()} and stone ${refundStone.toLocaleString()}.`);
+      await load();
+    } catch (e: any) {
+      setStatusMsg(`Cancel failed: ${String(e?.message || e)}`);
+    } finally {
+      setCancelBuildId(null);
+    }
+  }
+
+  async function cancelOverviewTrainingQueueItem(queueId: number) {
+    setStatusMsg("");
+    setCancelTrainId(queueId);
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/train/cancel`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ queueId }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      const refundGold = Number(j?.refunds?.gold || 0);
+      const refundFood = Number(j?.refunds?.food || 0);
+      const refundHorses = Number(j?.refunds?.horses || 0);
+      setStatusMsg(`Training cancelled. Refunded gold ${refundGold.toLocaleString()}, food ${refundFood.toLocaleString()}, horses ${refundHorses.toLocaleString()}.`);
+      await load();
+    } catch (e: any) {
+      setStatusMsg(`Cancel failed: ${String(e?.message || e)}`);
+    } finally {
+      setCancelTrainId(null);
     }
   }
 
@@ -532,9 +579,16 @@ function OverviewView() {
               <div style={SEC_HDR}>Building...</div>
               {bq.length === 0 ? <div style={{ color: TEXT_MUTED, fontSize: 14 }}>No active build queue.</div> : null}
               {bq.map((q: any) => (
-                <div key={`bq-${q.id}`} style={{ marginBottom: 6, fontSize: 14, display: "flex", justifyContent: "space-between", gap: 8 }}>
-                  <span style={{ color: TEXT_MUTED }}>{String(q.building_code || "").replace(/_/g, " ")} → Lvl {q.target_level}</span>
+                <div key={`bq-${q.id}`} style={{ marginBottom: 6, fontSize: 14, display: "grid", gridTemplateColumns: isMobileOv ? "1fr" : "1fr auto auto", alignItems: "center", gap: 8 }}>
+                  <span style={{ color: TEXT_MUTED }}>{String(q.building_code || "").replace(/_/g, " ")} {"->"} Lvl {q.target_level}</span>
                   <QueueCountdown completesAt={q.completes_at} onComplete={() => void load()} />
+                  <button
+                    onClick={() => void cancelOverviewBuildQueueItem(Number(q.id))}
+                    style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 11 }}
+                    disabled={cancelBuildId === Number(q.id)}
+                  >
+                    {cancelBuildId === Number(q.id) ? "Cancelling..." : "Cancel"}
+                  </button>
                 </div>
               ))}
             </div>
@@ -542,9 +596,16 @@ function OverviewView() {
               <div style={SEC_HDR}>Training...</div>
               {tq.length === 0 ? <div style={{ color: TEXT_MUTED, fontSize: 14 }}>No active training queue.</div> : null}
               {tq.map((q: any) => (
-                <div key={`tq-${q.id}`} style={{ marginBottom: 6, fontSize: 14, display: "flex", justifyContent: "space-between", gap: 8 }}>
-                  <span style={{ color: TEXT_MUTED }}>{fmtNum(Number(q.quantity || 0))} × {String(q.troop_code || "").replace(/_/g, " ")}</span>
+                <div key={`tq-${q.id}`} style={{ marginBottom: 6, fontSize: 14, display: "grid", gridTemplateColumns: isMobileOv ? "1fr" : "1fr auto auto", alignItems: "center", gap: 8 }}>
+                  <span style={{ color: TEXT_MUTED }}>{fmtNum(Number(q.quantity || 0))} x {String(q.troop_code || "").replace(/_/g, " ")}</span>
                   <QueueCountdown completesAt={q.completes_at} onComplete={() => void load()} />
+                  <button
+                    onClick={() => void cancelOverviewTrainingQueueItem(Number(q.id))}
+                    style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 11 }}
+                    disabled={cancelTrainId === Number(q.id)}
+                  >
+                    {cancelTrainId === Number(q.id) ? "Cancelling..." : "Cancel"}
+                  </button>
                 </div>
               ))}
             </div>
@@ -577,6 +638,7 @@ function BuildingsView() {
   const [buildCode, setBuildCode] = useState("farm");
   const [buildQtyInput, setBuildQtyInput] = useState("1");
   const [buildBusy, setBuildBusy] = useState(false);
+  const [cancelBuildId, setCancelBuildId] = useState<number | null>(null);
   const [buildPanelOpen, setBuildPanelOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
   const buildQty = useMemo(() => {
@@ -693,6 +755,28 @@ function BuildingsView() {
       setActionMsg(`Build failed: ${String(e?.message || e)}`);
     } finally {
       setBuildBusy(false);
+    }
+  }
+
+  async function cancelBuildQueueItem(queueId: number) {
+    setActionMsg("");
+    setCancelBuildId(queueId);
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/build/cancel`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ queueId }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      const refundWood = Number(j?.refunds?.wood || 0);
+      const refundStone = Number(j?.refunds?.stone || 0);
+      setActionMsg(`Build cancelled. Refunded wood ${refundWood.toLocaleString()} and stone ${refundStone.toLocaleString()}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Cancel failed: ${String(e?.message || e)}`);
+    } finally {
+      setCancelBuildId(null);
     }
   }
 
@@ -975,12 +1059,19 @@ function BuildingsView() {
         <div style={{ fontWeight: 700, marginBottom: 8 }}>Building Queue</div>
         {buildQueue.length === 0 ? <div style={{ color: TEXT_MUTED }}>No active building queue.</div> : null}
         {buildQueue.map((q) => (
-          <div key={q.id} style={{ marginBottom: 8, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr auto", alignItems: "center", gap: 8 }}>
+          <div key={q.id} style={{ marginBottom: 8, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr auto auto", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 14, overflowWrap: "anywhere" }}>
               <span style={{ color: ACCENT, fontWeight: 700 }}>{BUILDING_META[String(q.building_code)]?.sigil || "??"}</span>
-              {" "}{String(q.building_code).replace(/_/g, " ")} → Lvl {q.target_level}
+              {" "}{String(q.building_code).replace(/_/g, " ")} {"->"} Lvl {q.target_level}
             </span>
             <QueueCountdown completesAt={q.completes_at} onComplete={() => void load()} />
+            <button
+              onClick={() => void cancelBuildQueueItem(Number(q.id))}
+              style={{ ...BTN_STYLE, padding: "4px 10px", fontSize: 12 }}
+              disabled={cancelBuildId === Number(q.id)}
+            >
+              {cancelBuildId === Number(q.id) ? "Cancelling..." : "Cancel"}
+            </button>
           </div>
         ))}
       </div>
@@ -1237,6 +1328,7 @@ function SettlementsView() {
   const [buildMsg, setBuildMsg] = useState("");
   const [renameId, setRenameId] = useState<number | null>(null);
   const [renameName, setRenameName] = useState("");
+  const [cancelQueueId, setCancelQueueId] = useState<number | null>(null);
 
   async function load() {
     if (!kingdom.trim()) return;
@@ -1348,6 +1440,31 @@ function SettlementsView() {
     } finally { setBusy(false); }
   }
 
+  async function cancelSettlementQueueItem(queueId: number) {
+    setBusy(true);
+    setActionMsg("");
+    setCancelQueueId(queueId);
+    try {
+      const r = await fetch(`${API_BASE}/api/settlements/${encodeURIComponent(kingdom)}/cancel-build`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ queueId }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      const refundGold = Number(j?.refunds?.gold || 0);
+      const refundStone = Number(j?.refunds?.stone || 0);
+      const refundWood = Number(j?.refunds?.wood || 0);
+      setActionMsg(`Queue cancelled. Refunded gold ${refundGold.toLocaleString()}, stone ${refundStone.toLocaleString()}, wood ${refundWood.toLocaleString()}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Cancel failed: ${String(e?.message || e)}`);
+    } finally {
+      setCancelQueueId(null);
+      setBusy(false);
+    }
+  }
+
   async function renameSettlement() {
     if (!renameId || !renameName.trim()) return;
     setBusy(true); setActionMsg("");
@@ -1453,10 +1570,17 @@ function SettlementsView() {
               {queue.map((q: any) => {
                 const sName = settlements.find((s: any) => Number(s.id) === Number(q.settlement_id))?.name || `#${q.settlement_id}`;
                 return (
-                  <div key={q.id} style={{ fontSize: 13, color: TEXT_MUTED, marginBottom: 4, display: "flex", gap: 8 }}>
+                  <div key={q.id} style={{ fontSize: 13, color: TEXT_MUTED, marginBottom: 4, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <span style={{ color: TEXT_MAIN }}>{sName}</span>
-                    <span>→ {String(q.building_code).replaceAll("_", " ")} lv{q.target_level}</span>
+                    <span>{"->"} {String(q.building_code).replaceAll("_", " ")} lv{q.target_level}</span>
                     <span style={{ marginLeft: "auto" }}>{timeLeft(q.completes_at)}</span>
+                    <button
+                      onClick={() => void cancelSettlementQueueItem(Number(q.id))}
+                      style={{ ...BTN_SM, padding: "3px 8px", fontSize: 11 }}
+                      disabled={busy || cancelQueueId === Number(q.id)}
+                    >
+                      {cancelQueueId === Number(q.id) ? "Cancelling..." : "Cancel"}
+                    </button>
                   </div>
                 );
               })}
@@ -1505,7 +1629,8 @@ function SettlementsView() {
                   {selectedBuildings.map((b: any) => {
                     const maxForSettle = Math.min(Number(b.max_level || 10), Math.max(1, Number(selected.level || 1)));
                     const isMaxed = Number(b.level) >= maxForSettle;
-                    const inUpgradeQueue = upgradeBuildsInQueue.some((q: any) => Number(q.settlement_building_id) === Number(b.id));
+                    const upgradeQueueItem = upgradeBuildsInQueue.find((q: any) => Number(q.settlement_building_id) === Number(b.id));
+                    const inUpgradeQueue = Boolean(upgradeQueueItem);
                     return (
                       <tr key={b.id}>
                         <td style={{ ...TD, fontWeight: 600 }}>{b.name}</td>
@@ -1514,7 +1639,16 @@ function SettlementsView() {
                         <td style={{ ...TD, textAlign: "right", color: TEXT_MUTED }}>{maxForSettle}</td>
                         <td style={{ ...TD, textAlign: "right", whiteSpace: "nowrap" }}>
                           {inUpgradeQueue ? (
-                            <span style={{ color: TEXT_MUTED, fontSize: 11, marginRight: 8 }}>Upgrading...</span>
+                            <>
+                              <span style={{ color: TEXT_MUTED, fontSize: 11, marginRight: 8 }}>Upgrading...</span>
+                              <button
+                                onClick={() => void cancelSettlementQueueItem(Number(upgradeQueueItem?.id || 0))}
+                                style={{ ...BTN_SM, marginRight: 6, padding: "3px 8px", fontSize: 11 }}
+                                disabled={busy || cancelQueueId === Number(upgradeQueueItem?.id || 0)}
+                              >
+                                {cancelQueueId === Number(upgradeQueueItem?.id || 0) ? "Cancelling..." : "Cancel"}
+                              </button>
+                            </>
                           ) : isMaxed ? (
                             <span style={{ color: TEXT_MUTED, fontSize: 11, marginRight: 8 }}>Maxed</span>
                           ) : (
@@ -1532,7 +1666,18 @@ function SettlementsView() {
                       <td style={{ ...TD, color: TEXT_MUTED, fontSize: 12 }}>Under construction</td>
                       <td style={{ ...TD, textAlign: "right", color: TEXT_MUTED }}>—</td>
                       <td style={TD}></td>
-                      <td style={{ ...TD, textAlign: "right", color: TEXT_MUTED, fontSize: 12 }}>{timeLeft(q.completes_at)}</td>
+                      <td style={{ ...TD, textAlign: "right", color: TEXT_MUTED, fontSize: 12 }}>
+                        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span>{timeLeft(q.completes_at)}</span>
+                          <button
+                            onClick={() => void cancelSettlementQueueItem(Number(q.id))}
+                            style={{ ...BTN_SM, padding: "3px 8px", fontSize: 11 }}
+                            disabled={busy || cancelQueueId === Number(q.id)}
+                          >
+                            {cancelQueueId === Number(q.id) ? "Cancelling..." : "Cancel"}
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                   {/* Free slots */}
@@ -2479,6 +2624,7 @@ function WarRoomView() {
   const [exploreSentTroops, setExploreSentTroops] = useState<Record<string, number>>({});
   const [trainTroop, setTrainTroop] = useState("footmen");
   const [trainQty, setTrainQty] = useState(1);
+  const [cancelTrainId, setCancelTrainId] = useState<number | null>(null);
   const [attackTarget, setAttackTarget] = useState("");
   const [sentTroops, setSentTroops] = useState<Record<string, number>>({});
   const [targetHints, setTargetHints] = useState<Array<string>>([]);
@@ -2524,6 +2670,10 @@ function WarRoomView() {
   const troopCodeOptions = troops.filter((t) => Boolean(t.isTrainable)).map((t) => String(t.troopCode || ""));
   const trainTroopData = troops.find((t) => String(t.troopCode || "") === String(trainTroop));
   const trainQtySafe = Math.max(1, Number(trainQty || 1));
+  const attackApTotal = Object.entries(sentTroops).reduce((acc, [code, qty]) => {
+    const troop = troops.find((t) => String(t.troopCode || "") === code);
+    return acc + Number(qty || 0) * Number(troop?.att || 0);
+  }, 0);
   const pairCols = isMobile ? "1fr" : "170px 1fr";
   const sendCols = isMobile ? "1fr" : "170px 1fr 120px";
   const reqText = trainTroopData?.requiredBuildingName
@@ -2551,6 +2701,29 @@ function WarRoomView() {
     }
   }
 
+  async function cancelTrainingQueueItem(queueId: number) {
+    setActionMsg("");
+    setCancelTrainId(queueId);
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/train/cancel`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ queueId }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      const refundGold = Number(j?.refunds?.gold || 0);
+      const refundFood = Number(j?.refunds?.food || 0);
+      const refundHorses = Number(j?.refunds?.horses || 0);
+      setActionMsg(`Training cancelled. Refunded gold ${refundGold.toLocaleString()}, food ${refundFood.toLocaleString()}, horses ${refundHorses.toLocaleString()}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Cancel failed: ${String(e?.message || e)}`);
+    } finally {
+      setCancelTrainId(null);
+    }
+  }
+
   async function searchTargets(q: string) {
     try {
       const r = await fetch(`${API_BASE}/api/kingdom-search?q=${encodeURIComponent(q)}&limit=8`);
@@ -2561,8 +2734,40 @@ function WarRoomView() {
     }
   }
 
-  function updateSent(code: string, value: number) {
-    setSentTroops((prev) => ({ ...prev, [code]: Math.max(0, Math.floor(value || 0)) }));
+  function updateSent(code: string, rawValue: string, maxHome: number) {
+    const digits = String(rawValue || "").replace(/\D+/g, "");
+    setSentTroops((prev) => {
+      const next = { ...prev };
+      if (!digits) {
+        delete next[code];
+        return next;
+      }
+      const parsed = Math.min(Math.max(0, Math.floor(Number(digits || 0))), Math.max(0, Math.floor(Number(maxHome || 0))));
+      if (parsed <= 0) {
+        delete next[code];
+        return next;
+      }
+      next[code] = parsed;
+      return next;
+    });
+  }
+
+  function updateExploreSent(code: string, rawValue: string, maxHome: number) {
+    const digits = String(rawValue || "").replace(/\D+/g, "");
+    setExploreSentTroops((prev) => {
+      const next = { ...prev };
+      if (!digits) {
+        delete next[code];
+        return next;
+      }
+      const parsed = Math.min(Math.max(0, Math.floor(Number(digits || 0))), Math.max(0, Math.floor(Number(maxHome || 0))));
+      if (parsed <= 0) {
+        delete next[code];
+        return next;
+      }
+      next[code] = parsed;
+      return next;
+    });
   }
 
   async function disbandTroop(troopCode: string, maxHome: number) {
@@ -2609,6 +2814,7 @@ function WarRoomView() {
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       const eliteMsg = Number(j.elitesPromoted || 0) > 0 ? ` | Elites promoted ${Number(j.elitesPromoted || 0).toLocaleString()}` : "";
       setActionMsg(`Attack result: ${j.result} | Ratio ${Number(j.ratio || 0).toFixed(2)} | Land ${Number(j.landTaken || 0).toLocaleString()}${eliteMsg}`);
+      setSentTroops({});
       await load();
     } catch (e: any) {
       setActionMsg(`Attack failed: ${String(e?.message || e)}`);
@@ -2826,17 +3032,18 @@ function WarRoomView() {
                         <div key={`atk-${t.troopCode}`} style={{ display: "grid", gridTemplateColumns: sendCols, gap: 8, alignItems: "center" }}>
                           <div>{t.troopName}</div>
                           <input
-                            type="number"
-                            min={0}
-                            max={Number(t.home || 0)}
-                            value={Number(sentTroops[t.troopCode] || 0)}
-                            onChange={(e) => updateSent(t.troopCode, Math.min(Number(t.home || 0), Number(e.target.value || 0)))}
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            value={sentTroops[t.troopCode] === undefined ? "" : String(sentTroops[t.troopCode])}
+                            onChange={(e) => updateSent(t.troopCode, e.target.value, Number(t.home || 0))}
                             style={INPUT_STYLE}
                           />
                           <div style={{ textAlign: isMobile ? "left" : "right" }}>/ {Number(t.home || 0).toLocaleString()}</div>
                         </div>
                       ))}
                     </div>
+                    <div style={{ color: TEXT_MUTED, fontSize: 13 }}>Total AP sent: <strong style={{ color: ACCENT }}>{Number(attackApTotal || 0).toLocaleString()}</strong></div>
                     <button type="submit" style={BTN_STYLE}>Send Attack</button>
                   </form>
                 ) : null}
@@ -2862,11 +3069,11 @@ function WarRoomView() {
                             <div key={`exp-${t.troopCode}`} style={{ display: "grid", gridTemplateColumns: sendCols, gap: 8, alignItems: "center" }}>
                               <div>{t.troopName}</div>
                               <input
-                                type="number"
-                                min={0}
-                                max={Number(t.home || 0)}
-                                value={Number(exploreSentTroops[t.troopCode] || 0)}
-                                onChange={(e) => setExploreSentTroops((prev) => ({ ...prev, [t.troopCode]: Math.min(Number(t.home || 0), Math.max(0, Number(e.target.value || 0))) }))}
+                                type="text"
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                value={exploreSentTroops[t.troopCode] === undefined ? "" : String(exploreSentTroops[t.troopCode])}
+                                onChange={(e) => updateExploreSent(t.troopCode, e.target.value, Number(t.home || 0))}
                                 style={INPUT_STYLE}
                               />
                               <div style={{ textAlign: isMobile ? "left" : "right" }}>/ {Number(t.home || 0).toLocaleString()}</div>
@@ -2886,8 +3093,16 @@ function WarRoomView() {
             <div style={{ fontWeight: 700, marginBottom: 8 }}>Training...</div>
             {training.length === 0 ? <div style={{ opacity: 0.8 }}>No active training queue.</div> : null}
             {training.map((q) => (
-              <div key={q.id} style={{ marginBottom: 6 }}>
-                {Number(q.quantity || 0).toLocaleString()} x {q.troop_code} • {String(q.completes_at).replace("T", " ").slice(0, 19)}
+              <div key={q.id} style={{ marginBottom: 6, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr auto auto", alignItems: "center", gap: 8 }}>
+                <span>{Number(q.quantity || 0).toLocaleString()} x {q.troop_code} - {String(q.completes_at).replace("T", " ").slice(0, 19)}</span>
+                <QueueCountdown completesAt={q.completes_at} onComplete={() => void load()} />
+                <button
+                  onClick={() => void cancelTrainingQueueItem(Number(q.id))}
+                  style={{ ...BTN_STYLE, padding: "4px 10px", fontSize: 12 }}
+                  disabled={cancelTrainId === Number(q.id)}
+                >
+                  {cancelTrainId === Number(q.id) ? "Cancelling..." : "Cancel"}
+                </button>
               </div>
             ))}
           </div>
@@ -2915,6 +3130,7 @@ function TrainTroopsView() {
   const [actionMsg, setActionMsg] = useState("");
   const [trainTroop, setTrainTroop] = useState("pikemen");
   const [trainQty, setTrainQty] = useState(1000);
+  const [cancelTrainId, setCancelTrainId] = useState<number | null>(null);
 
   async function load() {
     setLoading(true);
@@ -2962,6 +3178,29 @@ function TrainTroopsView() {
       await load();
     } catch (e: any) {
       setActionMsg(`Train failed: ${String(e?.message || e)}`);
+    }
+  }
+
+  async function cancelTrainingQueueItem(queueId: number) {
+    setActionMsg("");
+    setCancelTrainId(queueId);
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/train/cancel`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ queueId }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      const refundGold = Number(j?.refunds?.gold || 0);
+      const refundFood = Number(j?.refunds?.food || 0);
+      const refundHorses = Number(j?.refunds?.horses || 0);
+      setActionMsg(`Training cancelled. Refunded gold ${refundGold.toLocaleString()}, food ${refundFood.toLocaleString()}, horses ${refundHorses.toLocaleString()}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Cancel failed: ${String(e?.message || e)}`);
+    } finally {
+      setCancelTrainId(null);
     }
   }
 
@@ -3040,9 +3279,18 @@ function TrainTroopsView() {
             <div style={{ fontWeight: 700, marginBottom: 8 }}>Training Queue</div>
             {training.length === 0 ? <div style={{ opacity: 0.8 }}>No active training queue.</div> : null}
             {training.map((q) => (
-              <div key={q.id} style={{ marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                <span style={{ fontSize: 14 }}>{Number(q.quantity || 0).toLocaleString()} × {String(q.troop_code).replace(/_/g, " ")}</span>
-                <QueueCountdown completesAt={q.completes_at} onComplete={() => void load()} />
+              <div key={q.id} style={{ marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 14 }}>{Number(q.quantity || 0).toLocaleString()} x {String(q.troop_code).replace(/_/g, " ")}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <QueueCountdown completesAt={q.completes_at} onComplete={() => void load()} />
+                  <button
+                    onClick={() => void cancelTrainingQueueItem(Number(q.id))}
+                    style={{ ...BTN_STYLE, padding: "4px 10px", fontSize: 12 }}
+                    disabled={cancelTrainId === Number(q.id)}
+                  >
+                    {cancelTrainId === Number(q.id) ? "Cancelling..." : "Cancel"}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -3088,9 +3336,27 @@ function AttackKingdomView() {
   }, []);
 
   const troops = (data?.troops || []) as Array<any>;
+  const attackApTotal = Object.entries(sentTroops).reduce((acc, [code, qty]) => {
+    const troop = troops.find((t) => String(t.troopCode || "") === code);
+    return acc + Number(qty || 0) * Number(troop?.att || 0);
+  }, 0);
 
-  function updateSent(code: string, value: number) {
-    setSentTroops((prev) => ({ ...prev, [code]: Math.max(0, Math.floor(value || 0)) }));
+  function updateSent(code: string, rawValue: string, maxHome: number) {
+    const digits = String(rawValue || "").replace(/\D+/g, "");
+    setSentTroops((prev) => {
+      const next = { ...prev };
+      if (!digits) {
+        delete next[code];
+        return next;
+      }
+      const parsed = Math.min(Math.max(0, Math.floor(Number(digits || 0))), Math.max(0, Math.floor(Number(maxHome || 0))));
+      if (parsed <= 0) {
+        delete next[code];
+        return next;
+      }
+      next[code] = parsed;
+      return next;
+    });
   }
 
   async function submitAttack(e: React.FormEvent) {
@@ -3109,6 +3375,7 @@ function AttackKingdomView() {
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       setActionMsg(`Attack result: ${j.result} | Ratio ${Number(j.ratio || 0).toFixed(2)} | Land ${Number(j.landTaken || 0).toLocaleString()}`);
+      setSentTroops({});
       await load();
     } catch (e: any) {
       setActionMsg(`Attack failed: ${String(e?.message || e)}`);
@@ -3145,16 +3412,17 @@ function AttackKingdomView() {
                   {t.troopName} (home {Number(t.home || 0).toLocaleString()})
                 </span>
                 <input
-                  type="number"
-                  min={0}
-                  max={Number(t.home || 0)}
-                  value={Number(sentTroops[t.troopCode] || 0)}
-                  onChange={(e) => updateSent(t.troopCode, Math.min(Number(t.home || 0), Number(e.target.value || 0)))}
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={sentTroops[t.troopCode] === undefined ? "" : String(sentTroops[t.troopCode])}
+                  onChange={(e) => updateSent(t.troopCode, e.target.value, Number(t.home || 0))}
                   style={INPUT_STYLE}
                 />
               </label>
             ))}
           </div>
+          <div style={{ color: TEXT_MUTED, fontSize: 13 }}>Total AP sent: <strong style={{ color: ACCENT }}>{Number(attackApTotal || 0).toLocaleString()}</strong></div>
           <div>
             <button type="submit" style={BTN_STYLE}>
               Launch Attack
