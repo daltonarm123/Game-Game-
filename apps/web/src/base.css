@@ -9,14 +9,10 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow-x: hidde
     max-width: 100%;
     -webkit-overflow-scrolling: touch;
   }
-  /* Keep table content from forcing page-wide horizontal overflow */
-  table {
-    width: 100% !important;
-  }
-  th, td {
-    white-space: normal !important;
-    overflow-wrap: anywhere;
-    word-break: break-word;
+  /* Let wide tables keep natural column widths and scroll inside the card */
+  div[style*="overflow-x"] > table {
+    width: max-content !important;
+    min-width: 100%;
   }
   input, select, textarea {
     max-width: 100%;
