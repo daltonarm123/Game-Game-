@@ -70,7 +70,10 @@ const CARD: React.CSSProperties = {
   backdropFilter: "blur(2px)",
 };
 
-const API_BASE = (window as any).__GG_API_BASE || (import.meta as any).env?.VITE_API_BASE || "http://localhost:8080";
+const DEFAULT_API_BASE = (import.meta as any).env?.MODE === "production"
+  ? "https://radiant-unity-production-bf62.up.railway.app"
+  : "http://localhost:8080";
+const API_BASE = (window as any).__GG_API_BASE || (import.meta as any).env?.VITE_API_BASE || DEFAULT_API_BASE;
 const AUTH_STORAGE_KEY = "gg:auth";
 const KINGDOM_STORAGE_KEY = "gg:kingdom";
 const BUILD_SHA = (import.meta as any).env?.VITE_GIT_SHA || "dev";
