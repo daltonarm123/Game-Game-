@@ -233,7 +233,7 @@ async function processSettlementBuildQueueTick(): Promise<number> {
   return withTx(async (c) => {
     const due = await c.query(
       `
-      SELECT id, kingdom_id, settlement_id, building_code, target_level
+      SELECT id, kingdom_id, settlement_id, building_code, target_level, settlement_building_id
       FROM settlement_build_queue
       WHERE status='queued'
         AND completes_at <= now()
@@ -245,25 +245,27 @@ async function processSettlementBuildQueueTick(): Promise<number> {
     if (!due.rowCount) return 0;
 
     for (const row of due.rows) {
-      const prevQ = await c.query(`SELECT level FROM settlement_buildings WHERE settlement_id=$1 AND building_code=$2 LIMIT 1`, [
-        row.settlement_id,
-        row.building_code,
-      ]);
-      const prevLevel = Number(prevQ.rows[0]?.level || 0);
-      await c.query(
-        `
-        INSERT INTO settlement_buildings(settlement_id, building_code, level)
-        VALUES ($1,$2,$3)
-        ON CONFLICT (settlement_id, building_code) DO UPDATE
-        SET level = GREATEST(settlement_buildings.level, EXCLUDED.level)
-        `,
-        [row.settlement_id, row.building_code, row.target_level],
-      );
-      const action = prevLevel > 0 ? "upgrading" : "building";
-      await c.query(
-        `INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`,
-        [row.settlement_id, `Finished ${action} ${String(row.building_code).replaceAll("_", " ")} to level ${row.target_level}`],
-      );
+      if (row.settlement_building_id) {
+        // Upgrade existing building by id
+        await c.query(
+          `UPDATE settlement_buildings SET level=$1 WHERE id=$2`,
+          [row.target_level, row.settlement_building_id],
+        );
+        await c.query(
+          `INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`,
+          [row.settlement_id, `Finished upgrading ${String(row.building_code).replaceAll("_", " ")} to level ${row.target_level}`],
+        );
+      } else {
+        // New building — insert fresh row
+        await c.query(
+          `INSERT INTO settlement_buildings(settlement_id, building_code, level) VALUES ($1,$2,$3)`,
+          [row.settlement_id, row.building_code, row.target_level],
+        );
+        await c.query(
+          `INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`,
+          [row.settlement_id, `Finished building ${String(row.building_code).replaceAll("_", " ")} to level ${row.target_level}`],
+        );
+      }
       await c.query(`UPDATE settlement_build_queue SET status='completed', completed_at=now() WHERE id=$1`, [row.id]);
       await c.query(`UPDATE kingdoms SET last_tick_at=now() WHERE id=$1`, [row.kingdom_id]);
     }

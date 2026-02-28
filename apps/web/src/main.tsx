@@ -1051,19 +1051,21 @@ function ResearchView() {
 }
 
 function SettlementsView() {
-  const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "Elixer");
+  const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "");
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [actionMsg, setActionMsg] = useState("");
-  const [settlementId, setSettlementId] = useState<number>(0);
-  const [showDetail, setShowDetail] = useState(false);
-  const [renameId, setRenameId] = useState<number>(0);
-  const [renameName, setRenameName] = useState("");
-  const [buildingCode, setBuildingCode] = useState("housing");
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showBuildModal, setShowBuildModal] = useState(false);
+  const [newBuildingCode, setNewBuildingCode] = useState("");
+  const [buildMsg, setBuildMsg] = useState("");
+  const [renameId, setRenameId] = useState<number | null>(null);
+  const [renameName, setRenameName] = useState("");
 
   async function load() {
+    if (!kingdom.trim()) return;
     setLoading(true);
     setError("");
     try {
@@ -1071,9 +1073,6 @@ function SettlementsView() {
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       setData(j);
-      if (!settlementId && Array.isArray(j.settlements) && j.settlements.length > 0) {
-        setSettlementId(Number(j.settlements[0].id));
-      }
     } catch (e: any) {
       setData(null);
       setError(String(e?.message || e));
@@ -1082,235 +1081,346 @@ function SettlementsView() {
     }
   }
 
-  useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useEffect(() => { void load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function upgrade() {
-    if (!settlementId) return;
-    setBusy(true);
-    setActionMsg("");
+  const settlements = (data?.settlements || []) as any[];
+  const allBuildings = (data?.buildings || []) as any[];
+  const queue = (data?.queue || []) as any[];
+  const catalog = (data?.catalog || []) as any[];
+  const selected = selectedId != null ? settlements.find((s: any) => Number(s.id) === selectedId) || null : null;
+  const selectedBuildings = selected ? allBuildings.filter((b: any) => Number(b.settlement_id) === selectedId) : [];
+  const selectedQueue = selected ? queue.filter((q: any) => Number(q.settlement_id) === selectedId) : [];
+  const newBuildsInQueue = selectedQueue.filter((q: any) => !q.settlement_building_id);
+  const upgradeBuildsInQueue = selectedQueue.filter((q: any) => q.settlement_building_id);
+  const usedSlots = selected ? selectedBuildings.length + newBuildsInQueue.length : 0;
+  const freeSlots = selected ? Math.max(0, Number(selected.slots_total || 0) - usedSlots) : 0;
+  const allowedBuildings = selected
+    ? catalog.filter((c: any) => {
+        if (Boolean(c.city_only) && !String(selected.settlement_type || "").includes("city")) return false;
+        if (Number(c.required_settlement_size || 1) > Number(selected.level || 1)) return false;
+        return true;
+      })
+    : catalog;
+  const selectedNewBuilding = allowedBuildings.find((c: any) => c.code === newBuildingCode) || allowedBuildings[0] || null;
+
+  const totalMaint = settlements.reduce(
+    (acc: any, s: any) => { acc.gold += Number(s?.maintenance?.gold || 0); acc.stone += Number(s?.maintenance?.stone || 0); acc.wood += Number(s?.maintenance?.wood || 0); return acc; },
+    { gold: 0, stone: 0, wood: 0 },
+  );
+  const avgWellbeing = Number(data?.averageWellbeing || 0);
+
+  function sn(n: number) { return n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + "M" : n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n); }
+  function fmtMaint(m: any) { return `🪙 ${sn(Number(m?.gold || 0))}  🪵 ${sn(Number(m?.wood || 0))}  🪨 ${sn(Number(m?.stone || 0))}`; }
+  function fmtCost(c: any) { return `🪙 ${sn(Number(c?.base_gold || 0))}  🪵 ${sn(Number(c?.base_wood || 0))}  🪨 ${sn(Number(c?.base_stone || 0))}`; }
+  function timeLeft(iso: string) {
+    const d = new Date(iso).getTime() - Date.now();
+    if (d <= 0) return "completing...";
+    const h = Math.floor(d / 3600000), m = Math.floor((d % 3600000) / 60000), s = Math.floor((d % 60000) / 1000);
+    return h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`;
+  }
+  const TH: React.CSSProperties = { textAlign: "left", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.25)", color: ACCENT, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 };
+  const TD: React.CSSProperties = { padding: "10px 10px", borderBottom: "1px solid rgba(255,255,255,.04)", verticalAlign: "middle" };
+  const BTN_SM: React.CSSProperties = { ...BTN_STYLE, padding: "5px 12px", fontSize: 12 };
+  const BTN_DANGER: React.CSSProperties = { ...BTN_SM, background: "rgba(180,50,50,.35)", borderColor: "rgba(200,80,80,.5)" };
+
+  async function buildBuilding() {
+    if (!selected || !newBuildingCode) return;
+    setBusy(true); setBuildMsg("");
     try {
-      const r = await fetch(`${API_BASE}/api/settlements/${encodeURIComponent(kingdom)}/upgrade-building`, {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({ settlementId, buildingCode }),
+      const r = await fetch(`${API_BASE}/api/settlements/${encodeURIComponent(kingdom)}/build-building`, {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ settlementId: selectedId, buildingCode: newBuildingCode }),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setActionMsg(`Queued ${buildingCode} for settlement #${settlementId}.`);
+      setShowBuildModal(false);
+      setActionMsg(`Started building ${selectedNewBuilding?.name || newBuildingCode}.`);
+      await load();
+    } catch (e: any) {
+      setBuildMsg(`Failed: ${String(e?.message || e)}`);
+    } finally { setBusy(false); }
+  }
+
+  async function upgradeBuilding(buildingId: number, buildingName: string) {
+    setBusy(true); setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/settlements/${encodeURIComponent(kingdom)}/upgrade-building`, {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ settlementId: selectedId, buildingId }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Queued ${buildingName} upgrade.`);
       await load();
     } catch (e: any) {
       setActionMsg(`Upgrade failed: ${String(e?.message || e)}`);
-    } finally {
-      setBusy(false);
-    }
+    } finally { setBusy(false); }
+  }
+
+  async function destroyBuilding(buildingId: number, buildingName: string) {
+    if (!confirm(`Demolish ${buildingName}? This cannot be undone (-50 wellbeing).`)) return;
+    setBusy(true); setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/settlements/${encodeURIComponent(kingdom)}/destroy-building`, {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ settlementId: selectedId, buildingId }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`${buildingName} demolished.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Demolish failed: ${String(e?.message || e)}`);
+    } finally { setBusy(false); }
   }
 
   async function renameSettlement() {
     if (!renameId || !renameName.trim()) return;
-    setBusy(true);
-    setActionMsg("");
+    setBusy(true); setActionMsg("");
     try {
       const r = await fetch(`${API_BASE}/api/settlements/${encodeURIComponent(kingdom)}/rename`, {
-        method: "POST",
-        headers: authHeaders(),
+        method: "POST", headers: authHeaders(),
         body: JSON.stringify({ settlementId: renameId, name: renameName.trim() }),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setActionMsg(`Renamed settlement to "${String(j?.settlement?.name || renameName)}" (wellbeing -100).`);
-      setRenameId(0);
-      setRenameName("");
+      setActionMsg(`Settlement renamed to "${renameName.trim()}".`);
+      setRenameId(null); setRenameName("");
       await load();
     } catch (e: any) {
       setActionMsg(`Rename failed: ${String(e?.message || e)}`);
-    } finally {
-      setBusy(false);
-    }
+    } finally { setBusy(false); }
   }
 
-  const settlements = (data?.settlements || []) as Array<any>;
-  const queue = (data?.queue || []) as Array<any>;
-  const catalog = (data?.catalog || []) as Array<any>;
-  const buildings = (data?.buildings || []) as Array<any>;
-  const selected = settlements.find((s) => Number(s.id) === Number(settlementId));
-  const selectedBuildings = buildings.filter((b) => Number(b.settlement_id) === Number(settlementId));
-  const avgWellbeing = Number(data?.averageWellbeing || 0);
-  const totalSettlementRank = Number(data?.totalSettlementRank || 0);
-  const totalMaintenance = settlements.reduce(
-    (acc, s) => {
-      acc.gold += Number(s?.maintenance?.gold || 0);
-      acc.stone += Number(s?.maintenance?.stone || 0);
-      acc.wood += Number(s?.maintenance?.wood || 0);
-      return acc;
-    },
-    { gold: 0, stone: 0, wood: 0 },
-  );
-
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div style={{ display: "grid", gap: 14 }}>
+      {/* Header */}
       <div style={CARD}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
           <div>
-            <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>
-              Settlements - {data?.kingdom?.name || kingdom}
+            <div style={{ fontSize: 26, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>
+              Settlements {selected ? `— ${selected.name}` : data ? `— ${data?.kingdom?.name || kingdom}` : ""}
             </div>
-            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 18, fontWeight: 700 }}>
-              Number of settlements: {settlements.length} ({Number(data?.unlockedByLand || 0)}) • Average Wellbeing: {avgWellbeing.toLocaleString()} • Total settlement rank: {totalSettlementRank}
-            </div>
+            {!selected && data && (
+              <div style={{ marginTop: 4, color: TEXT_MUTED, fontSize: 13 }}>
+                {settlements.length} settlement{settlements.length !== 1 ? "s" : ""} · Avg wellbeing: {avgWellbeing.toLocaleString()} · Maintenance/h: {fmtMaint(totalMaint)}
+              </div>
+            )}
+            {selected && (
+              <div style={{ marginTop: 4, color: TEXT_MUTED, fontSize: 13 }}>
+                {String(selected.settlement_type || "").replaceAll("_", " ")} · Level {Number(selected.level || 0)} · Slots: {usedSlots}/{Number(selected.slots_total || 0)} · Wellbeing: {Number(selected.wellbeing || 0).toLocaleString()} · Maint/h: {fmtMaint(selected?.maintenance)}
+              </div>
+            )}
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={INPUT_STYLE} />
-            <button onClick={() => void load()} style={BTN_STYLE}>Load</button>
+            {selected && (
+              <button onClick={() => { setSelectedId(null); setActionMsg(""); setRenameId(null); }} style={{ ...BTN_STYLE, padding: "7px 14px", fontSize: 13 }}>
+                ← Settlements
+              </button>
+            )}
+            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void load()} style={{ ...INPUT_STYLE, fontSize: 13, padding: "7px 10px", width: 140 }} placeholder="Kingdom name" />
+            <button onClick={() => void load()} style={{ ...BTN_STYLE, padding: "7px 12px", fontSize: 13 }}>Load</button>
           </div>
         </div>
-        {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading settlements...</div> : null}
-        {error ? (
-          <div style={{ marginTop: 8, color: "#ffae9a", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span>{error}</span>
-            <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
-          </div>
-        ) : null}
-        {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
+        {loading && <div style={{ marginTop: 8, color: TEXT_MUTED, fontSize: 13 }}>Loading...</div>}
+        {error && <div style={{ marginTop: 8, color: "#ffae9a", fontSize: 13 }}>{error} <button onClick={() => void load()} style={BTN_SM}>Retry</button></div>}
+        {actionMsg && <div style={{ marginTop: 8, color: "#c8e7b1", fontSize: 13 }}>{actionMsg}</div>}
       </div>
 
-      <div style={CARD}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
-          <div style={{ fontWeight: 800, fontSize: 22 }}>Owned Settlements</div>
-          <div style={{ color: TEXT_MUTED }}>
-            Maintenance/h: Gold {totalMaintenance.gold.toLocaleString()} Wood {totalMaintenance.wood.toLocaleString()} Stone {totalMaintenance.stone.toLocaleString()}
-          </div>
-        </div>
-        <div style={{ marginBottom: 10, color: TEXT_MUTED }}>
-          Settlements are part of your kingdom. Open one to manage buildings, or rename it with the edit icon.
-        </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left", padding: 8 }}>Name</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Type</th>
-                <th style={{ textAlign: "right", padding: 8 }}>Level</th>
-                <th style={{ textAlign: "right", padding: 8 }}>Wellbeing</th>
-                <th style={{ textAlign: "right", padding: 8 }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {settlements.map((s) => (
-                <tr key={s.id} style={{ background: Number(s.id) === Number(settlementId) ? "rgba(216,176,117,.12)" : "transparent" }}>
-                  <td style={{ padding: 8 }}>
-                    <div style={{ fontWeight: 800, fontSize: 28, fontFamily: FONT_DISPLAY }}>{s.name}</div>
-                    <div style={{ color: TEXT_MUTED, marginTop: 4, fontSize: 18 }}>
-                      Maintenance - Gold: {Number(s?.maintenance?.gold || 0).toLocaleString()} Wood: {Number(s?.maintenance?.wood || 0).toLocaleString()} Stone: {Number(s?.maintenance?.stone || 0).toLocaleString()}
-                    </div>
-                  </td>
-                  <td style={{ padding: 8 }}>{String(s.settlement_type || "").replaceAll("_", " ")}</td>
-                  <td style={{ padding: 8, textAlign: "right" }}>{Number(s.level || 0)}</td>
-                  <td style={{ padding: 8, textAlign: "right" }}>{Number(s.wellbeing || 0).toLocaleString()}</td>
-                  <td style={{ padding: 8, textAlign: "right" }}>
-                    <button
-                      onClick={() => {
-                        setSettlementId(Number(s.id));
-                        setShowDetail(true);
-                      }}
-                      style={{ ...BTN_STYLE, padding: "6px 10px", marginRight: 8 }}
-                    >
-                      Open
-                    </button>
-                    <button
-                      onClick={() => {
-                        setRenameId(Number(s.id));
-                        setRenameName(String(s.name || ""));
-                      }}
-                      style={{ ...BTN_STYLE, padding: "6px 10px" }}
-                    >
-                      Rename
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {renameId ? (
+      {!selected ? (
+        /* ── LIST VIEW ── */
         <div style={CARD}>
-          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Rename Settlement</div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <input value={renameName} onChange={(e) => setRenameName(e.target.value)} style={INPUT_STYLE} />
-            <button onClick={() => void renameSettlement()} style={BTN_STYLE} disabled={busy || !renameName.trim()}>
-              {busy ? "Saving..." : "Save Name"}
-            </button>
-            <button onClick={() => { setRenameId(0); setRenameName(""); }} style={BTN_STYLE}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {showDetail && selected ? (
-        <div style={CARD}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-            <div>
-              <div style={{ fontSize: 40, fontWeight: 800, fontFamily: FONT_DISPLAY }}>{selected.name}</div>
-              <div style={{ marginTop: 4, fontSize: 22 }}>
-                {String(selected.settlement_type || "").replaceAll("_", " ")} / Level: {Number(selected.level || 0)} / Slots: {Number(selected.slots_total || 0)}
-              </div>
-              <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 18 }}>
-                Wellbeing: {Number(selected.wellbeing || 0).toLocaleString()} • Maintenance - Gold: {Number(selected?.maintenance?.gold || 0).toLocaleString()} Wood: {Number(selected?.maintenance?.wood || 0).toLocaleString()} Stone: {Number(selected?.maintenance?.stone || 0).toLocaleString()}
-              </div>
-            </div>
-            <button onClick={() => setShowDetail(false)} style={BTN_STYLE}>Back To List</button>
-          </div>
-
-          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 26 }}>Buildings</div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
-            <select value={buildingCode} onChange={(e) => setBuildingCode(e.target.value)} style={INPUT_STYLE}>
-              {catalog.map((c) => (
-                <option key={c.code} value={c.code}>{c.name}</option>
-              ))}
-            </select>
-            <button onClick={() => void upgrade()} style={BTN_STYLE} disabled={busy || !settlementId}>
-              {busy ? "Queueing..." : "Upgrade Building"}
-            </button>
-          </div>
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 12, color: ACCENT }}>Your Settlements</div>
+          {settlements.length === 0 && !loading && <div style={{ color: TEXT_MUTED, fontSize: 13 }}>No settlements found. Load your kingdom to see them.</div>}
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
-                  <th style={{ textAlign: "left", padding: 8 }}>Building Type</th>
-                  <th style={{ textAlign: "left", padding: 8 }}>Effect</th>
-                  <th style={{ textAlign: "right", padding: 8 }}>Level</th>
-                  <th style={{ textAlign: "right", padding: 8 }}>Cap</th>
+                  <th style={TH}>Name</th>
+                  <th style={TH}>Type</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Level</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Wellbeing</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Maintenance/h</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {selectedBuildings.map((b) => (
-                  <tr key={`${b.settlement_id}-${b.building_code}`}>
-                    <td style={{ padding: 8 }}>{b.name}</td>
-                    <td style={{ padding: 8, color: TEXT_MUTED }}>{b.effect_text}</td>
-                    <td style={{ padding: 8, textAlign: "right" }}>{Number(b.level || 0)}</td>
-                    <td style={{ padding: 8, textAlign: "right" }}>{Math.min(Number(b.max_level || 0), Number(selected.level || 1))}</td>
+                {settlements.map((s: any) => (
+                  <tr key={s.id} style={{ transition: "background .15s" }}>
+                    <td style={TD}>
+                      <span style={{ fontWeight: 700 }}>{s.name}</span>
+                      {s.isCapital && <span style={{ marginLeft: 6, fontSize: 10, padding: "2px 5px", borderRadius: 4, background: "rgba(216,176,117,.25)", color: ACCENT }}>Capital</span>}
+                    </td>
+                    <td style={{ ...TD, color: TEXT_MUTED, fontSize: 13 }}>{String(s.settlement_type || "").replaceAll("_", " ")}</td>
+                    <td style={{ ...TD, textAlign: "right", fontWeight: 700 }}>{Number(s.level || 0)}</td>
+                    <td style={{ ...TD, textAlign: "right" }}>{Number(s.wellbeing || 0).toLocaleString()}</td>
+                    <td style={{ ...TD, textAlign: "right", color: TEXT_MUTED, fontSize: 12 }}>{fmtMaint(s?.maintenance)}</td>
+                    <td style={{ ...TD, textAlign: "right" }}>
+                      <button onClick={() => { setSelectedId(Number(s.id)); setActionMsg(""); }} style={{ ...BTN_SM, marginRight: 5 }}>View</button>
+                      <button onClick={() => { setRenameId(Number(s.id)); setRenameName(String(s.name || "")); }} style={BTN_SM}>✎</button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          {renameId != null && (
+            <div style={{ marginTop: 12, padding: "10px 12px", background: "rgba(0,0,0,.35)", borderRadius: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ color: TEXT_MUTED, fontSize: 13 }}>New name:</span>
+              <input value={renameName} onChange={(e) => setRenameName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void renameSettlement()} style={{ ...INPUT_STYLE, fontSize: 13, padding: "5px 10px" }} autoFocus />
+              <button onClick={() => void renameSettlement()} style={BTN_SM} disabled={busy || !renameName.trim()}>{busy ? "Saving..." : "Save"}</button>
+              <button onClick={() => { setRenameId(null); setRenameName(""); }} style={BTN_SM}>Cancel</button>
+            </div>
+          )}
+          {/* Global queue summary */}
+          {queue.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, color: ACCENT }}>Build Queue</div>
+              {queue.map((q: any) => {
+                const sName = settlements.find((s: any) => Number(s.id) === Number(q.settlement_id))?.name || `#${q.settlement_id}`;
+                return (
+                  <div key={q.id} style={{ fontSize: 13, color: TEXT_MUTED, marginBottom: 4, display: "flex", gap: 8 }}>
+                    <span style={{ color: TEXT_MAIN }}>{sName}</span>
+                    <span>→ {String(q.building_code).replaceAll("_", " ")} lv{q.target_level}</span>
+                    <span style={{ marginLeft: "auto" }}>{timeLeft(q.completes_at)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
-      ) : null}
+      ) : (
+        /* ── DETAIL VIEW ── */
+        <div style={{ display: "grid", gap: 12 }}>
+          {/* Garrison */}
+          {((selected?.garrison || []) as any[]).length > 0 && (
+            <div style={CARD}>
+              <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 10, color: ACCENT }}>Garrison</div>
+              <table style={{ borderCollapse: "collapse" }}>
+                <thead><tr>
+                  <th style={TH}>Troop</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Amount</th>
+                </tr></thead>
+                <tbody>
+                  {((selected?.garrison || []) as any[]).map((g: any) => (
+                    <tr key={g.troopCode}>
+                      <td style={TD}>{g.troopName}</td>
+                      <td style={{ ...TD, textAlign: "right", fontWeight: 700 }}>{Number(g.amount || 0).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
-      <div style={CARD}>
-        <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Settlement Build Queue</div>
-        {queue.length === 0 ? <div style={{ color: TEXT_MUTED }}>No active settlement build queue.</div> : null}
-        {queue.map((q) => (
-          <div key={q.id} style={{ marginBottom: 6 }}>
-            Settlement #{q.settlement_id} • {q.building_code} lvl {q.target_level} • {String(q.completes_at).replace("T", " ").slice(0, 19)}
+          {/* Buildings */}
+          <div style={CARD}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: ACCENT }}>Buildings ({usedSlots}/{Number(selected.slots_total || 0)} slots used)</div>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>
+                  <th style={TH}>Building</th>
+                  <th style={TH}>Effect</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Level</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Max</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Actions</th>
+                </tr></thead>
+                <tbody>
+                  {selectedBuildings.map((b: any) => {
+                    const maxForSettle = Math.min(Number(b.max_level || 10), Math.max(1, Number(selected.level || 1)));
+                    const isMaxed = Number(b.level) >= maxForSettle;
+                    const inUpgradeQueue = upgradeBuildsInQueue.some((q: any) => Number(q.settlement_building_id) === Number(b.id));
+                    return (
+                      <tr key={b.id}>
+                        <td style={{ ...TD, fontWeight: 600 }}>{b.name}</td>
+                        <td style={{ ...TD, color: TEXT_MUTED, fontSize: 12, maxWidth: 200 }}>{b.effect_text}</td>
+                        <td style={{ ...TD, textAlign: "right", fontWeight: 700 }}>{Number(b.level || 0)}</td>
+                        <td style={{ ...TD, textAlign: "right", color: TEXT_MUTED }}>{maxForSettle}</td>
+                        <td style={{ ...TD, textAlign: "right", whiteSpace: "nowrap" }}>
+                          {inUpgradeQueue ? (
+                            <span style={{ color: TEXT_MUTED, fontSize: 11, marginRight: 8 }}>Upgrading...</span>
+                          ) : isMaxed ? (
+                            <span style={{ color: TEXT_MUTED, fontSize: 11, marginRight: 8 }}>Maxed</span>
+                          ) : (
+                            <button onClick={() => void upgradeBuilding(Number(b.id), String(b.name))} style={{ ...BTN_SM, marginRight: 6 }} disabled={busy}>⬆ Upgrade</button>
+                          )}
+                          <button onClick={() => void destroyBuilding(Number(b.id), String(b.name))} style={BTN_DANGER} disabled={busy}>🗑</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {/* New builds in queue */}
+                  {newBuildsInQueue.map((q: any) => (
+                    <tr key={`q-${q.id}`} style={{ opacity: 0.65 }}>
+                      <td style={{ ...TD, fontStyle: "italic", color: TEXT_MUTED }}>{String(q.building_code).replaceAll("_", " ")}</td>
+                      <td style={{ ...TD, color: TEXT_MUTED, fontSize: 12 }}>Under construction</td>
+                      <td style={{ ...TD, textAlign: "right", color: TEXT_MUTED }}>—</td>
+                      <td style={TD}></td>
+                      <td style={{ ...TD, textAlign: "right", color: TEXT_MUTED, fontSize: 12 }}>{timeLeft(q.completes_at)}</td>
+                    </tr>
+                  ))}
+                  {/* Free slots */}
+                  {Array.from({ length: freeSlots }).map((_, i) => (
+                    <tr key={`free-${i}`}>
+                      <td colSpan={5} style={{ ...TD, textAlign: "center", opacity: 0.5 }}>
+                        <button
+                          onClick={() => { setShowBuildModal(true); setBuildMsg(""); setNewBuildingCode(allowedBuildings[0]?.code || ""); }}
+                          style={{ ...BTN_SM, width: "100%", letterSpacing: 0.5 }}
+                          disabled={busy}
+                        >
+                          + Free Building Slot
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {selectedBuildings.length === 0 && newBuildsInQueue.length === 0 && freeSlots === 0 && (
+                    <tr><td colSpan={5} style={{ ...TD, color: TEXT_MUTED, fontSize: 13, textAlign: "center" }}>No buildings yet.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        ))}
-      </div>
+        </div>
+      )}
+
+      {/* Add Building Modal */}
+      {showBuildModal && selected && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ ...CARD, maxWidth: 460, width: "92%", zIndex: 1001, boxShadow: "0 20px 60px rgba(0,0,0,.6)" }}>
+            <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 14, fontFamily: FONT_DISPLAY }}>Add Building — {selected.name}</div>
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ color: TEXT_MUTED, fontSize: 12, marginBottom: 5, textTransform: "uppercase", letterSpacing: 0.8 }}>Building Type</div>
+              <select
+                value={newBuildingCode}
+                onChange={(e) => setNewBuildingCode(e.target.value)}
+                style={{ ...INPUT_STYLE, width: "100%", fontSize: 14 }}
+              >
+                {allowedBuildings.map((c: any) => (
+                  <option key={c.code} value={c.code}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+            {selectedNewBuilding && (
+              <div style={{ padding: "10px 12px", background: "rgba(0,0,0,.35)", borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
+                <div style={{ color: TEXT_MUTED, marginBottom: 6 }}>{selectedNewBuilding.effect_text}</div>
+                <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                  <span>Cost: {fmtCost(selectedNewBuilding)}</span>
+                  <span style={{ color: TEXT_MUTED }}>
+                    Build time: {Math.floor(Number(selectedNewBuilding.base_build_seconds || 10800) / 3600)}h {Math.floor((Number(selectedNewBuilding.base_build_seconds || 10800) % 3600) / 60)}m
+                  </span>
+                </div>
+              </div>
+            )}
+            {buildMsg && <div style={{ color: buildMsg.startsWith("Failed") ? "#ffae9a" : "#c8e7b1", fontSize: 13, marginBottom: 10 }}>{buildMsg}</div>}
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => void buildBuilding()} style={BTN_STYLE} disabled={busy || !newBuildingCode}>{busy ? "Building..." : "Build"}</button>
+              <button onClick={() => { setShowBuildModal(false); setBuildMsg(""); }} style={{ ...BTN_STYLE, background: "rgba(60,60,60,.4)" }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2738,7 +2848,7 @@ function AttackKingdomView() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [actionMsg, setActionMsg] = useState("");
-  const [attackTarget, setAttackTarget] = useState("");
+  const [attackTarget, setAttackTarget] = useState(() => { const t = localStorage.getItem("gg:prefill-target") || ""; if (t) localStorage.removeItem("gg:prefill-target"); return t; });
   const [sentTroops, setSentTroops] = useState<Record<string, number>>({});
 
   async function load() {
@@ -4485,11 +4595,13 @@ function RankingsView() {
                         <td style={{ ...TD, fontWeight: isMe ? 700 : 400, color: isMe ? ACCENT : TEXT_MAIN }}>{displayName}</td>
                         <td style={{ ...TD, textAlign: "right" }}>{Number(k.networth || 0).toLocaleString()}</td>
                         <td style={{ ...TD, textAlign: "center" }}>
-                          <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
-                            <button title="Spy" style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 13 }}>Spy</button>
-                            <button title="Attack" style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 13 }}>Attack</button>
-                            <button title="Pigeon" style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 13 }}>Pigeon</button>
-                          </div>
+                          {!isMe && (
+                            <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                              <button title="Spy on this kingdom" onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "guildhall" })); }} style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 12 }}>Spy</button>
+                              <button title="Attack this kingdom" onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "attack-kingdom" })); }} style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 12 }}>Attack</button>
+                              <button title="Send pigeon to this kingdom" onClick={() => { localStorage.setItem("gg:prefill-compose-to", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "pigeons" })); }} style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 12 }}>Pigeon</button>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     );
@@ -4519,8 +4631,8 @@ function PigeonsView() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [expandedId, setExpandedId] = useState<number | null>(null);
-  const [composing, setComposing] = useState(false);
-  const [toKingdom, setToKingdom] = useState("");
+  const [composing, setComposing] = useState(() => { return Boolean(localStorage.getItem("gg:prefill-compose-to")); });
+  const [toKingdom, setToKingdom] = useState(() => { const t = localStorage.getItem("gg:prefill-compose-to") || ""; if (t) localStorage.removeItem("gg:prefill-compose-to"); return t; });
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [sendBusy, setSendBusy] = useState(false);
@@ -4673,7 +4785,7 @@ function GuildhallView() {
   const [trainOpen, setTrainOpen] = useState(false);
   const [spyOpen, setSpyOpen] = useState(false);
   const [trainAmt, setTrainAmt] = useState(1);
-  const [defenderKingdom, setDefenderKingdom] = useState("");
+  const [defenderKingdom, setDefenderKingdom] = useState(() => { const t = localStorage.getItem("gg:prefill-target") || ""; if (t) localStorage.removeItem("gg:prefill-target"); return t; });
   const [spiesToSend, setSpiesToSend] = useState(1);
   const [sabotageTarget, setSabotageTarget] = useState("");
   const [sabotageSpies, setSabotageSpies] = useState(10);

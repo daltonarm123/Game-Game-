@@ -223,7 +223,7 @@ const researchStartBody = z.object({
 
 const settlementUpgradeBody = z.object({
   settlementId: z.number().int().positive(),
-  buildingCode: z.string().min(1),
+  buildingId: z.number().int().positive(),
 });
 
 const settlementRenameBody = z.object({
@@ -242,7 +242,7 @@ const settlementBuildBody = z.object({
 
 const settlementDestroyBody = z.object({
   settlementId: z.number().int().positive(),
-  buildingCode: z.string().min(1),
+  buildingId: z.number().int().positive(),
 });
 
 const settlementUpgradeCostBody = z.object({
@@ -2443,7 +2443,7 @@ app.post("/api/war-room/:attacker/spy", requireAuth, async (req, res) => {
       );
       if (!a.rowCount) throw new Error("attacker kingdom not found");
       const d = await c.query(
-        `SELECT id, name, land, gold, food, wood, stone, horses FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        `SELECT id, name, land, gold, food, wood, stone, horses, blue_gems, green_gems FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
         [defenderName],
       );
       if (!d.rowCount) throw new Error("defender kingdom not found");
@@ -2495,33 +2495,111 @@ app.post("/api/war-room/:attacker/spy", requireAuth, async (req, res) => {
         );
       }
 
-      const intel = success
-        ? {
-            land: Number(def.land || 0),
-            gold: Number(def.gold || 0),
-            food: Number(def.food || 0),
-            wood: Number(def.wood || 0),
-            stone: Number(def.stone || 0),
-            horses: Number(def.horses || 0),
-            spiesHome: defHave,
-          }
-        : null;
+      // Gather rich intel for the report
+      const resultLevel = ratio >= 2 ? "Complete Infiltration" : ratio >= 1.5 ? "Deep Infiltration" : ratio >= 0.95 ? "Partial Infiltration" : "Mission Failed";
 
-      await sendMailTx(
-        c,
-        Number(atk.id),
-        "spy",
-        `Spy Report: ${def.name}`,
-        success
-          ? `Spy mission successful.\nIntel: ${JSON.stringify(intel)}\nSpies lost: ${spyLosses.toLocaleString()}\nSpies returning: ${survivors.toLocaleString()}`
-          : `Spy mission failed.\nSpies lost: ${spyLosses.toLocaleString()}\nSpies returning: ${survivors.toLocaleString()}`,
-      );
+      let reportBody: string;
+      if (success) {
+        const [defTroopsQ, defCastlesQ, defAllianceQ, defNwQ, defAttacksQ] = await Promise.all([
+          c.query(
+            `SELECT tt.name AS troop_name, kt.amount, tt.def_rating FROM kingdom_troops kt JOIN troop_types tt ON tt.code=kt.troop_code WHERE kt.kingdom_id=$1 AND kt.amount>0 ORDER BY kt.amount DESC`,
+            [def.id],
+          ),
+          c.query(`SELECT COALESCE(SUM(quantity),0)::int AS castles FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='castles'`, [def.id]),
+          c.query(`SELECT a.tag FROM alliances a JOIN alliance_members m ON m.alliance_id=a.id WHERE m.kingdom_id=$1 LIMIT 1`, [def.id]),
+          c.query(
+            `WITH tn AS (SELECT COALESCE(SUM(kt.amount * ty.nw_value),0) AS troop_nw FROM kingdom_troops kt JOIN troop_types ty ON ty.code=kt.troop_code WHERE kt.kingdom_id=$1)
+             SELECT ROUND((k.land * 0.04 + k.food * 0.0001 + k.gold * 0.0005 + k.stone * 0.0002 + k.wood * 0.0002 + tn.troop_nw)::numeric, 0)::bigint AS networth,
+               (SELECT COUNT(*)+1 FROM kingdoms k2 WHERE (k2.land * 0.04 + k2.food * 0.0001 + k2.gold * 0.0005 + k2.stone * 0.0002 + k2.wood * 0.0002) > (k.land * 0.04 + k.food * 0.0001 + k.gold * 0.0005 + k.stone * 0.0002 + k.wood * 0.0002))::int AS rank
+             FROM kingdoms k, tn WHERE k.id=$1`,
+            [def.id],
+          ),
+          c.query(
+            `SELECT attacker_name, defender_name, result, created_at FROM attack_reports WHERE (attacker_kingdom_id=$1 OR defender_kingdom_id=$1) AND created_at > now() - interval '24 hours' ORDER BY created_at DESC LIMIT 8`,
+            [def.id],
+          ),
+        ]);
+
+        const defTroops = defTroopsQ.rows;
+        const castles = Number(defCastlesQ.rows[0]?.castles || 0);
+        const allianceTag = String(defAllianceQ.rows[0]?.tag || "None");
+        const networth = Number(defNwQ.rows[0]?.networth || 0);
+        const rank = Number(defNwQ.rows[0]?.rank || 0);
+        const totalTroops = defTroops.reduce((s: number, t: any) => s + Number(t.amount || 0), 0);
+        const approxDefPower = defTroops.reduce((s: number, t: any) => s + Number(t.amount || 0) * Number(t.def_rating || 0), 0);
+
+        const troopLines = defTroops.length > 0
+          ? defTroops.map((t: any) => `  ${String(t.troop_name).padEnd(22)} ${Number(t.amount || 0).toLocaleString()}`).join("\n")
+          : "  No troops detected.";
+
+        const recentActivity = defAttacksQ.rows.length > 0
+          ? defAttacksQ.rows.map((r: any) => {
+              const time = new Date(r.created_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+              if (String(r.attacker_name).toLowerCase() === String(def.name).toLowerCase()) {
+                return `  Launched an attack on ${r.defender_name} (${time})`;
+              }
+              return `  Attacked by ${r.attacker_name} (${time})`;
+            }).join("\n")
+          : "  No recent activity.";
+
+        reportBody = [
+          `Target: ${def.name}`,
+          `Alliance: ${allianceTag}`,
+          `Ranking: #${rank}`,
+          `Networth: ${networth.toLocaleString()}`,
+          `Result Level: ${resultLevel}`,
+          ``,
+          `Spies Sent: ${spiesToSend.toLocaleString()}`,
+          `Spies Lost: ${spyLosses.toLocaleString()}`,
+          `Spies Returning: ${survivors.toLocaleString()}`,
+          `Number of Castles: ${castles.toLocaleString()}`,
+          ``,
+          `Resources:`,
+          `  Gold:          ${Number(def.gold || 0).toLocaleString()}`,
+          `  Food:          ${Number(def.food || 0).toLocaleString()}`,
+          `  Wood:          ${Number(def.wood || 0).toLocaleString()}`,
+          `  Stone:         ${Number(def.stone || 0).toLocaleString()}`,
+          `  Land:          ${Number(def.land || 0).toLocaleString()}`,
+          `  Horses:        ${Number(def.horses || 0).toLocaleString()}`,
+          `  Blue Gems:     ${Number(def.blue_gems || 0).toLocaleString()}`,
+          `  Green Gems:    ${Number(def.green_gems || 0).toLocaleString()}`,
+          ``,
+          `Troops:`,
+          troopLines,
+          ``,
+          `  Total Troops:  ${totalTroops.toLocaleString()}`,
+          `  Approx. Defensive Power: ${Math.floor(approxDefPower).toLocaleString()}`,
+          ``,
+          `Recent Activity (last 24h):`,
+          recentActivity,
+        ].join("\n");
+      } else {
+        reportBody = [
+          `Target: ${def.name}`,
+          `Result Level: ${resultLevel}`,
+          ``,
+          `Spies Sent: ${spiesToSend.toLocaleString()}`,
+          `Spies Lost: ${spyLosses.toLocaleString()}`,
+          `Spies Returning: ${survivors.toLocaleString()}`,
+          ``,
+          `Your spies were detected and could not gather intel.`,
+        ].join("\n");
+      }
+
+      await sendMailTx(c, Number(atk.id), "spy", `Spy Report: ${def.name}`, reportBody);
       await sendMailTx(
         c,
         Number(def.id),
         "spy",
         `Counterintelligence Report`,
-        `${atk.name} sent spies to your kingdom.\nEnemy spies sent: ${spiesToSend.toLocaleString()}\nEnemy spies lost: ${spyLosses.toLocaleString()}\nYour spies lost: ${defenderSpyLosses.toLocaleString()}`,
+        [
+          `${atk.name} sent spies to your kingdom.`,
+          ``,
+          `Enemy Spies Sent: ${spiesToSend.toLocaleString()}`,
+          `Enemy Spies Lost: ${spyLosses.toLocaleString()}`,
+          `Your Spies Lost: ${defenderSpyLosses.toLocaleString()}`,
+          `Mission Outcome: ${success ? "Infiltration succeeded" : "Infiltration repelled"}`,
+        ].join("\n"),
       );
       await sendNoticeTx(
         c,
@@ -2541,11 +2619,11 @@ app.post("/api/war-room/:attacker/spy", requireAuth, async (req, res) => {
       return {
         success,
         ratio: Number(ratio.toFixed(3)),
+        resultLevel,
         spiesSent: spiesToSend,
         spyLosses,
         survivorsReturning: survivors,
         returnSeconds: SPY_RETURN_SECONDS,
-        intel,
       };
     });
     return res.json({ ok: true, ...out });
@@ -3280,18 +3358,18 @@ app.get("/api/settlements/:kingdom", async (req, res) => {
     );
     const buildings = await pool.query(
       `
-      SELECT sb.settlement_id, sb.building_code, sb.level, bt.name, bt.effect_text, bt.base_gold, bt.base_stone, bt.base_wood, bt.required_settlement_size, bt.base_build_seconds, bt.max_level, bt.city_only
+      SELECT sb.id, sb.settlement_id, sb.building_code, sb.level, bt.name, bt.effect_text, bt.base_gold, bt.base_stone, bt.base_wood, bt.required_settlement_size, bt.base_build_seconds, bt.max_level, bt.city_only
       FROM settlement_buildings sb
       JOIN settlement_building_types bt ON bt.code = sb.building_code
       JOIN settlements s ON s.id = sb.settlement_id
-      WHERE s.kingdom_id = $1
-      ORDER BY sb.settlement_id, sb.building_code
+      WHERE s.kingdom_id = $1 AND sb.level > 0
+      ORDER BY sb.settlement_id, sb.building_code, sb.id
       `,
       [kr.id],
     );
     const queue = await pool.query(
       `
-      SELECT id, settlement_id, building_code, target_level, started_at, completes_at, status
+      SELECT id, settlement_id, building_code, target_level, settlement_building_id, started_at, completes_at, status
       FROM settlement_build_queue
       WHERE kingdom_id=$1 AND status='queued'
       ORDER BY completes_at ASC
@@ -3326,7 +3404,7 @@ app.get("/api/settlements/:kingdom", async (req, res) => {
       FROM settlement_buildings sb
       JOIN settlement_building_types bt ON bt.code = sb.building_code
       JOIN settlements s ON s.id = sb.settlement_id
-      WHERE s.kingdom_id = $1
+      WHERE s.kingdom_id = $1 AND sb.level > 0
       GROUP BY sb.settlement_id
       `,
       [kr.id],
@@ -3476,14 +3554,6 @@ app.post("/api/settlements/:kingdom/found", requireAuth, async (req, res) => {
         [kr.id, name, settlementType, def.level, slots],
       );
       const settlementId = Number(ins.rows[0].id);
-      await c.query(
-        `
-        INSERT INTO settlement_buildings(settlement_id, building_code, level)
-        SELECT $1::bigint, code, 0 FROM settlement_building_types
-        ON CONFLICT (settlement_id, building_code) DO NOTHING
-        `,
-        [settlementId],
-      );
       await c.query(`INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`, [settlementId, "Settlement founded"]);
       return ins.rows[0];
     });
@@ -3529,12 +3599,15 @@ app.post("/api/settlements/:kingdom/build-building", requireAuth, async (req, re
         );
       }
 
-      const sb = await c.query(`SELECT level FROM settlement_buildings WHERE settlement_id=$1 AND building_code=$2 LIMIT 1`, [settlementId, buildingCode]);
-      const currentLevel = Number(sb.rows[0]?.level || 0);
-      if (currentLevel > 0) throw new Error("building already exists; use upgrade");
-
-      const inQueue = await c.query(`SELECT 1 FROM settlement_build_queue WHERE settlement_id=$1 AND building_code=$2 AND status='queued' LIMIT 1`, [settlementId, buildingCode]);
-      if (inQueue.rowCount) throw new Error("building already queued");
+      const slotCheck = await c.query(
+        `SELECT
+          (SELECT COUNT(*) FROM settlement_buildings WHERE settlement_id=$1) +
+          (SELECT COUNT(*) FROM settlement_build_queue WHERE settlement_id=$1 AND status='queued' AND settlement_building_id IS NULL) AS used`,
+        [settlementId],
+      );
+      const usedSlots = Number(slotCheck.rows[0]?.used || 0);
+      const totalSlots = Number(st.slots_total || 3);
+      if (usedSlots >= totalSlots) throw new Error(`settlement is full (${usedSlots}/${totalSlots} slots used)`);
 
       const costGold = Math.floor(Number(def.base_gold || 0));
       const costStone = Math.floor(Number(def.base_stone || 0));
@@ -3547,8 +3620,8 @@ app.post("/api/settlements/:kingdom/build-building", requireAuth, async (req, re
       const seconds = LOCAL_DEMO_FAST ? 20 : Math.max(300, Number(def.base_build_seconds || 10800));
       const q = await c.query(
         `
-        INSERT INTO settlement_build_queue(kingdom_id, settlement_id, building_code, target_level, started_at, completes_at, status)
-        VALUES ($1,$2,$3,1,now(), now() + ($4 * INTERVAL '1 second'), 'queued')
+        INSERT INTO settlement_build_queue(kingdom_id, settlement_id, building_code, target_level, settlement_building_id, started_at, completes_at, status)
+        VALUES ($1,$2,$3,1,NULL,now(), now() + ($4 * INTERVAL '1 second'), 'queued')
         RETURNING id, settlement_id, building_code, target_level, started_at, completes_at, status
         `,
         [kr.id, settlementId, buildingCode, seconds],
@@ -3630,7 +3703,7 @@ app.post("/api/settlements/:kingdom/destroy-building", requireAuth, async (req, 
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
   if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
   const settlementId = Number(parsed.data.settlementId);
-  const buildingCode = String(parsed.data.buildingCode || "").toLowerCase();
+  const buildingId = Number(parsed.data.buildingId);
 
   try {
     const out = await withTx(async (c) => {
@@ -3639,11 +3712,12 @@ app.post("/api/settlements/:kingdom/destroy-building", requireAuth, async (req, 
       const kr = k.rows[0];
       const s = await c.query(`SELECT id FROM settlements WHERE id=$1 AND kingdom_id=$2 FOR UPDATE`, [settlementId, kr.id]);
       if (!s.rowCount) throw new Error("settlement not found");
-      const sb = await c.query(`SELECT level FROM settlement_buildings WHERE settlement_id=$1 AND building_code=$2 FOR UPDATE`, [settlementId, buildingCode]);
-      if (!sb.rowCount || Number(sb.rows[0].level || 0) < 1) throw new Error("building not found");
-      await c.query(`UPDATE settlement_buildings SET level=GREATEST(level-1,0) WHERE settlement_id=$1 AND building_code=$2`, [settlementId, buildingCode]);
-      await c.query(`UPDATE settlements SET wellbeing = wellbeing - 75 WHERE id=$1`, [settlementId]);
-      await c.query(`INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`, [settlementId, `Destroyed one level of ${buildingCode.replaceAll("_", " ")}`]);
+      const sb = await c.query(`SELECT id, building_code, level FROM settlement_buildings WHERE id=$1 AND settlement_id=$2 FOR UPDATE`, [buildingId, settlementId]);
+      if (!sb.rowCount) throw new Error("building not found");
+      const buildingCode = String(sb.rows[0].building_code || "");
+      await c.query(`DELETE FROM settlement_buildings WHERE id=$1`, [buildingId]);
+      await c.query(`UPDATE settlements SET wellbeing = wellbeing - 50 WHERE id=$1`, [settlementId]);
+      await c.query(`INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`, [settlementId, `Demolished ${buildingCode.replaceAll("_", " ")}`]);
       return true;
     });
     return res.json({ ok: true, result: out });
@@ -3657,7 +3731,7 @@ app.post("/api/settlements/:kingdom/upgrade-building", requireAuth, async (req, 
   const parsed = settlementUpgradeBody.safeParse(req.body);
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
   if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
-  const { settlementId, buildingCode } = parsed.data;
+  const { settlementId, buildingId } = parsed.data;
 
   try {
     const out = await withTx(async (c) => {
@@ -3672,32 +3746,34 @@ app.post("/api/settlements/:kingdom/upgrade-building", requireAuth, async (req, 
       if (!s.rowCount) throw new Error("settlement not found");
       const st = s.rows[0];
 
+      const sb = await c.query(
+        `SELECT id, building_code, level FROM settlement_buildings WHERE id=$1 AND settlement_id=$2 FOR UPDATE`,
+        [buildingId, settlementId],
+      );
+      if (!sb.rowCount) throw new Error("building not found");
+      const currentLevel = Number(sb.rows[0].level || 0);
+      const buildingCode = String(sb.rows[0].building_code || "");
+
       const bt = await c.query(
-        `SELECT code, name, base_gold, base_stone, base_wood, max_level, city_only
-                , required_settlement_size, base_build_seconds
-         FROM settlement_building_types
-         WHERE code=$1 LIMIT 1`,
-        [String(buildingCode).toLowerCase()],
+        `SELECT code, name, base_gold, base_stone, base_wood, max_level, city_only, required_settlement_size, base_build_seconds
+         FROM settlement_building_types WHERE code=$1 LIMIT 1`,
+        [buildingCode],
       );
       if (!bt.rowCount) throw new Error("unknown settlement building");
       const def = bt.rows[0];
 
       const isCity = String(st.settlement_type || "").includes("city");
       if (Boolean(def.city_only) && !isCity) throw new Error("building requires a city settlement");
-      if (Number(st.level || 1) < Number(def.required_settlement_size || 1)) {
-        throw new Error(
-          `building requires settlement size ${Number(def.required_settlement_size || 1)} (${settlementTypeDisplay(Number(def.required_settlement_size || 1))})`,
-        );
-      }
 
-      const sb = await c.query(
-        `SELECT level FROM settlement_buildings WHERE settlement_id=$1 AND building_code=$2 LIMIT 1`,
-        [settlementId, def.code],
-      );
-      const currentLevel = Number(sb.rows[0]?.level || 0);
       const settlementLevelCap = Math.max(1, Number(st.level || 1));
       const effectiveMax = Math.min(Number(def.max_level || 10), settlementLevelCap);
       if (currentLevel >= effectiveMax) throw new Error(`building already maxed for settlement level (max ${effectiveMax})`);
+
+      const inQueue = await c.query(
+        `SELECT 1 FROM settlement_build_queue WHERE settlement_building_id=$1 AND status='queued' LIMIT 1`,
+        [buildingId],
+      );
+      if (inQueue.rowCount) throw new Error("building already queued for upgrade");
 
       const nextLevel = currentLevel + 1;
       const costGold = Math.floor(Number(def.base_gold || 0) * Math.pow(1.3, currentLevel));
@@ -3706,22 +3782,17 @@ app.post("/api/settlements/:kingdom/upgrade-building", requireAuth, async (req, 
       if (Number(kr.gold || 0) < costGold || Number(kr.stone || 0) < costStone || Number(kr.wood || 0) < costWood) {
         throw new Error(`not enough resources (need gold ${costGold}, stone ${costStone}, wood ${costWood})`);
       }
-      const inQueue = await c.query(
-        `SELECT 1 FROM settlement_build_queue WHERE settlement_id=$1 AND building_code=$2 AND status='queued' LIMIT 1`,
-        [settlementId, def.code],
-      );
-      if (inQueue.rowCount) throw new Error("building already queued");
 
       await c.query(`UPDATE kingdoms SET gold=gold-$2, stone=stone-$3, wood=wood-$4 WHERE id=$1`, [kr.id, costGold, costStone, costWood]);
       const secondsBase = Math.max(300, Number(def.base_build_seconds || 10800));
       const seconds = LOCAL_DEMO_FAST ? 20 : Math.floor(secondsBase * Math.pow(1.2, currentLevel));
       const ins = await c.query(
         `
-        INSERT INTO settlement_build_queue(kingdom_id, settlement_id, building_code, target_level, started_at, completes_at, status)
-        VALUES ($1,$2,$3,$4,now(), now() + ($5 * INTERVAL '1 second'), 'queued')
-        RETURNING id, settlement_id, building_code, target_level, started_at, completes_at, status
+        INSERT INTO settlement_build_queue(kingdom_id, settlement_id, building_code, target_level, settlement_building_id, started_at, completes_at, status)
+        VALUES ($1,$2,$3,$4,$5,now(), now() + ($6 * INTERVAL '1 second'), 'queued')
+        RETURNING id, settlement_id, building_code, target_level, settlement_building_id, started_at, completes_at, status
         `,
-        [kr.id, settlementId, def.code, nextLevel, seconds],
+        [kr.id, settlementId, def.code, nextLevel, buildingId, seconds],
       );
 
       await c.query(

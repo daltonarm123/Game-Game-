@@ -713,6 +713,22 @@ export async function ensureSchema(): Promise<void> {
   await pool.query(`UPDATE troop_types SET is_trainable = TRUE, gold_cost = 400, food_cost = 150, train_seconds = 3600, notes = 'Max 5 per Temple. Each priest generates 4 mana/hr.' WHERE code = 'priests' AND is_trainable = FALSE`);
   await pool.query(`ALTER TABLE settlement_building_types ADD COLUMN IF NOT EXISTS required_settlement_size INT NOT NULL DEFAULT 1`);
   await pool.query(`ALTER TABLE settlement_building_types ADD COLUMN IF NOT EXISTS base_build_seconds INT NOT NULL DEFAULT 10800`);
+  // Migrate settlement_buildings to allow multiple buildings of same type per settlement
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='settlement_buildings' AND column_name='id'
+      ) THEN
+        ALTER TABLE settlement_buildings ADD COLUMN id BIGSERIAL;
+        ALTER TABLE settlement_buildings DROP CONSTRAINT IF EXISTS settlement_buildings_pkey;
+        ALTER TABLE settlement_buildings ADD PRIMARY KEY (id);
+        DELETE FROM settlement_buildings WHERE level = 0;
+      END IF;
+    END $$
+  `);
+  await pool.query(`ALTER TABLE settlement_build_queue ADD COLUMN IF NOT EXISTS settlement_building_id BIGINT`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_index INT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_code TEXT NOT NULL DEFAULT 'spring'`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_started_at TIMESTAMPTZ NOT NULL DEFAULT now()`);

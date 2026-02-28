@@ -226,6 +226,22 @@ export async function ensureSchemaLite(): Promise<void> {
   await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS nw_value NUMERIC(8,2) NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE settlement_building_types ADD COLUMN IF NOT EXISTS required_settlement_size INT NOT NULL DEFAULT 1`);
   await pool.query(`ALTER TABLE settlement_building_types ADD COLUMN IF NOT EXISTS base_build_seconds INT NOT NULL DEFAULT 10800`);
+  // Migrate settlement_buildings to allow multiple buildings of same type per settlement
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='settlement_buildings' AND column_name='id'
+      ) THEN
+        ALTER TABLE settlement_buildings ADD COLUMN id BIGSERIAL;
+        ALTER TABLE settlement_buildings DROP CONSTRAINT IF EXISTS settlement_buildings_pkey;
+        ALTER TABLE settlement_buildings ADD PRIMARY KEY (id);
+        DELETE FROM settlement_buildings WHERE level = 0;
+      END IF;
+    END $$
+  `);
+  await pool.query(`ALTER TABLE settlement_build_queue ADD COLUMN IF NOT EXISTS settlement_building_id BIGINT`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS tax_rate INT NOT NULL DEFAULT 25`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_status TEXT NOT NULL DEFAULT 'none'`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_requested_at TIMESTAMPTZ`);
