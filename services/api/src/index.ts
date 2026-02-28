@@ -1497,6 +1497,60 @@ app.post("/api/dev/register", async (req, res) => {
   }
 });
 
+// Creates/resets the DEV admin account with a maxed-out kingdom
+app.post("/api/dev/setup-dev-account", async (req, res) => {
+  const DEV_USER_ID = "00000000-0000-0000-0000-000000000001";
+  const DEV_PASSWORD = "devpassword123";
+  try {
+    const out = await withTx(async (c) => {
+      const passwordHash = hashPassword(DEV_PASSWORD);
+      await c.query(
+        `INSERT INTO app_users(id, username, email, password_hash, email_verified, is_admin)
+         VALUES ($1,'DEV','dev@crownforge.local',$2,true,true)
+         ON CONFLICT (id) DO UPDATE SET
+           username='DEV', password_hash=$2, email_verified=true, is_admin=true`,
+        [DEV_USER_ID, passwordHash],
+      );
+      // Delete existing kingdom so we can recreate cleanly
+      await c.query(`DELETE FROM kingdoms WHERE user_id=$1`, [DEV_USER_ID]);
+      const k = await c.query(
+        `INSERT INTO kingdoms(user_id, name, gold, food, wood, stone, land, horses)
+         VALUES ($1,'DEV Kingdom',999999999,999999999,999999999,999999999,500000,999999)
+         RETURNING id`,
+        [DEV_USER_ID],
+      );
+      const kingdomId = k.rows[0].id;
+      await c.query(
+        `INSERT INTO kingdom_buildings(kingdom_id, building_code, level)
+         SELECT $1::bigint, code, 9999 FROM building_types
+         ON CONFLICT (kingdom_id, building_code) DO UPDATE SET level=9999`,
+        [kingdomId],
+      );
+      await c.query(
+        `INSERT INTO kingdom_troops(kingdom_id, troop_code, amount)
+         SELECT $1::bigint, code, 999999 FROM troop_types
+         ON CONFLICT (kingdom_id, troop_code) DO UPDATE SET amount=999999`,
+        [kingdomId],
+      );
+      // Max out all research
+      const researchCodes = await c.query(`SELECT code FROM research_types`);
+      for (const row of researchCodes.rows) {
+        await c.query(
+          `INSERT INTO kingdom_research(kingdom_id, research_code, level)
+           VALUES ($1,$2,10)
+           ON CONFLICT (kingdom_id, research_code) DO UPDATE SET level=10`,
+          [kingdomId, row.code],
+        );
+      }
+      const session = await createAuthSession(c, DEV_USER_ID);
+      return { session, kingdomId };
+    });
+    return res.json({ ok: true, username: "DEV", password: DEV_PASSWORD, token: out.session.token, kingdomId: out.kingdomId });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 app.get("/api/kingdom/:name", async (req, res) => {
   const name = String(req.params.name || "").trim();
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
