@@ -1,3 +1,17 @@
 *, *::before, *::after { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; width: 100%; height: 100%; }
+html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow-x: hidden; }
 #root { min-height: 100%; }
+
+/* Mobile: make tables scroll horizontally instead of overflowing */
+@media (max-width: 979px) {
+  table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+  input, select, textarea {
+    max-width: 100%;
+  }
+}

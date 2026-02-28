@@ -1659,6 +1659,33 @@ app.post("/api/dev/give-starter-troops", async (req, res) => {
   }
 });
 
+// Fix a kingdom's land if it went negative due to the free starter castle
+app.post("/api/dev/fix-castle-land", async (req, res) => {
+  const kingdom = String(req.body?.kingdom || "").trim();
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  try {
+    const k = await pool.query(`SELECT id, name, land FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const kr = k.rows[0];
+    const usageQ = await pool.query(
+      `SELECT COALESCE(SUM(kb.level * bt.land_cost), 0)::int AS used_land
+       FROM kingdom_buildings kb JOIN building_types bt ON bt.code = kb.building_code
+       WHERE kb.kingdom_id = $1`,
+      [kr.id],
+    );
+    const usedLand = Number(usageQ.rows[0]?.used_land || 0);
+    const currentLand = Number(kr.land || 0);
+    if (usedLand > currentLand) {
+      const needed = usedLand - currentLand + 50; // +50 buffer so they can build
+      await pool.query(`UPDATE kingdoms SET land = land + $2 WHERE id=$1`, [kr.id, needed]);
+    }
+    const newLand = await pool.query(`SELECT land FROM kingdoms WHERE id=$1`, [kr.id]);
+    return res.json({ ok: true, message: `${kr.name}: land fixed to ${Number(newLand.rows[0]?.land || 0).toLocaleString()} (was ${currentLand}, used ${usedLand})` });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 app.get("/api/kingdom/:name", async (req, res) => {
   const name = String(req.params.name || "").trim();
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });

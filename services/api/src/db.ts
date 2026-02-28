@@ -870,15 +870,13 @@ export async function ensureSchema(): Promise<void> {
   `);
 
   // Castles cost 40 land. Kingdoms that received the free starter castle via migration
-  // never paid that land cost. Give them +40 land once to compensate.
-  // Guarded by a flag in game_state so it only ever runs once.
-  await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS castle_land_granted_at TIMESTAMPTZ`);
-  const grantCheck = await pool.query(`SELECT castle_land_granted_at FROM game_state WHERE id=1 LIMIT 1`);
-  if (!grantCheck.rows[0]?.castle_land_granted_at) {
-    await pool.query(`
-      UPDATE kingdoms k
-      SET land = land + 40
-      WHERE NOT EXISTS (
+  // never paid that land cost. Give them +40 land once, tracked per-kingdom.
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS castle_land_granted BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`
+    UPDATE kingdoms k
+    SET land = land + 40, castle_land_granted = TRUE
+    WHERE castle_land_granted = FALSE
+      AND NOT EXISTS (
         SELECT 1 FROM build_queue bq
         WHERE bq.kingdom_id = k.id AND bq.building_code = 'castles'
       )
@@ -886,7 +884,5 @@ export async function ensureSchema(): Promise<void> {
         SELECT 1 FROM kingdom_buildings kb
         WHERE kb.kingdom_id = k.id AND kb.building_code = 'castles' AND kb.level >= 1
       )
-    `);
-    await pool.query(`UPDATE game_state SET castle_land_granted_at = now() WHERE id=1`);
-  }
+  `);
 }

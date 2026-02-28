@@ -5493,28 +5493,106 @@ function AccountView() {
 // ── How To Play View ──────────────────────────────────────────────────────────
 
 function HowToPlayView() {
-  const [openSection, setOpenSection] = useState<string | null>("introduction");
+  const [openSection, setOpenSection] = useState<string | null>("start-here");
 
   const sections = [
     {
-      id: "introduction",
-      title: "Introduction",
+      id: "start-here",
+      title: "Start Here",
       content: (
         <div style={{ fontSize: 14, lineHeight: 1.8, color: TEXT_MUTED }}>
-          <p>Welcome to Crownforge, a medieval kingdom strategy game. Build and grow your kingdom, train armies,
-          forge alliances, and conquer your rivals. The game runs in real time — resources are generated and
-          queues advance on each tick (every 5 minutes).</p>
-          <p style={{ marginTop: 8 }}>Your goal is to increase your kingdom's Networth, which is calculated from
-          all your assets: land, resources, troops, and buildings.</p>
+          <p>Crownforge is a live kingdom strategy game built around economy pressure, troop timing, and smart wars.</p>
+          <p style={{ marginTop: 8 }}>Everything moves on scheduled ticks, so consistent small decisions beat random big swings.</p>
+          <p style={{ marginTop: 8 }}>Your objective is simple: grow land, keep your economy stable, and climb networth without exposing your kingdom to easy counters.</p>
+        </div>
+      ),
+    },
+    {
+      id: "first-hour",
+      title: "First Hour Plan",
+      content: (
+        <div style={{ fontSize: 14, lineHeight: 1.8, color: TEXT_MUTED }}>
+          <p><strong style={{ color: TEXT_MAIN }}>1) Secure income:</strong> prioritize food and gold flow before aggressive troop queues.</p>
+          <p style={{ marginTop: 8 }}><strong style={{ color: TEXT_MAIN }}>2) Lock in growth:</strong> use Explore to add safe land while your core economy stabilizes.</p>
+          <p style={{ marginTop: 8 }}><strong style={{ color: TEXT_MAIN }}>3) Build options:</strong> add the military and utility buildings that unlock your preferred playstyle.</p>
+        </div>
+      ),
+    },
+    {
+      id: "economy",
+      title: "Economy and Population",
+      content: (
+        <div style={{ fontSize: 14, lineHeight: 1.8, color: TEXT_MUTED }}>
+          <p>Gold comes from taxation, food supports your population and army, and wood/stone fuel construction speed.</p>
+          <p style={{ marginTop: 8 }}>Tax rate is a tradeoff: higher taxes increase short-term gold but slow peasant growth. Adjust it based on whether you are building, training, or recovering.</p>
+          <p style={{ marginTop: 8 }}>If food production falls behind upkeep, your kingdom starts bleeding momentum. Keep surplus food as a buffer before long war pushes.</p>
+        </div>
+      ),
+    },
+    {
+      id: "combat-loop",
+      title: "Combat Loop",
+      content: (
+        <div style={{ fontSize: 14, lineHeight: 1.8, color: TEXT_MUTED }}>
+          <p>Most successful wars follow a loop: <strong style={{ color: TEXT_MAIN }}>Spy -&gt; Plan -&gt; Attack -&gt; Recover</strong>.</p>
+          <p style={{ marginTop: 8 }}>Use intel first, send only what you need, and avoid overcommitting troops that you need for defense.</p>
+          <p style={{ marginTop: 8 }}>Winning land is important, but staying economically healthy after the hit is what keeps you climbing.</p>
+        </div>
+      ),
+    },
+    {
+      id: "troops",
+      title: "Troop Roles",
+      content: (
+        <div>
+          <p style={{ fontSize: 14, color: TEXT_MUTED, marginBottom: 10 }}>Each unit has a job. Build around roles, not just raw numbers.</p>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr>
+                <th style={{ padding: "6px 8px", textAlign: "left", color: ACCENT, borderBottom: "1px solid rgba(216,176,117,.25)" }}>Troop</th>
+                <th style={{ padding: "6px 8px", textAlign: "left", color: ACCENT, borderBottom: "1px solid rgba(216,176,117,.25)" }}>Role</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(TROOP_META).map(([code, meta]) => (
+                <tr key={code}>
+                  <td style={{ padding: "5px 8px", borderBottom: "1px solid rgba(255,255,255,.06)", textTransform: "capitalize" }}>{code.replace(/_/g, " ")}</td>
+                  <td style={{ padding: "5px 8px", borderBottom: "1px solid rgba(255,255,255,.06)", color: TEXT_MUTED }}>{meta.role}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ),
+    },
+    {
+      id: "progression",
+      title: "Research, Faith, and Seasons",
+      content: (
+        <div style={{ fontSize: 14, lineHeight: 1.8, color: TEXT_MUTED }}>
+          <p>Research provides permanent efficiency gains. Focus your queue on a single strategic direction instead of spreading levels too thin.</p>
+          <p style={{ marginTop: 8 }}>Temples, priests, and mana power your prayers. Save mana for windows where the bonus changes an outcome, not just because it is available.</p>
+          <p style={{ marginTop: 8 }}>Season bonuses rotate. Check the current season and time your economic or military pushes to match it.</p>
+        </div>
+      ),
+    },
+    {
+      id: "social",
+      title: "Alliances and Diplomacy",
+      content: (
+        <div style={{ fontSize: 14, lineHeight: 1.8, color: TEXT_MUTED }}>
+          <p>Alliance coordination is a force multiplier. Shared intel and coordinated hits beat isolated attacks.</p>
+          <p style={{ marginTop: 8 }}>Use Pigeons and alliance forums to set target order, return windows, and backup plans.</p>
+          <p style={{ marginTop: 8 }}>Diplomacy is part of progression too: avoid unnecessary wars while you are still building your kingdom core.</p>
         </div>
       ),
     },
     {
       id: "networth",
-      title: "Networth",
+      title: "Networth Math",
       content: (
         <div>
-          <p style={{ fontSize: 14, color: TEXT_MUTED, marginBottom: 10 }}>Your networth is the sum of all your assets multiplied by their respective values:</p>
+          <p style={{ fontSize: 14, color: TEXT_MUTED, marginBottom: 10 }}>Networth tracks total kingdom strength from your main assets.</p>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
             <thead>
               <tr>
@@ -5541,121 +5619,13 @@ function HowToPlayView() {
         </div>
       ),
     },
-    {
-      id: "early-game",
-      title: "The Early Game",
-      content: (
-        <div style={{ fontSize: 14, lineHeight: 1.8, color: TEXT_MUTED }}>
-          <p><strong style={{ color: TEXT_MAIN }}>Exploring:</strong> Use the Explore action in the War Room to gain land. Land is the foundation of your economy — more land means more buildings and more resources.</p>
-          <p style={{ marginTop: 8 }}><strong style={{ color: TEXT_MAIN }}>Food:</strong> Build Farms early and often. If your kingdom runs out of food, your population will decrease. Keep food production well above your population's consumption.</p>
-          <p style={{ marginTop: 8 }}><strong style={{ color: TEXT_MAIN }}>Gold:</strong> Gold is used for everything — building, training, research. Build Markets and set a reasonable tax rate (20-30% is typical). Keep your population happy to maximize tax income.</p>
-        </div>
-      ),
-    },
-    {
-      id: "buildings",
-      title: "Buildings",
-      content: (
-        <div style={{ fontSize: 14, lineHeight: 1.8, color: TEXT_MUTED }}>
-          <p>Buildings are constructed from the Buildings tab. Each building has a level and provides different bonuses:</p>
-          <ul style={{ marginTop: 8, paddingLeft: 20 }}>
-            <li><strong style={{ color: TEXT_MAIN }}>Farms</strong> — Generate food (+120/hr each)</li>
-            <li><strong style={{ color: TEXT_MAIN }}>Lumberyards</strong> — Generate wood (+80/hr each)</li>
-            <li><strong style={{ color: TEXT_MAIN }}>Quarries</strong> — Generate stone (+80/hr each)</li>
-            <li><strong style={{ color: TEXT_MAIN }}>Houses</strong> — Expand population capacity</li>
-            <li><strong style={{ color: TEXT_MAIN }}>Barracks</strong> — Required to train infantry</li>
-            <li><strong style={{ color: TEXT_MAIN }}>Castles</strong> — Defensive bonus + population cap</li>
-            <li><strong style={{ color: TEXT_MAIN }}>Guildhalls</strong> — Required for spy operations</li>
-            <li><strong style={{ color: TEXT_MAIN }}>Temples</strong> — Generate mana for prayers</li>
-          </ul>
-        </div>
-      ),
-    },
-    {
-      id: "troops",
-      title: "Troops",
-      content: (
-        <div>
-          <p style={{ fontSize: 14, color: TEXT_MUTED, marginBottom: 10 }}>Train troops from the Train Troops or War Room tab. Different troops serve different roles:</p>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr>
-                <th style={{ padding: "6px 8px", textAlign: "left", color: ACCENT, borderBottom: "1px solid rgba(216,176,117,.25)" }}>Troop</th>
-                <th style={{ padding: "6px 8px", textAlign: "left", color: ACCENT, borderBottom: "1px solid rgba(216,176,117,.25)" }}>Role</th>
-              </tr>
-            </thead>
-            <tbody>
-              {Object.entries(TROOP_META).map(([code, meta]) => (
-                <tr key={code}>
-                  <td style={{ padding: "5px 8px", borderBottom: "1px solid rgba(255,255,255,.06)", textTransform: "capitalize" }}>{code.replace(/_/g, " ")}</td>
-                  <td style={{ padding: "5px 8px", borderBottom: "1px solid rgba(255,255,255,.06)", color: TEXT_MUTED }}>{meta.role}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ),
-    },
-    {
-      id: "diplomacy",
-      title: "Diplomacy & Alliances",
-      content: (
-        <div style={{ fontSize: 14, lineHeight: 1.8, color: TEXT_MUTED }}>
-          <p><strong style={{ color: TEXT_MAIN }}>Alliances:</strong> Join or create an alliance from the Alliance tab. Alliances provide mutual protection, shared resources, and coordinated attacks.</p>
-          <p style={{ marginTop: 8 }}><strong style={{ color: TEXT_MAIN }}>Diplomacy:</strong> Use Diplomats (trained at Embassies) to send diplomatic missions to other kingdoms. Establish trade agreements, peace treaties, or declare war.</p>
-          <p style={{ marginTop: 8 }}><strong style={{ color: TEXT_MAIN }}>Pigeons:</strong> Send messages to other kingdoms using the Pigeons tab. Coordinate with allies or negotiate with rivals.</p>
-        </div>
-      ),
-    },
-    {
-      id: "research",
-      title: "Research",
-      content: (
-        <div style={{ fontSize: 14, lineHeight: 1.8, color: TEXT_MUTED }}>
-          <p>Research technologies from the Research tab. Each technology has multiple levels and provides compounding percentage bonuses to your kingdom.</p>
-          <p style={{ marginTop: 8 }}>Technologies are organized into categories: Economy, Military, Espionage, and more. Focus on technologies that support your playstyle.</p>
-          <p style={{ marginTop: 8 }}>Some technologies have prerequisites — you must reach a certain level in one tech before unlocking another.</p>
-        </div>
-      ),
-    },
-    {
-      id: "seasons",
-      title: "Seasons",
-      content: (
-        <div style={{ fontSize: 14, lineHeight: 1.8, color: TEXT_MUTED }}>
-          <p>Crownforge has four seasons that rotate over time. Each season provides different bonuses and penalties to resource production, troop effectiveness, and more.</p>
-          <p style={{ marginTop: 8 }}>Plan your economy and military actions around the current season for maximum efficiency.</p>
-        </div>
-      ),
-    },
-    {
-      id: "settlements",
-      title: "Settlements",
-      content: (
-        <div style={{ fontSize: 14, lineHeight: 1.8, color: TEXT_MUTED }}>
-          <p>As your kingdom grows, you can establish settlements — smaller colonies that provide additional resources and population.</p>
-          <p style={{ marginTop: 8 }}>Settlements unlock at certain land milestones. Each settlement can be upgraded with buildings independently of your main kingdom.</p>
-          <p style={{ marginTop: 8 }}>Keep your settlement wellbeing high to maximize their productivity.</p>
-        </div>
-      ),
-    },
-    {
-      id: "gems",
-      title: "Gems",
-      content: (
-        <div style={{ fontSize: 14, lineHeight: 1.8, color: TEXT_MUTED }}>
-          <p><strong style={{ color: "#7eb8ff" }}>Blue Gems</strong> are the premium currency. Earn them through achievements, special events, and purchases. Use them for premium bonuses.</p>
-          <p style={{ marginTop: 8 }}><strong style={{ color: "#7fdb8a" }}>Green Gems</strong> are earned through gameplay — alliance contributions, daily bonuses, and completing missions.</p>
-        </div>
-      ),
-    },
   ];
 
   return (
     <div style={{ display: "grid", gap: 8 }}>
       <div style={CARD}>
         <div style={{ fontFamily: FONT_DISPLAY, fontSize: 28, fontWeight: 800, color: "#fff7ec" }}>How To Play</div>
-        <div style={{ color: TEXT_MUTED, marginTop: 4, fontSize: 14 }}>A guide to Crownforge — click a section to expand it.</div>
+        <div style={{ color: TEXT_MUTED, marginTop: 4, fontSize: 14 }}>Crownforge field manual. Click a section to expand it.</div>
       </div>
       {sections.map((sec) => {
         const isOpen = openSection === sec.id;
@@ -5666,7 +5636,7 @@ function HowToPlayView() {
               style={{ background: "none", border: "none", cursor: "pointer", width: "100%", textAlign: "left", padding: 0, display: "flex", justifyContent: "space-between", alignItems: "center" }}
             >
               <span style={{ fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 700, color: isOpen ? ACCENT : TEXT_MAIN }}>{sec.title}</span>
-              <span style={{ color: ACCENT, fontSize: 18 }}>{isOpen ? "▲" : "▼"}</span>
+              <span style={{ color: ACCENT, fontSize: 18 }}>{isOpen ? "-" : "+"}</span>
             </button>
             {isOpen ? <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(216,176,117,.2)" }}>{sec.content}</div> : null}
           </div>
@@ -5679,6 +5649,7 @@ function HowToPlayView() {
 function App() {
   const [activeId, setActiveId] = useState("overview");
   const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
+  const [navOpen, setNavOpen] = useState(() => (typeof window !== "undefined" ? window.innerWidth >= 980 : true));
   const [auth, setAuth] = useState<AuthState | null>(() => {
     try {
       const raw = localStorage.getItem(AUTH_STORAGE_KEY);
@@ -5694,7 +5665,7 @@ function App() {
   const headerQuickNav = [topNav[0], topNav[1], topNav[2], NAV_ITEMS.find((x) => x.id === "overview"), NAV_ITEMS.find((x) => x.id === "logout")].filter(Boolean) as NavItem[];
 
   useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < 980);
+    const onResize = () => { const m = window.innerWidth < 980; setIsMobile(m); if (!m) setNavOpen(true); };
     onResize();
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
@@ -5762,6 +5733,15 @@ function App() {
     >
       <header style={{ borderBottom: "1px solid rgba(217,182,118,.22)", padding: isMobile ? "12px 14px" : "14px 26px", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr auto", alignItems: "center", gap: 14, background: "rgba(24,24,27,0.85)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {isMobile && (
+            <button
+              onClick={() => setNavOpen((o) => !o)}
+              style={{ background: "transparent", border: "1px solid rgba(216,176,117,.5)", borderRadius: 8, color: TEXT_MAIN, cursor: "pointer", fontSize: 22, padding: "6px 10px", lineHeight: 1, flexShrink: 0 }}
+              aria-label="Toggle navigation"
+            >
+              {navOpen ? "✕" : "☰"}
+            </button>
+          )}
           <div
             style={{
               width: 56,
@@ -5789,7 +5769,7 @@ function App() {
             Crownforge
           </button>
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", color: "#f7eee0", fontFamily: FONT_DISPLAY, fontSize: 16, flexWrap: "wrap", justifyContent: isMobile ? "flex-start" : "flex-end" }}>
+        {!isMobile && <div style={{ display: "flex", gap: 8, alignItems: "center", color: "#f7eee0", fontFamily: FONT_DISPLAY, fontSize: 16, flexWrap: "wrap", justifyContent: "flex-end" }}>
           {headerQuickNav.map((item) => (
             <button
               key={`quick-${item.id}`}
@@ -5808,7 +5788,7 @@ function App() {
               {item.label}
             </button>
           ))}
-        </div>
+        </div>}
       </header>
 
       <div
@@ -5821,13 +5801,13 @@ function App() {
             "linear-gradient(180deg, rgba(36,29,24,0.35), rgba(24,22,23,0.75))",
         }}
       >
-        <aside style={{ ...CARD, height: "fit-content", position: isMobile ? "relative" : "sticky", top: 16, background: "linear-gradient(180deg, rgba(29,29,33,0.86), rgba(19,19,22,0.88))" }}>
+        <aside style={{ ...CARD, height: "fit-content", position: isMobile ? "relative" : "sticky", top: 16, background: "linear-gradient(180deg, rgba(29,29,33,0.86), rgba(19,19,22,0.88))", display: isMobile && !navOpen ? "none" : undefined }}>
           <div style={{ fontWeight: 800, marginBottom: 8, fontSize: isMobile ? 24 : 28, fontFamily: FONT_DISPLAY }}>Top Menu</div>
           <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
             {topNav.map((item) => (
               <button
                 key={item.id}
-                onClick={() => setActiveId(item.id)}
+                onClick={() => { setActiveId(item.id); if (isMobile) setNavOpen(false); }}
                 style={{
                   textAlign: "left",
                   display: "flex",
@@ -5850,11 +5830,11 @@ function App() {
           </div>
 
           <div style={{ fontWeight: 800, marginBottom: 8, fontSize: isMobile ? 24 : 28, fontFamily: FONT_DISPLAY }}>Kingdom Menu</div>
-          <div style={{ display: "grid", gap: 6, gridTemplateColumns: isMobile ? "repeat(auto-fit,minmax(145px,1fr))" : "1fr" }}>
+          <div style={{ display: "grid", gap: 6, gridTemplateColumns: isMobile ? "repeat(auto-fit,minmax(140px,1fr))" : "1fr" }}>
             {kingdomNav.map((item) => (
               <button
                 key={item.id}
-                onClick={() => setActiveId(item.id)}
+                onClick={() => { setActiveId(item.id); if (isMobile) setNavOpen(false); }}
                 style={{
                   textAlign: "left",
                   display: "flex",
