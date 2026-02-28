@@ -676,6 +676,17 @@ function premiumGemMultiplier(row: any, now = new Date()) {
   return Number((1.25 + Math.min(0.75, loyaltySteps * 0.05)).toFixed(2));
 }
 
+const PREMIUM_PLANS = [
+  { code: "1m", label: "1 Month", months: 1, days: 30, priceUsd: 5, savingsUsd: 0, savingsPercent: 0, benefit: "Daily Blue Gems" },
+  { code: "3m", label: "3 Months", months: 3, days: 90, priceUsd: 14, savingsUsd: 1, savingsPercent: 7, benefit: "Daily Blue Gems" },
+  { code: "6m", label: "6 Months", months: 6, days: 180, priceUsd: 25, savingsUsd: 5, savingsPercent: 16, benefit: "Daily Blue Gems" },
+  { code: "12m", label: "12 Months", months: 12, days: 365, priceUsd: 45, savingsUsd: 15, savingsPercent: 25, benefit: "Daily Blue Gems" },
+];
+
+function premiumPlansPayload() {
+  return PREMIUM_PLANS.map((p) => ({ ...p }));
+}
+
 function premiumStatusFromRow(row: any, now = new Date()) {
   const active = isPremiumActive(row, now);
   const startedAt = row?.premium_started_at ? new Date(row.premium_started_at) : null;
@@ -1246,7 +1257,20 @@ app.get("/api/auth/me", async (req, res) => {
 
 app.get("/api/premium/status", requireAuth, async (req, res) => {
   const session = (req as any).authSession;
-  return res.json({ ok: true, premium: premiumStatusFromRow(session) });
+  return res.json({
+    ok: true,
+    paymentEnabled: false,
+    premium: premiumStatusFromRow(session),
+    plans: premiumPlansPayload(),
+  });
+});
+
+app.get("/api/premium/plans", async (_req, res) => {
+  return res.json({
+    ok: true,
+    paymentEnabled: false,
+    plans: premiumPlansPayload(),
+  });
 });
 
 app.get("/api/stream/:kingdom", async (req, res) => {
@@ -3520,9 +3544,26 @@ app.get("/api/pigeons/:kingdom", async (req, res) => {
   const filterKind = ["all", "system", "attack", "spy", "player"].includes(filterKindRaw) ? filterKindRaw : "all";
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
   try {
-    const k = await pool.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
+    const k = await pool.query(`SELECT id, user_id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
     if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
     const kingdomId = Number(k.rows[0].id);
+
+    if (filterKind !== "all") {
+      const token = extractAuthToken(req);
+      const session = token ? await getAuthSession(token) : null;
+      if (!session) return res.status(403).json({ ok: false, error: "premium required for filtered pigeon views" });
+      if (String(k.rows[0].user_id) !== String(session.user_id)) {
+        return res.status(403).json({ ok: false, error: "filtered pigeon views require kingdom ownership" });
+      }
+      const premiumQ = await pool.query(
+        `SELECT premium_started_at, premium_ends_at FROM app_users WHERE id=$1 LIMIT 1`,
+        [session.user_id],
+      );
+      if (!isPremiumActive(premiumQ.rows[0] || null)) {
+        return res.status(403).json({ ok: false, error: "premium required for filtered pigeon views" });
+      }
+    }
+
     const rows = await pool.query(
       `SELECT id, mail_kind, subject, body, created_at, read_at
        FROM kingdom_mail

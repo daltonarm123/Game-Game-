@@ -128,6 +128,17 @@ type AuthState = {
   expiresAt?: string;
 };
 
+type PremiumPlan = {
+  code: string;
+  label: string;
+  months: number;
+  days: number;
+  priceUsd: number;
+  savingsUsd: number;
+  savingsPercent: number;
+  benefit: string;
+};
+
 const BUILDING_META: Record<string, { sigil: string; summary: string; unlocks: string }> = {
   archery_ranges: { sigil: "AR", summary: "Houses up to 20 archers per range built. Required to train ranged military units.", unlocks: "Archers, Crossbowmen" },
   barns: { sigil: "BN", summary: "Increases food storage capacity by 10,000 per barn. Reduces the risk of food spoilage.", unlocks: "Food storage" },
@@ -5047,6 +5058,15 @@ function RankingsView() {
 
   const myKingdom = localStorage.getItem(KINGDOM_STORAGE_KEY) || "";
   const authToken = getToken();
+  const premiumActive = (() => {
+    try {
+      const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+      const parsed = raw ? (JSON.parse(raw) as AuthState) : null;
+      return Boolean(parsed?.user?.premium?.active);
+    } catch {
+      return false;
+    }
+  })();
 
   async function load(pg = page, q = search, currentTab = tab) {
     setLoading(true);
@@ -5272,13 +5292,18 @@ function RankingsView() {
                           {!isMe && (
                             <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
                               <button
-                                title="View premium networth chart"
+                                title={premiumActive ? "View premium networth chart" : "Premium required"}
+                                disabled={!premiumActive}
                                 onClick={() => {
+                                  if (!premiumActive) {
+                                    setChartError("Premium required for networth history charts.");
+                                    return;
+                                  }
                                   const target = String(k.name || "");
                                   setChartKingdom(target);
                                   void loadChart(target, chartWindow);
                                 }}
-                                style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 12 }}
+                                style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 12, opacity: premiumActive ? 1 : 0.7 }}
                               >
                                 Chart
                               </button>
@@ -5337,7 +5362,10 @@ function PigeonsView() {
     setLoading(true);
     setError("");
     try {
-      const r = await fetch(`${API_BASE}/api/pigeons/${encodeURIComponent(kingdom)}?limit=100&kind=${encodeURIComponent(filterKind)}`);
+      const r = await fetch(
+        `${API_BASE}/api/pigeons/${encodeURIComponent(kingdom)}?limit=100&kind=${encodeURIComponent(filterKind)}`,
+        { headers: authHeaders() },
+      );
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       setMessages(j.items || []);
@@ -5348,8 +5376,14 @@ function PigeonsView() {
     }
   }
 
-  useEffect(() => { void load(kindFilter); }, []);
-  useEffect(() => { void load(kindFilter); }, [kindFilter]);
+  useEffect(() => {
+    if (!premiumActive && kindFilter !== "all") {
+      setKindFilter("all");
+      setStatusMsg("Premium required: message type filtering and mass delete are premium tools.");
+      return;
+    }
+    void load(kindFilter);
+  }, [kindFilter, premiumActive]);
   useKingdomStream(kingdom, () => { void load(); });
 
   async function markRead(id: number) {
@@ -5445,7 +5479,13 @@ function PigeonsView() {
           <button onClick={() => setTab("outbox")} style={{ ...BTN_STYLE, background: tab === "outbox" ? "rgba(216,176,117,.45)" : "rgba(8,8,10,.62)", fontSize: 14, padding: "8px 16px" }}>
             Outbox
           </button>
-          <select value={kindFilter} onChange={(e) => setKindFilter(e.target.value as any)} style={{ ...INPUT_STYLE, minWidth: 0, flex: "1 1 160px", fontSize: 13 }}>
+          <select
+            value={kindFilter}
+            onChange={(e) => setKindFilter(e.target.value as any)}
+            disabled={!premiumActive}
+            title={premiumActive ? "Filter pigeon types" : "Premium required"}
+            style={{ ...INPUT_STYLE, minWidth: 0, flex: "1 1 160px", fontSize: 13, opacity: premiumActive ? 1 : 0.8 }}
+          >
             <option value="all">All Types</option>
             <option value="player">Player</option>
             <option value="attack">Attack</option>
@@ -6065,6 +6105,8 @@ function AccountView() {
   const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "");
   const [shieldData, setShieldData] = useState<any>(null);
   const [gemsData, setGemsData] = useState<any>(null);
+  const [premiumData, setPremiumData] = useState<any>(null);
+  const [premiumPlans, setPremiumPlans] = useState<PremiumPlan[]>([]);
   const [referralData, setReferralData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [shieldBusy, setShieldBusy] = useState(false);
@@ -6087,6 +6129,12 @@ function AccountView() {
       if (refRes.ok && refJson?.ok) {
         setReferralData(refJson);
       }
+      const premiumRes = await fetch(`${API_BASE}/api/premium/status`, { headers: authHeaders() });
+      const premiumJson = await premiumRes.json();
+      if (premiumRes.ok && premiumJson?.ok) {
+        setPremiumData(premiumJson?.premium || null);
+        setPremiumPlans(Array.isArray(premiumJson?.plans) ? premiumJson.plans : []);
+      }
     } catch {}
     finally { setLoading(false); }
   }
@@ -6103,7 +6151,7 @@ function AccountView() {
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setStatusMsg("Shield queued. It will activate in 24 hours.");
+      setStatusMsg(j?.premiumShieldUsed ? "Premium shield activated immediately for 48 hours." : "Shield queued. It will activate in 24 hours.");
       await load();
     } catch (e: any) {
       setStatusMsg(`Shield failed: ${String(e?.message || e)}`);
@@ -6174,6 +6222,44 @@ function AccountView() {
           special events, and purchases. Use them to unlock premium features and bonuses.
           Green Gems are earned through alliance contributions and special missions.
         </div>
+      </div>
+
+      <div style={CARD}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, marginBottom: 10 }}>Premium</div>
+        <div style={{ fontSize: 14, color: TEXT_MUTED, marginBottom: 10, lineHeight: 1.6 }}>
+          Premium unlocks extra tools in Crownforge: filtered/mass pigeon management, networth history charts,
+          improved blue gem rate, and one instant 48-hour shield each 30 days while active.
+        </div>
+        <div style={{ marginBottom: 12, fontSize: 14 }}>
+          Status:{" "}
+          <span style={{ color: premiumData?.active ? "#a8e6a3" : "#ffb2a3", fontWeight: 700 }}>
+            {premiumData?.active ? "Active" : "Inactive"}
+          </span>
+          {premiumData?.endsAt ? (
+            <span style={{ color: TEXT_MUTED }}>
+              {" "}until {new Date(String(premiumData.endsAt)).toLocaleString()}
+            </span>
+          ) : null}
+        </div>
+        <div style={{ display: "grid", gap: 8 }}>
+          {premiumPlans.map((plan) => (
+            <div key={plan.code} style={{ border: "1px solid rgba(216,176,117,.2)", borderRadius: 8, padding: "10px 12px", display: "grid", gap: 4 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ fontWeight: 700, color: TEXT_MAIN }}>{plan.label}</div>
+                <div style={{ fontWeight: 800, color: "#fff7ec" }}>${Number(plan.priceUsd || 0).toFixed(2)}</div>
+              </div>
+              <div style={{ color: TEXT_MUTED, fontSize: 13 }}>{plan.benefit}</div>
+              <div style={{ color: TEXT_MUTED, fontSize: 12 }}>
+                {Number(plan.savingsUsd || 0) > 0
+                  ? `Save $${Number(plan.savingsUsd || 0).toFixed(2)} (${Number(plan.savingsPercent || 0)}%)`
+                  : "Base monthly rate"}
+              </div>
+            </div>
+          ))}
+        </div>
+        <button disabled style={{ ...BTN_STYLE, marginTop: 12, opacity: 0.75, cursor: "not-allowed", fontSize: 13 }}>
+          Checkout Coming Soon
+        </button>
       </div>
 
       <div style={CARD}>
