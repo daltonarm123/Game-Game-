@@ -575,8 +575,13 @@ function BuildingsView() {
   const [loading, setLoading] = useState(false);
   const [actionMsg, setActionMsg] = useState("");
   const [buildCode, setBuildCode] = useState("farm");
-  const [buildQty, setBuildQty] = useState(1);
+  const [buildQtyInput, setBuildQtyInput] = useState("1");
   const [buildBusy, setBuildBusy] = useState(false);
+  const buildQty = useMemo(() => {
+    const n = Math.floor(Number(buildQtyInput || "1"));
+    if (!Number.isFinite(n)) return 1;
+    return Math.max(1, Math.min(500, n));
+  }, [buildQtyInput]);
 
   async function load() {
     setLoading(true);
@@ -801,8 +806,14 @@ function BuildingsView() {
             type="number"
             min={1}
             max={500}
-            value={buildQty}
-            onChange={(e) => setBuildQty(Math.max(1, Number(e.target.value || 1)))}
+            inputMode="numeric"
+            pattern="[0-9]*"
+            value={buildQtyInput}
+            onChange={(e) => {
+              const next = e.target.value;
+              if (/^\d*$/.test(next)) setBuildQtyInput(next);
+            }}
+            onBlur={() => setBuildQtyInput(String(buildQty))}
             style={{ ...INPUT_STYLE, width: 90 }}
           />
           <button type="submit" style={BTN_STYLE} disabled={buildBusy}>
