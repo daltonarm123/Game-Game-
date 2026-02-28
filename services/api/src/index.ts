@@ -822,7 +822,7 @@ function computeEconomyHourly(
   const lumber = Number(buildingLevels.lumberyard || 0);
   const quarry = Number(buildingLevels.quarry || 0);
 
-  const foodIncomeRaw = land * ECON_BUILDING_HOURLY.baseFoodPerLand + farm * ECON_BUILDING_HOURLY.farmFood;
+  const foodIncomeRaw = farm * ECON_BUILDING_HOURLY.farmFood;
   const goldIncomeRaw = land * ECON_BUILDING_HOURLY.baseGoldPerLand;
   const woodIncomeRaw = lumber * ECON_BUILDING_HOURLY.lumberWood;
   const stoneIncomeRaw = quarry * ECON_BUILDING_HOURLY.quarryStone;

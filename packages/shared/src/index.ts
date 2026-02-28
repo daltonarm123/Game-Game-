@@ -43,6 +43,12 @@ export const ECON_BUILDING_HOURLY = {
   baseFoodPerLand: 2,
 } as const;
 
+export const POPULATION_CAPACITY = {
+  baselinePeasants: 1000,
+  peasantsPerHouse: 10,
+  peasantsPerCastle: 100,
+} as const;
+
 // Mana rates
 export const MANA_PER_PRIEST_PER_HOUR = 4;   // 1 priest = 4 mana/hr (slow game)
 export const PRIESTS_PER_TEMPLE = 5;          // max priests per temple built
@@ -76,6 +82,16 @@ export function peasantDeltaPerHour(taxRate: number) {
   if (taxRate < 25) return (25 - taxRate) * 50;
   if (taxRate > 27) return -1 * (taxRate - 27) * 60;
   return 0;
+}
+
+export function peasantHousingCapacity(buildingLevels: Record<string, number>) {
+  const houses = Math.max(0, Number(buildingLevels.houses || 0));
+  const castles = Math.max(0, Number(buildingLevels.castles || 0));
+  return houses * POPULATION_CAPACITY.peasantsPerHouse + castles * POPULATION_CAPACITY.peasantsPerCastle;
+}
+
+export function effectivePeasantCap(buildingLevels: Record<string, number>) {
+  return Math.max(POPULATION_CAPACITY.baselinePeasants, peasantHousingCapacity(buildingLevels));
 }
 
 export function taxGoldMultiplier(taxRate: number) {

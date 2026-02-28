@@ -4,6 +4,7 @@ import {
   PRAYERS,
   SEASONS,
   clampNumber,
+  effectivePeasantCap,
   peasantDeltaPerHour,
   taxGoldMultiplier,
   type SeasonCode,
@@ -339,7 +340,9 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
           COALESCE(MAX(CASE WHEN building_code='lumberyard' THEN level END),0) AS lumberyard,
           COALESCE(MAX(CASE WHEN building_code='quarry' THEN level END),0) AS quarry,
           COALESCE(MAX(CASE WHEN building_code='horse_farms' THEN level END),0) AS horse_farms,
-          COALESCE(MAX(CASE WHEN building_code='temples' THEN level END),0) AS temples
+          COALESCE(MAX(CASE WHEN building_code='temples' THEN level END),0) AS temples,
+          COALESCE(MAX(CASE WHEN building_code='houses' THEN level END),0) AS houses,
+          COALESCE(MAX(CASE WHEN building_code='castles' THEN level END),0) AS castles
         FROM kingdom_buildings
         WHERE kingdom_id = $1
         `,
@@ -385,6 +388,8 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       const quarry = Number(b.rows[0]?.quarry || 0);
       const horseFarms = Number(b.rows[0]?.horse_farms || 0);
       const temples = Number(b.rows[0]?.temples || 0);
+      const houses = Number(b.rows[0]?.houses || 0);
+      const castles = Number(b.rows[0]?.castles || 0);
 
       // Count priests (capped at 5 per temple)
       const priestRow = await c.query(
@@ -411,7 +416,7 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
         if (def.type === "population_bonus") prayerPopBonus   += def.bonus;
       }
 
-      const foodIncomePerHour = (Number(k.land || 0) * ECON_BUILDING_HOURLY.baseFoodPerLand + farm * ECON_BUILDING_HOURLY.farmFood) * prayerFoodBonus;
+      const foodIncomePerHour = farm * ECON_BUILDING_HOURLY.farmFood * prayerFoodBonus;
       const goldIncomePerHour = Number(k.land || 0) * ECON_BUILDING_HOURLY.baseGoldPerLand * prayerGoldBonus;
       const woodIncomePerHour = lumber * ECON_BUILDING_HOURLY.lumberWood * prayerWoodBonus;
       const stoneIncomePerHour = quarry * ECON_BUILDING_HOURLY.quarryStone * prayerStoneBonus;
@@ -460,8 +465,15 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
         [k.id, foodDelta, goldDelta, woodDelta, stoneDelta, horsesDelta, manaDelta],
       );
 
-      const peasPerHour = peasantDeltaPerHour(taxRate) * (peasantDeltaPerHour(taxRate) > 0 ? prayerPopBonus : 1);
-      const peasDelta = Math.floor(peasPerHour * TICK_HOURS);
+      const basePeasantDelta = peasantDeltaPerHour(taxRate);
+      const peasPerHour = basePeasantDelta * (basePeasantDelta > 0 ? prayerPopBonus : 1);
+      let peasDelta = Math.floor(peasPerHour * TICK_HOURS);
+      if (peasDelta > 0) {
+        const currentPeasants = Number(t.rows.find((row) => String(row.troop_code) === "peasants")?.amount || 0);
+        const peasantCap = effectivePeasantCap({ houses, castles });
+        const freeCapacity = Math.max(0, peasantCap - currentPeasants);
+        peasDelta = Math.min(peasDelta, freeCapacity);
+      }
       if (peasDelta !== 0) {
         await c.query(
           `
