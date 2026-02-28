@@ -1076,6 +1076,7 @@ app.post("/api/auth/register", async (req, res) => {
         stone: 5_000,
         land: 1_000,
         horses: 0,
+        buildingLevels: { castles: 1 },
         troopAmounts: { peasants: 1000 },
       });
       const session = await createAuthSession(c, userId);
@@ -2508,7 +2509,7 @@ app.post("/api/war-room/:attacker/spy", requireAuth, async (req, res) => {
             `SELECT tt.name AS troop_name, kt.amount, tt.def_rating FROM kingdom_troops kt JOIN troop_types tt ON tt.code=kt.troop_code WHERE kt.kingdom_id=$1 AND kt.amount>0 ORDER BY kt.amount DESC`,
             [def.id],
           ),
-          c.query(`SELECT COALESCE(SUM(quantity),0)::int AS castles FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='castles'`, [def.id]),
+          c.query(`SELECT COALESCE(level,0)::int AS castles FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='castles' LIMIT 1`, [def.id]),
           c.query(`SELECT a.tag FROM alliances a JOIN alliance_members m ON m.alliance_id=a.id WHERE m.kingdom_id=$1 LIMIT 1`, [def.id]),
           c.query(
             `WITH tn AS (SELECT COALESCE(SUM(kt.amount * ty.nw_value),0) AS troop_nw FROM kingdom_troops kt JOIN troop_types ty ON ty.code=kt.troop_code WHERE kt.kingdom_id=$1)

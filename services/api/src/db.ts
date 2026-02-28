@@ -862,4 +862,10 @@ export async function ensureSchema(): Promise<void> {
       [a.code, a.name, a.effectText, a.goldCost, a.stoneCost, a.woodCost],
     );
   }
+
+  // Every kingdom gets at least 1 starter castle (can never be reduced to 0)
+  await pool.query(`
+    UPDATE kingdom_buildings SET level = GREATEST(level, 1)
+    WHERE building_code = 'castles' AND level < 1
+  `);
 }
