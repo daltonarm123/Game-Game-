@@ -42,6 +42,7 @@ function resolveAllowedOrigin(originHeader: string | undefined): string {
   return ALLOWED_ORIGINS[0] || "*";
 }
 const app = express();
+app.set("trust proxy", 1); // Required for Railway — fixes rate limiter X-Forwarded-For error
 app.use((req, res, next) => {
   const allowOrigin = resolveAllowedOrigin(req.headers.origin as string | undefined);
   res.setHeader("Access-Control-Allow-Origin", allowOrigin);
@@ -361,10 +362,12 @@ const emailTransport = SMTP_HOST
 const EMAIL_FROM = process.env.SMTP_FROM || "Crownforge <noreply@crownforge.game>";
 async function sendEmail(to: string, subject: string, html: string) {
   if (!emailTransport) {
-    console.log(`[EMAIL - no SMTP]\nTo: ${to}\nSubject: ${subject}\n${html.replace(/<[^>]+>/g, "")}`);
+    console.log(`[EMAIL - no SMTP configured]\nTo: ${to}\nSubject: ${subject}\n${html.replace(/<[^>]+>/g, "")}`);
     return;
   }
-  await emailTransport.sendMail({ from: EMAIL_FROM, to, subject, html });
+  console.log(`[EMAIL] Sending "${subject}" to ${to} via ${process.env.SMTP_HOST} as ${EMAIL_FROM}`);
+  const info = await emailTransport.sendMail({ from: EMAIL_FROM, to, subject, html });
+  console.log(`[EMAIL] Sent OK — messageId: ${info.messageId}`);
 }
 
 function normalizeEmail(input: string) {
