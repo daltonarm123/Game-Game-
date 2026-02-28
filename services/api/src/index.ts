@@ -31,10 +31,21 @@ import { evaluateOpsAlerts } from "./ops.js";
 
 dotenv.config();
 
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "*";
+const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGIN || "*")
+  .split(",")
+  .map((v) => v.trim())
+  .filter(Boolean);
+function resolveAllowedOrigin(originHeader: string | undefined): string {
+  if (ALLOWED_ORIGINS.includes("*")) return "*";
+  const reqOrigin = String(originHeader || "").trim();
+  if (reqOrigin && ALLOWED_ORIGINS.includes(reqOrigin)) return reqOrigin;
+  return ALLOWED_ORIGINS[0] || "*";
+}
 const app = express();
 app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
+  const allowOrigin = resolveAllowedOrigin(req.headers.origin as string | undefined);
+  res.setHeader("Access-Control-Allow-Origin", allowOrigin);
+  if (allowOrigin !== "*") res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") return res.status(204).end();
