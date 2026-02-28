@@ -5298,6 +5298,33 @@ app.post("/api/admin/set-admin", requireAdmin, async (req, res) => {
   } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
 });
 
+app.post("/api/admin/set-land", requireAdmin, async (req, res) => {
+  const parsed = z.object({
+    kingdom: z.string().min(2),
+    land: z.number().int().min(0).max(2_000_000_000),
+  }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(
+        `UPDATE kingdoms
+         SET land=$2
+         WHERE LOWER(name)=LOWER($1)
+         RETURNING id, name, land`,
+        [parsed.data.kingdom, parsed.data.land],
+      );
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const row = k.rows[0];
+      await ensureSettlementsForKingdom(c, Number(row.id), String(row.name), Number(row.land || 0));
+      return { id: Number(row.id), name: String(row.name), land: Number(row.land || 0) };
+    });
+    return res.json({ ok: true, kingdom: out });
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    return res.status(msg.includes("not found") ? 404 : 500).json({ ok: false, error: msg });
+  }
+});
+
 // ── Prayer endpoints ─────────────────────────────────────────────────────────
 app.get("/api/pray/:kingdom", async (req, res) => {
   try {
