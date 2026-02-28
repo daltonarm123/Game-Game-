@@ -432,7 +432,8 @@ async function createAuthSession(c: PoolClient, userId: string) {
 async function getAuthSession(token: string) {
   const q = await pool.query(
     `SELECT s.token, s.user_id, s.created_at, s.expires_at,
-            u.username, u.email, u.email_verified, u.is_admin, u.is_banned
+            u.username, u.email, u.email_verified, u.is_admin, u.is_banned,
+            u.premium_started_at, u.premium_ends_at, u.premium_shield_last_used_at
      FROM auth_sessions s
      JOIN app_users u ON u.id = s.user_id
      WHERE s.token=$1 AND s.expires_at > now()
@@ -616,6 +617,17 @@ function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
 
+function downsampleSeries<T>(items: T[], maxPoints: number) {
+  if (items.length <= maxPoints) return items;
+  if (maxPoints <= 1) return [items[items.length - 1]];
+  const step = (items.length - 1) / (maxPoints - 1);
+  const out: T[] = [];
+  for (let i = 0; i < maxPoints; i += 1) {
+    out.push(items[Math.round(i * step)]);
+  }
+  return out;
+}
+
 function shieldStateFromRow(row: any, now = new Date()) {
   const status = String(row?.shield_status || "none");
   const requestedAt = row?.shield_requested_at ? new Date(row.shield_requested_at) : null;
@@ -642,6 +654,50 @@ function shieldStateFromRow(row: any, now = new Date()) {
     canAttack,
     canBeAttacked,
     retaliationOnly,
+  };
+}
+
+function isPremiumActive(row: any, now = new Date()) {
+  const endsAt = row?.premium_ends_at ? new Date(row.premium_ends_at) : null;
+  return Boolean(endsAt && endsAt.getTime() > now.getTime());
+}
+
+function premiumLoyaltyDays(row: any, now = new Date()) {
+  if (!isPremiumActive(row, now)) return 0;
+  const startedAt = row?.premium_started_at ? new Date(row.premium_started_at) : now;
+  const days = Math.floor((now.getTime() - startedAt.getTime()) / 86_400_000) + 1;
+  return Math.max(1, days);
+}
+
+function premiumGemMultiplier(row: any, now = new Date()) {
+  if (!isPremiumActive(row, now)) return 1;
+  const days = premiumLoyaltyDays(row, now);
+  const loyaltySteps = Math.max(0, Math.floor(days / 30));
+  return Number((1.25 + Math.min(0.75, loyaltySteps * 0.05)).toFixed(2));
+}
+
+function premiumStatusFromRow(row: any, now = new Date()) {
+  const active = isPremiumActive(row, now);
+  const startedAt = row?.premium_started_at ? new Date(row.premium_started_at) : null;
+  const endsAt = row?.premium_ends_at ? new Date(row.premium_ends_at) : null;
+  const lastShieldUse = row?.premium_shield_last_used_at ? new Date(row.premium_shield_last_used_at) : null;
+  const nextShieldAt = lastShieldUse ? new Date(lastShieldUse.getTime() + 30 * 24 * 3600 * 1000) : null;
+  const shieldReady = active && (!nextShieldAt || nextShieldAt.getTime() <= now.getTime());
+  const shieldReadyInSeconds = !active
+    ? 0
+    : nextShieldAt
+      ? Math.max(0, Math.floor((nextShieldAt.getTime() - now.getTime()) / 1000))
+      : 0;
+  return {
+    active,
+    startedAt: startedAt ? startedAt.toISOString() : null,
+    endsAt: endsAt ? endsAt.toISOString() : null,
+    loyaltyDays: premiumLoyaltyDays(row, now),
+    gemMultiplier: premiumGemMultiplier(row, now),
+    monthlyShieldReady: shieldReady,
+    shieldReadyInSeconds,
+    lastShieldUsedAt: lastShieldUse ? lastShieldUse.toISOString() : null,
+    nextShieldAt: nextShieldAt ? nextShieldAt.toISOString() : null,
   };
 }
 
@@ -1093,7 +1149,14 @@ app.post("/api/auth/register", async (req, res) => {
       await c.query(`INSERT INTO email_verification_tokens(token, user_id) VALUES($1,$2)`, [verifyToken, userId]);
       return {
         session,
-        user: { id: userId, username, email },
+        user: {
+          id: userId,
+          username,
+          email,
+          emailVerified: false,
+          isAdmin: false,
+          premium: premiumStatusFromRow(null),
+        },
         kingdom: { id: Number(kingdom.id), name: String(kingdom.name) },
         verifyToken,
       };
@@ -1118,7 +1181,8 @@ app.post("/api/auth/login", async (req, res) => {
   try {
     const out = await withTx(async (c) => {
       const u = await c.query(
-        `SELECT id, username, email, password_hash, email_verified, is_admin, is_banned, banned_reason
+        `SELECT id, username, email, password_hash, email_verified, is_admin, is_banned, banned_reason,
+                premium_started_at, premium_ends_at, premium_shield_last_used_at
          FROM app_users
          WHERE LOWER(email)=LOWER($1) OR LOWER(username)=LOWER($1)
          LIMIT 1`,
@@ -1133,7 +1197,14 @@ app.post("/api/auth/login", async (req, res) => {
       const session = await createAuthSession(c, String(user.id));
       return {
         session,
-        user: { id: String(user.id), username: String(user.username), email: String(user.email || ""), emailVerified: Boolean(user.email_verified), isAdmin: Boolean(user.is_admin) },
+        user: {
+          id: String(user.id),
+          username: String(user.username),
+          email: String(user.email || ""),
+          emailVerified: Boolean(user.email_verified),
+          isAdmin: Boolean(user.is_admin),
+          premium: premiumStatusFromRow(user),
+        },
         kingdom: { id: Number(k.rows[0].id), name: String(k.rows[0].name) },
       };
     });
@@ -1164,12 +1235,18 @@ app.get("/api/auth/me", async (req, res) => {
         email: String(session.email || ""),
         emailVerified: Boolean(session.email_verified),
         isAdmin: Boolean(session.is_admin),
+        premium: premiumStatusFromRow(session),
       },
       kingdom: kingdom.rowCount ? { id: Number(kingdom.rows[0].id), name: String(kingdom.rows[0].name) } : null,
     });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
+});
+
+app.get("/api/premium/status", requireAuth, async (req, res) => {
+  const session = (req as any).authSession;
+  return res.json({ ok: true, premium: premiumStatusFromRow(session) });
 });
 
 app.get("/api/stream/:kingdom", async (req, res) => {
@@ -2181,36 +2258,53 @@ app.post("/api/kingdom/:name/tax", requireAuth, async (req, res) => {
 app.post("/api/kingdom/:name/shield/activate", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  const session = (req as any).authSession;
 
   try {
     const out = await withTx(async (c) => {
       const kq = await c.query(
-        `SELECT id, name, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        `SELECT id, user_id, name, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
         [name],
       );
       if (!kq.rowCount) throw new Error("kingdom not found");
       const k = kq.rows[0];
+      if (String(k.user_id) !== String(session.user_id)) throw new Error("cannot modify another kingdom");
       const normalized = await normalizeShieldStateTx(c, Number(k.id));
       const current = normalized || k;
       const status = String(current.shield_status || "none");
       if (status !== "none") throw new Error(`shield unavailable while status is ${status}`);
 
+      const uq = await c.query(
+        `SELECT id, premium_started_at, premium_ends_at, premium_shield_last_used_at
+         FROM app_users
+         WHERE id=$1
+         LIMIT 1
+         FOR UPDATE`,
+        [session.user_id],
+      );
+      const user = uq.rows[0] || null;
+      const premium = premiumStatusFromRow(user);
+      const usePremiumShield = Boolean(premium.active && premium.monthlyShieldReady);
+
       const up = await c.query(
         `
         UPDATE kingdoms
-        SET shield_status='pending',
+        SET shield_status=$2,
             shield_requested_at=now(),
-            shield_starts_at=now() + interval '24 hours',
+            shield_starts_at=CASE WHEN $3 THEN now() ELSE now() + interval '24 hours' END,
             shield_ends_at=now() + interval '48 hours',
             shield_cooldown_ends_at=now() + interval '72 hours'
         WHERE id=$1
         RETURNING id, name, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
         `,
-        [k.id],
+        [k.id, usePremiumShield ? "active" : "pending", usePremiumShield],
       );
-      return up.rows[0];
+      if (usePremiumShield) {
+        await c.query(`UPDATE app_users SET premium_shield_last_used_at=now() WHERE id=$1`, [session.user_id]);
+      }
+      return { ...up.rows[0], premiumShieldUsed: usePremiumShield };
     });
-    return res.json({ ok: true, shield: shieldStateFromRow(out) });
+    return res.json({ ok: true, shield: shieldStateFromRow(out), premiumShieldUsed: Boolean(out.premiumShieldUsed) });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });
   }
@@ -2471,7 +2565,23 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
         "MAJOR VICTORY": 2,
         "OVERWHELMING VICTORY": Math.floor(Math.random() * 3) + 2,
       };
-      const gemsAwarded = GEM_TABLE[result] ?? 0;
+      const baseGemsAwarded = GEM_TABLE[result] ?? 0;
+      let gemsAwarded = baseGemsAwarded;
+      if (baseGemsAwarded > 0) {
+        const premiumQ = await c.query(
+          `SELECT u.premium_started_at, u.premium_ends_at
+           FROM kingdoms k
+           JOIN app_users u ON u.id = k.user_id
+           WHERE k.id=$1
+           LIMIT 1`,
+          [atk.id],
+        );
+        const gemMultiplier = premiumGemMultiplier(premiumQ.rows[0] || null);
+        const scaled = baseGemsAwarded * gemMultiplier;
+        const guaranteed = Math.floor(scaled);
+        const fractional = scaled - guaranteed;
+        gemsAwarded = guaranteed + (Math.random() < fractional ? 1 : 0);
+      }
       if (gemsAwarded > 0) {
         await c.query(`UPDATE kingdoms SET green_gems = COALESCE(green_gems,0) + $2 WHERE id=$1`, [atk.id, gemsAwarded]);
       }
@@ -3316,6 +3426,48 @@ app.get("/api/rankings/kingdoms/:name/nw-history", async (req, res) => {
   }
 });
 
+app.get("/api/premium/rankings/kingdoms/:name/nw-history", requireAuth, async (req, res) => {
+  const name = String(req.params.name || "").trim();
+  const windowCode = String(req.query.window || "1d").trim().toLowerCase();
+  const windowDef = ({
+    "12h": { interval: "12 hours", maxPoints: 160 },
+    "1d": { interval: "1 day", maxPoints: 220 },
+    "1w": { interval: "7 days", maxPoints: 260 },
+    "1m": { interval: "30 days", maxPoints: 320 },
+  } as Record<string, { interval: string; maxPoints: number }>)[windowCode] || { interval: "1 day", maxPoints: 220 };
+  if (!name) return res.status(400).json({ ok: false, error: "kingdom required" });
+
+  const session = (req as any).authSession;
+  if (!isPremiumActive(session)) return res.status(403).json({ ok: false, error: "premium required" });
+
+  try {
+    const k = await pool.query(`SELECT id, name, land, food, gold, stone, wood FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [name]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const kingdom = k.rows[0];
+    const rows = await pool.query(
+      `SELECT id, networth, recorded_at
+       FROM kingdom_networth_history
+       WHERE kingdom_id=$1
+         AND recorded_at >= now() - ($2::interval)
+       ORDER BY recorded_at ASC`,
+      [kingdom.id, windowDef.interval],
+    );
+    let items = rows.rows.map((r) => ({
+      id: Number(r.id),
+      networth: Number(r.networth || 0),
+      recordedAt: r.recorded_at,
+    }));
+    if (items.length === 0) {
+      const nw = Number(kingdom.land || 0) * 0.04 + Number(kingdom.food || 0) * 0.0001 + Number(kingdom.gold || 0) * 0.0005 + Number(kingdom.stone || 0) * 0.0002 + Number(kingdom.wood || 0) * 0.0002;
+      items = [{ id: 0, networth: Number(nw.toFixed(2)), recordedAt: new Date().toISOString() }];
+    }
+    const sampled = downsampleSeries(items, windowDef.maxPoints);
+    return res.json({ ok: true, kingdom: kingdom.name, window: windowCode, premium: premiumStatusFromRow(session), items: sampled });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 app.get("/api/rankings/alliances", async (req, res) => {
   const limit = clamp(Number(req.query.limit || 30), 1, 100);
   const offset = Math.max(0, Math.floor(Number(req.query.offset || 0)));
@@ -3364,6 +3516,8 @@ app.get("/api/rankings/alliances", async (req, res) => {
 app.get("/api/pigeons/:kingdom", async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const limit = clamp(Number(req.query.limit || 100), 1, 300);
+  const filterKindRaw = String(req.query.kind || "all").trim().toLowerCase();
+  const filterKind = ["all", "system", "attack", "spy", "player"].includes(filterKindRaw) ? filterKindRaw : "all";
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
   try {
     const k = await pool.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
@@ -3373,14 +3527,73 @@ app.get("/api/pigeons/:kingdom", async (req, res) => {
       `SELECT id, mail_kind, subject, body, created_at, read_at
        FROM kingdom_mail
        WHERE kingdom_id=$1
+         AND ($3='all' OR LOWER(mail_kind)=LOWER($3))
        ORDER BY created_at DESC
        LIMIT $2`,
-      [kingdomId, limit],
+      [kingdomId, limit, filterKind],
     );
-    const unread = await pool.query(`SELECT COUNT(*)::int AS n FROM kingdom_mail WHERE kingdom_id=$1 AND read_at IS NULL`, [kingdomId]);
-    return res.json({ ok: true, unread: Number(unread.rows[0]?.n || 0), items: rows.rows });
+    const unread = await pool.query(
+      `SELECT COUNT(*)::int AS n
+       FROM kingdom_mail
+       WHERE kingdom_id=$1
+         AND read_at IS NULL
+         AND ($2='all' OR LOWER(mail_kind)=LOWER($2))`,
+      [kingdomId, filterKind],
+    );
+    return res.json({ ok: true, unread: Number(unread.rows[0]?.n || 0), kind: filterKind, items: rows.rows });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/pigeons/:kingdom/delete-many", requireAuth, async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = z.object({
+    ids: z.array(z.number().int().positive()).max(500).optional().default([]),
+    kind: z.enum(["all", "system", "attack", "spy", "player"]).optional().default("all"),
+    tab: z.enum(["inbox", "outbox", "any"]).optional().default("any"),
+  }).safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const session = (req as any).authSession;
+  try {
+    const out = await withTx(async (c) => {
+      const own = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1 FOR UPDATE`, [kingdom, session.user_id]);
+      if (!own.rowCount) throw new Error("kingdom not found for your account");
+      const premiumQ = await c.query(
+        `SELECT premium_started_at, premium_ends_at FROM app_users WHERE id=$1 LIMIT 1`,
+        [session.user_id],
+      );
+      if (!isPremiumActive(premiumQ.rows[0] || null)) throw new Error("premium required for bulk pigeon tools");
+      const kingdomId = Number(own.rows[0].id);
+      const ids = (parsed.data.ids || []).map((x) => Number(x)).filter((x) => Number.isFinite(x) && x > 0);
+      if (ids.length > 0) {
+        const del = await c.query(
+          `DELETE FROM kingdom_mail
+           WHERE kingdom_id=$1
+             AND id = ANY($2::bigint[])
+           RETURNING id`,
+          [kingdomId, ids],
+        );
+        return { deleted: del.rowCount || 0 };
+      }
+      const del = await c.query(
+        `DELETE FROM kingdom_mail
+         WHERE kingdom_id=$1
+           AND ($2='all' OR LOWER(mail_kind)=LOWER($2))
+           AND (
+             $3='any'
+             OR ($3='inbox' AND subject NOT LIKE 'Sent:%')
+             OR ($3='outbox' AND subject LIKE 'Sent:%')
+           )
+         RETURNING id`,
+        [kingdomId, parsed.data.kind, parsed.data.tab],
+      );
+      return { deleted: del.rowCount || 0 };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
@@ -5526,7 +5739,8 @@ app.get("/api/admin/users", requireAdmin, async (req, res) => {
   const search = String(req.query.search || "").trim();
   try {
     const q = await pool.query(
-      `SELECT u.id, u.username, u.email, u.email_verified, u.is_admin, u.is_banned, u.banned_reason, u.created_at, k.name AS kingdom_name
+      `SELECT u.id, u.username, u.email, u.email_verified, u.is_admin, u.is_banned, u.banned_reason,
+              u.premium_started_at, u.premium_ends_at, u.created_at, k.name AS kingdom_name
        FROM app_users u LEFT JOIN kingdoms k ON k.user_id = u.id
        WHERE ($1='' OR LOWER(u.username) LIKE '%'||LOWER($1)||'%' OR LOWER(u.email) LIKE '%'||LOWER($1)||'%')
        ORDER BY u.created_at DESC LIMIT $2 OFFSET $3`,
@@ -5568,6 +5782,59 @@ app.post("/api/admin/set-admin", requireAdmin, async (req, res) => {
     if (!r.rowCount) return res.status(404).json({ ok: false, error: "user not found" });
     return res.json({ ok: true });
   } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.post("/api/admin/set-premium", requireAdmin, async (req, res) => {
+  const parsed = z.object({
+    userId: z.string().min(1),
+    days: z.number().int().min(0).max(3650),
+  }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  try {
+    const out = await withTx(async (c) => {
+      const q = await c.query(
+        `SELECT id, premium_started_at, premium_ends_at, premium_shield_last_used_at
+         FROM app_users
+         WHERE id=$1
+         LIMIT 1
+         FOR UPDATE`,
+        [parsed.data.userId],
+      );
+      if (!q.rowCount) throw new Error("user not found");
+      const u = q.rows[0];
+      if (parsed.data.days <= 0) {
+        const cleared = await c.query(
+          `UPDATE app_users
+           SET premium_started_at=NULL,
+               premium_ends_at=NULL,
+               premium_shield_last_used_at=NULL
+           WHERE id=$1
+           RETURNING id, premium_started_at, premium_ends_at, premium_shield_last_used_at`,
+          [parsed.data.userId],
+        );
+        return cleared.rows[0];
+      }
+      const now = new Date();
+      const currentEnds = u.premium_ends_at ? new Date(u.premium_ends_at) : null;
+      const active = Boolean(currentEnds && currentEnds.getTime() > now.getTime());
+      const nextBase = active && currentEnds ? currentEnds : now;
+      const startedAt = active && u.premium_started_at ? new Date(u.premium_started_at) : now;
+      const nextEnds = new Date(nextBase.getTime() + parsed.data.days * 24 * 3600 * 1000);
+      const updated = await c.query(
+        `UPDATE app_users
+         SET premium_started_at=$2,
+             premium_ends_at=$3
+         WHERE id=$1
+         RETURNING id, premium_started_at, premium_ends_at, premium_shield_last_used_at`,
+        [parsed.data.userId, startedAt.toISOString(), nextEnds.toISOString()],
+      );
+      return updated.rows[0];
+    });
+    return res.json({ ok: true, premium: premiumStatusFromRow(out) });
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    return res.status(msg.includes("not found") ? 404 : 400).json({ ok: false, error: msg });
+  }
 });
 
 app.post("/api/admin/resend-verification", requireAdmin, async (req, res) => {

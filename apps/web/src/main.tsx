@@ -109,6 +109,17 @@ type AuthState = {
     email: string;
     emailVerified?: boolean;
     isAdmin?: boolean;
+    premium?: {
+      active?: boolean;
+      startedAt?: string | null;
+      endsAt?: string | null;
+      loyaltyDays?: number;
+      gemMultiplier?: number;
+      monthlyShieldReady?: boolean;
+      shieldReadyInSeconds?: number;
+      lastShieldUsedAt?: string | null;
+      nextShieldAt?: string | null;
+    };
   };
   kingdom: {
     id: number;
@@ -445,7 +456,7 @@ function OverviewView() {
   };
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div style={{ display: "grid", gap: 12, minWidth: 0 }}>
       {/* Header bar */}
       <div style={{ ...CARD, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontFamily: FONT_DISPLAY, fontSize: 26, fontWeight: 800, color: "#fff7ec" }}>
@@ -771,7 +782,7 @@ function BuildingsView() {
   }
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div style={{ display: "grid", gap: 12, minWidth: 0 }}>
       <div style={CARD}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ minWidth: 0, flex: "1 1 320px" }}>
@@ -2838,7 +2849,7 @@ function WarRoomView() {
   }
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div style={{ display: "grid", gap: 12, minWidth: 0 }}>
       <div style={{ ...CARD, background: "linear-gradient(180deg, rgba(52,32,16,0.96), rgba(28,18,10,0.94))" }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <div style={{ fontSize: isMobile ? 30 : 42, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY, lineHeight: 1.05 }}>
@@ -2847,10 +2858,10 @@ function WarRoomView() {
           <input
             value={kingdom}
             onChange={(e) => setKingdom(e.target.value)}
-            style={{ ...INPUT_STYLE, maxWidth: "100%" }}
+            style={{ ...INPUT_STYLE, maxWidth: "100%", minWidth: 0, flex: isMobile ? "1 1 180px" : "1 1 280px" }}
             placeholder="Kingdom name"
           />
-          <button onClick={() => void load()} style={BTN_STYLE}>Load</button>
+          <button onClick={() => void load()} style={{ ...BTN_STYLE, width: isMobile ? "100%" : undefined }}>Load</button>
         </div>
         {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading...</div> : null}
         {error ? (
@@ -2877,8 +2888,8 @@ function WarRoomView() {
             </div>
           </div>
 
-          <div style={{ ...CARD, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.05fr 1fr", gap: 16 }}>
-            <div>
+          <div style={{ ...CARD, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(0,1.05fr) minmax(0,1fr)", gap: 16, minWidth: 0 }}>
+            <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 800, marginBottom: 10, fontSize: 24, fontFamily: FONT_DISPLAY }}>Kingdom Troops</div>
               {isMobile ? (
                 <div style={{ display: "grid", gap: 6 }}>
@@ -2912,8 +2923,8 @@ function WarRoomView() {
                   })}
                 </div>
               ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
+              <div style={{ overflowX: "auto", maxWidth: "100%", WebkitOverflowScrolling: "touch" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 860 }}>
                   <thead>
                     <tr>
                       <th style={{ textAlign: "left", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Troop</th>
@@ -2940,7 +2951,7 @@ function WarRoomView() {
                                 {meta.sigil}
                               </div>
                               <div>
-                                <div style={{ fontSize: 29, fontFamily: FONT_DISPLAY, lineHeight: 1.02 }}>{t.troopName}</div>
+                                <div style={{ fontSize: 24, fontFamily: FONT_DISPLAY, lineHeight: 1.02 }}>{t.troopName}</div>
                                 <div style={{ fontSize: 12, color: "#d8c9b2" }}>{meta.role}</div>
                               </div>
                             </div>
@@ -2965,7 +2976,7 @@ function WarRoomView() {
               )}
             </div>
 
-            <div>
+            <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 800, marginBottom: 10, fontSize: 24, fontFamily: FONT_DISPLAY }}>Actions</div>
               <div style={{ border: "1px solid rgba(216,176,117,.24)", borderRadius: 10, overflow: "hidden" }}>
                 <button onClick={() => setTrainOpen((v) => !v)} style={{ ...BTN_STYLE, width: "100%", textAlign: "left", borderRadius: 0, border: "none", borderBottom: "1px solid rgba(216,176,117,.2)" }}>
@@ -3853,6 +3864,14 @@ function PrayView() {
   const [spellTarget, setSpellTarget] = useState("");
   const [days, setDays] = useState(7);
   const [busy, setBusy] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 980);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   async function load() {
     if (!kingdom.trim()) return;
@@ -4002,19 +4021,24 @@ function PrayView() {
   const canAfford = mana >= totalManaCost;
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div style={{ display: "grid", gap: 12, minWidth: 0 }}>
       {/* Header */}
       <div style={CARD}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
           <div>
-            <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>Holy Circle — {kingdom || "…"}</div>
+            <div style={{ fontSize: isMobile ? 28 : 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>Holy Circle — {kingdom || "…"}</div>
             <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 16 }}>
               Priests channel divine power into sustained prayers that bless your kingdom.
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={INPUT_STYLE} placeholder="Kingdom name" />
-            <button onClick={() => void load()} style={BTN_STYLE}>Load</button>
+          <div style={{ display: "flex", gap: 8, flexWrap: isMobile ? "wrap" : "nowrap", width: isMobile ? "100%" : undefined }}>
+            <input
+              value={kingdom}
+              onChange={(e) => setKingdom(e.target.value)}
+              style={{ ...INPUT_STYLE, flex: isMobile ? "1 1 180px" : undefined, minWidth: 0 }}
+              placeholder="Kingdom name"
+            />
+            <button onClick={() => void load()} style={{ ...BTN_STYLE, width: isMobile ? "100%" : undefined }}>Load</button>
           </div>
         </div>
         {loading && <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading…</div>}
@@ -4050,13 +4074,13 @@ function PrayView() {
             const hoursLeft = Math.floor((remaining % 86400000) / 3600000);
             const timeStr = daysLeft > 0 ? `${daysLeft}d ${hoursLeft}h remaining` : `${hoursLeft}h remaining`;
             return (
-              <div key={ap.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: "1px solid rgba(216,176,117,.1)" }}>
+              <div key={ap.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: "1px solid rgba(216,176,117,.1)", flexWrap: isMobile ? "wrap" : "nowrap" }}>
                 <span style={{ fontSize: 22, width: 28, textAlign: "center" }}>{def?.icon || "✨"}</span>
-                <div style={{ flex: 1 }}>
+                <div style={{ flex: 1, minWidth: isMobile ? "100%" : 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 15, color: "#fff7ec" }}>{def?.name || ap.prayer_code}</div>
                   <div style={{ fontSize: 13, color: TEXT_MUTED, marginTop: 1 }}>{def?.effect}</div>
                 </div>
-                <div style={{ textAlign: "right" }}>
+                <div style={{ textAlign: isMobile ? "left" : "right" }}>
                   <div style={{ fontSize: 13, color: "#c8b8f8", fontWeight: 600 }}>{timeStr}</div>
                   <div style={{ fontSize: 12, color: TEXT_MUTED }}>{Number(ap.mana_spent).toLocaleString()} mana spent</div>
                 </div>
@@ -4082,13 +4106,13 @@ function PrayView() {
             <select
               value={selectedPrayer}
               onChange={(e) => setSelectedPrayer(e.target.value)}
-              style={{ ...INPUT_STYLE, minWidth: 200 }}
+              style={{ ...INPUT_STYLE, minWidth: 0, flex: "1 1 220px", width: isMobile ? "100%" : undefined }}
             >
               {Object.entries(PRAYER_DEFS).map(([code, def]) => (
                 <option key={code} value={code}>{def.name}</option>
               ))}
             </select>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flex: isMobile ? "1 1 100%" : undefined }}>
               <span style={{ color: TEXT_MUTED, fontSize: 14 }}>Days:</span>
               <input
                 type="number"
@@ -4099,7 +4123,7 @@ function PrayView() {
                 style={{ ...INPUT_STYLE, width: 70 }}
               />
             </div>
-            <button type="submit" style={BTN_STYLE} disabled={busy || !canAfford || !data}>
+            <button type="submit" style={{ ...BTN_STYLE, width: isMobile ? "100%" : undefined }} disabled={busy || !canAfford || !data}>
               {busy ? "Starting…" : "Start Prayer"}
             </button>
           </div>
@@ -4116,10 +4140,10 @@ function PrayView() {
               </div>
 
               <div style={{ fontSize: 11, color: TEXT_MUTED, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 6 }}>Costs</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", flexWrap: isMobile ? "wrap" : "nowrap" }}>
                 <span style={{ fontSize: 17, width: 24, textAlign: "center", flexShrink: 0 }}>✨</span>
-                <span style={{ color: TEXT_MUTED, fontSize: 13, width: 46, flexShrink: 0 }}>Mana</span>
-                <span style={{ fontSize: 15, fontWeight: 700, color: canAfford ? "#c8b8f8" : "#ff6b47", fontFamily: FONT_DISPLAY, minWidth: 90 }}>
+                <span style={{ color: TEXT_MUTED, fontSize: 13, width: isMobile ? "auto" : 46, flexShrink: 0 }}>Mana</span>
+                <span style={{ fontSize: 15, fontWeight: 700, color: canAfford ? "#c8b8f8" : "#ff6b47", fontFamily: FONT_DISPLAY, minWidth: isMobile ? 0 : 90 }}>
                   {totalManaCost.toLocaleString()}
                 </span>
                 <span style={{ color: TEXT_MUTED, fontSize: 13 }}>/ {mana.toLocaleString()} available</span>
@@ -4136,17 +4160,17 @@ function PrayView() {
         <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 12 }}>Cast Spell</div>
         <form onSubmit={castSpell} style={{ display: "grid", gap: 10 }}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <select value={selectedSpell} onChange={(e) => setSelectedSpell(e.target.value)} style={{ ...INPUT_STYLE, minWidth: 240 }}>
+            <select value={selectedSpell} onChange={(e) => setSelectedSpell(e.target.value)} style={{ ...INPUT_STYLE, minWidth: 0, flex: "1 1 240px", width: isMobile ? "100%" : undefined }}>
               {Object.entries(HOLY_SPELL_DEFS).map(([code, def]) => (
                 <option key={code} value={code}>{def.name} ({def.manaCost.toLocaleString()} mana)</option>
               ))}
             </select>
             {HOLY_SPELL_DEFS[selectedSpell]?.requiresTarget ? (
-              <input value={spellTarget} onChange={(e) => setSpellTarget(e.target.value)} placeholder="Target kingdom" style={{ ...INPUT_STYLE, minWidth: 180 }} />
+              <input value={spellTarget} onChange={(e) => setSpellTarget(e.target.value)} placeholder="Target kingdom" style={{ ...INPUT_STYLE, minWidth: 0, flex: "1 1 180px", width: isMobile ? "100%" : undefined }} />
             ) : null}
             <button
               type="submit"
-              style={BTN_STYLE}
+              style={{ ...BTN_STYLE, width: isMobile ? "100%" : undefined }}
               disabled={
                 busy
                 || mana < Number(HOLY_SPELL_DEFS[selectedSpell]?.manaCost || 0)
@@ -4782,6 +4806,36 @@ function AdminView() {
 
   const TH: React.CSSProperties = { padding: "8px 10px", textAlign: "left", color: ACCENT, fontSize: 13, borderBottom: "1px solid rgba(216,176,117,.25)", whiteSpace: "nowrap" };
   const TD: React.CSSProperties = { padding: "7px 10px", fontSize: 13, borderBottom: "1px solid rgba(255,255,255,.06)" };
+  const chartGeom = useMemo(() => {
+    const points = chartItems
+      .map((p) => ({ x: new Date(String(p.recordedAt || "")).getTime(), y: Number(p.networth || 0), at: String(p.recordedAt || "") }))
+      .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
+      .sort((a, b) => a.x - b.x);
+    if (points.length < 2) return null;
+    const width = 920;
+    const height = 230;
+    const padL = 52;
+    const padR = 18;
+    const padT = 16;
+    const padB = 40;
+    const minX = points[0].x;
+    const maxX = points[points.length - 1].x;
+    const minYRaw = Math.min(...points.map((p) => p.y));
+    const maxYRaw = Math.max(...points.map((p) => p.y));
+    const yPad = Math.max(1, (maxYRaw - minYRaw) * 0.08);
+    const minY = Math.max(0, minYRaw - yPad);
+    const maxY = maxYRaw + yPad;
+    const xScale = (x: number) => (maxX === minX ? padL : padL + ((x - minX) / (maxX - minX)) * (width - padL - padR));
+    const yScale = (y: number) => (maxY === minY ? (height - padB) : (height - padB) - ((y - minY) / (maxY - minY)) * (height - padT - padB));
+    const plotted = points.map((p) => ({ px: xScale(p.x), py: yScale(p.y), y: p.y, at: p.at }));
+    const linePath = plotted.map((p, i) => `${i === 0 ? "M" : "L"} ${p.px.toFixed(2)} ${p.py.toFixed(2)}`).join(" ");
+    const areaPath = `${linePath} L ${plotted[plotted.length - 1].px.toFixed(2)} ${(height - padB).toFixed(2)} L ${plotted[0].px.toFixed(2)} ${(height - padB).toFixed(2)} Z`;
+    const yTicks = [0, 0.25, 0.5, 0.75, 1].map((t) => {
+      const val = minY + (maxY - minY) * t;
+      return { y: yScale(val), val };
+    });
+    return { width, height, padL, padR, padT, padB, plotted, linePath, areaPath, yTicks };
+  }, [chartItems]);
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
@@ -4983,10 +5037,16 @@ function RankingsView() {
   const [searchInput, setSearchInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [chartKingdom, setChartKingdom] = useState("");
+  const [chartWindow, setChartWindow] = useState<"12h" | "1d" | "1w" | "1m">("1d");
+  const [chartItems, setChartItems] = useState<Array<{ id: number; networth: number; recordedAt: string }>>([]);
+  const [chartLoading, setChartLoading] = useState(false);
+  const [chartError, setChartError] = useState("");
   const PAGE_SIZE = 20;
   const pageWindow = paginationWindow(total, page, PAGE_SIZE);
 
   const myKingdom = localStorage.getItem(KINGDOM_STORAGE_KEY) || "";
+  const authToken = getToken();
 
   async function load(pg = page, q = search, currentTab = tab) {
     setLoading(true);
@@ -5032,6 +5092,32 @@ function RankingsView() {
     setPage(0);
     void load(0, searchInput);
   }
+
+  async function loadChart(targetKingdom = chartKingdom, windowCode = chartWindow) {
+    const target = String(targetKingdom || "").trim();
+    if (!target) return;
+    setChartLoading(true);
+    setChartError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/premium/rankings/kingdoms/${encodeURIComponent(target)}/nw-history?window=${windowCode}`, {
+        headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setChartItems(Array.isArray(j.items) ? j.items : []);
+    } catch (e: any) {
+      setChartItems([]);
+      setChartError(String(e?.message || e));
+    } finally {
+      setChartLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!chartKingdom) return;
+    void loadChart(chartKingdom, chartWindow);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chartWindow]);
 
   const TH: React.CSSProperties = { padding: "8px 10px", textAlign: "left", color: ACCENT, fontSize: 13, borderBottom: "1px solid rgba(216,176,117,.25)", whiteSpace: "nowrap" };
   const TD: React.CSSProperties = { padding: "7px 10px", fontSize: 13, borderBottom: "1px solid rgba(255,255,255,.06)" };
@@ -5083,6 +5169,58 @@ function RankingsView() {
               </table>
             </div>
 
+            {chartKingdom ? (
+              <div style={{ ...CARD, marginTop: 12, background: "rgba(0,0,0,.24)", border: "1px solid rgba(216,176,117,.22)" }}>
+                <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+                  <div style={{ fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY, fontSize: 20 }}>
+                    Networth Chart — {chartKingdom}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {(["12h", "1d", "1w", "1m"] as const).map((w) => (
+                      <button
+                        key={`chart-window-${w}`}
+                        onClick={() => setChartWindow(w)}
+                        style={{ ...BTN_STYLE, padding: "5px 10px", fontSize: 12, background: chartWindow === w ? "rgba(216,176,117,.5)" : "rgba(8,8,10,.62)" }}
+                      >
+                        {w}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {chartLoading ? <div style={{ color: TEXT_MUTED, fontSize: 13 }}>Loading chart...</div> : null}
+                {chartError ? <div style={{ color: "#ffb5a5", fontSize: 13 }}>{chartError}</div> : null}
+                {!chartLoading && !chartError && chartGeom ? (
+                  <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+                    <svg viewBox={`0 0 ${chartGeom.width} ${chartGeom.height}`} style={{ width: "100%", minWidth: 720, height: 240, display: "block" }}>
+                      {chartGeom.yTicks.map((t, i) => (
+                        <g key={`ytick-${i}`}>
+                          <line
+                            x1={chartGeom.padL}
+                            y1={t.y}
+                            x2={chartGeom.width - chartGeom.padR}
+                            y2={t.y}
+                            stroke="rgba(255,255,255,.08)"
+                            strokeWidth={1}
+                          />
+                          <text x={chartGeom.padL - 8} y={t.y + 4} textAnchor="end" fontSize="11" fill="#d0be9f">
+                            {Math.round(t.val).toLocaleString()}
+                          </text>
+                        </g>
+                      ))}
+                      <path d={chartGeom.areaPath} fill="rgba(216,176,117,.26)" />
+                      <path d={chartGeom.linePath} fill="none" stroke="#d39a2f" strokeWidth={3} strokeLinejoin="round" strokeLinecap="round" />
+                      {chartGeom.plotted.map((p, i) => (
+                        <circle key={`dot-${i}`} cx={p.px} cy={p.py} r={3} fill="#d57300" />
+                      ))}
+                    </svg>
+                  </div>
+                ) : null}
+                {!chartLoading && !chartError && !chartGeom ? (
+                  <div style={{ color: TEXT_MUTED, fontSize: 13 }}>Not enough networth history for this window yet.</div>
+                ) : null}
+              </div>
+            ) : null}
+
             <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12, justifyContent: "flex-end" }}>
               <button disabled={page === 0} onClick={() => setPage(page - 1)} style={{ ...BTN_STYLE, padding: "6px 14px", fontSize: 13 }}>Prev</button>
               <span style={{ fontSize: 13, color: TEXT_MUTED }}>Page {page + 1}</span>
@@ -5133,6 +5271,17 @@ function RankingsView() {
                         <td style={{ ...TD, textAlign: "center" }}>
                           {!isMe && (
                             <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                              <button
+                                title="View premium networth chart"
+                                onClick={() => {
+                                  const target = String(k.name || "");
+                                  setChartKingdom(target);
+                                  void loadChart(target, chartWindow);
+                                }}
+                                style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 12 }}
+                              >
+                                Chart
+                              </button>
                               <button title="Spy on this kingdom" onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "guildhall" })); }} style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 12 }}>Spy</button>
                               <button title="Attack this kingdom" onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "attack-kingdom" })); }} style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 12 }}>Attack</button>
                               <button title="Send pigeon to this kingdom" onClick={() => { localStorage.setItem("gg:prefill-compose-to", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "pigeons" })); }} style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 12 }}>Pigeon</button>
@@ -5162,6 +5311,13 @@ function RankingsView() {
 
 function PigeonsView() {
   const kingdom = localStorage.getItem(KINGDOM_STORAGE_KEY) || "";
+  const auth = (() => {
+    try {
+      const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+      return raw ? (JSON.parse(raw) as AuthState) : null;
+    } catch { return null; }
+  })();
+  const premiumActive = Boolean(auth?.user?.premium?.active);
   const [tab, setTab] = useState<"inbox" | "outbox">("inbox");
   const [messages, setMessages] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -5173,13 +5329,15 @@ function PigeonsView() {
   const [body, setBody] = useState("");
   const [sendBusy, setSendBusy] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
+  const [kindFilter, setKindFilter] = useState<"all" | "system" | "attack" | "spy" | "player">("all");
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
-  async function load() {
+  async function load(filterKind = kindFilter) {
     if (!kingdom) return;
     setLoading(true);
     setError("");
     try {
-      const r = await fetch(`${API_BASE}/api/pigeons/${encodeURIComponent(kingdom)}?limit=100`);
+      const r = await fetch(`${API_BASE}/api/pigeons/${encodeURIComponent(kingdom)}?limit=100&kind=${encodeURIComponent(filterKind)}`);
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       setMessages(j.items || []);
@@ -5190,7 +5348,8 @@ function PigeonsView() {
     }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(kindFilter); }, []);
+  useEffect(() => { void load(kindFilter); }, [kindFilter]);
   useKingdomStream(kingdom, () => { void load(); });
 
   async function markRead(id: number) {
@@ -5233,6 +5392,33 @@ function PigeonsView() {
     }
   }
 
+  async function deleteVisibleMessages() {
+    if (!premiumActive) {
+      setStatusMsg("Premium required: message filtering and mass delete are premium tools.");
+      return;
+    }
+    const ids = displayed.map((m: any) => Number(m.id)).filter((n) => Number.isFinite(n) && n > 0);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Delete ${ids.length.toLocaleString()} visible pigeon(s)? This cannot be undone.`)) return;
+    setDeleteBusy(true);
+    setStatusMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/pigeons/${encodeURIComponent(kingdom)}/delete-many`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ ids, kind: kindFilter, tab }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setStatusMsg(`Deleted ${Number(j.deleted || 0).toLocaleString()} pigeons.`);
+      await load(kindFilter);
+    } catch (e: any) {
+      setStatusMsg(`Delete failed: ${String(e?.message || e)}`);
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   const { inbox, outbox } = splitPigeonMessages(messages);
   const displayed = tab === "inbox" ? inbox : outbox;
   const unreadCount = inbox.filter((m: any) => !m.read_at).length;
@@ -5252,12 +5438,27 @@ function PigeonsView() {
           </button>
         </div>
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
           <button onClick={() => setTab("inbox")} style={{ ...BTN_STYLE, background: tab === "inbox" ? "rgba(216,176,117,.45)" : "rgba(8,8,10,.62)", fontSize: 14, padding: "8px 16px" }}>
             Inbox {unreadCount > 0 ? <span style={{ marginLeft: 6, background: "#c8b8f8", color: "#1a1a2e", borderRadius: 10, padding: "1px 7px", fontSize: 11, fontWeight: 800 }}>{unreadCount}</span> : null}
           </button>
           <button onClick={() => setTab("outbox")} style={{ ...BTN_STYLE, background: tab === "outbox" ? "rgba(216,176,117,.45)" : "rgba(8,8,10,.62)", fontSize: 14, padding: "8px 16px" }}>
             Outbox
+          </button>
+          <select value={kindFilter} onChange={(e) => setKindFilter(e.target.value as any)} style={{ ...INPUT_STYLE, minWidth: 0, flex: "1 1 160px", fontSize: 13 }}>
+            <option value="all">All Types</option>
+            <option value="player">Player</option>
+            <option value="attack">Attack</option>
+            <option value="spy">Spy</option>
+            <option value="system">System</option>
+          </select>
+          <button
+            onClick={() => void deleteVisibleMessages()}
+            disabled={deleteBusy || displayed.length === 0}
+            style={{ ...BTN_STYLE, fontSize: 13, padding: "8px 16px", opacity: premiumActive ? 1 : 0.8 }}
+            title={premiumActive ? "Delete currently visible pigeons" : "Premium required"}
+          >
+            {deleteBusy ? "Deleting..." : "Delete Visible"}
           </button>
         </div>
 
@@ -5328,6 +5529,14 @@ function GuildhallView() {
   const [sabotageOperation, setSabotageOperation] = useState<"resource_heist" | "priest_assassination">("resource_heist");
   const [sabotageResource, setSabotageResource] = useState<"gold" | "food" | "wood" | "stone">("gold");
   const [busy, setBusy] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 980);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   async function load() {
     if (!kingdom.trim()) return;
@@ -5447,15 +5656,20 @@ function GuildhallView() {
   const TD: React.CSSProperties = { padding: "6px 10px", fontSize: 13, borderBottom: "1px solid rgba(255,255,255,.05)" };
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div style={{ display: "grid", gap: 12, minWidth: 0 }}>
       <div style={CARD}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
-          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 28, fontWeight: 800, color: "#fff7ec" }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontSize: isMobile ? 24 : 28, fontWeight: 800, color: "#fff7ec" }}>
             Guildhall — {String(data?.kingdom?.allianceTag ? `[${data.kingdom.allianceTag}] ` : "")}{kingdom || "..."}
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={{ ...INPUT_STYLE, fontSize: 14 }} placeholder="Kingdom name" />
-            <button onClick={() => void load()} style={{ ...BTN_STYLE, fontSize: 13 }}>Load</button>
+          <div style={{ display: "flex", gap: 8, flexWrap: isMobile ? "wrap" : "nowrap", width: isMobile ? "100%" : undefined }}>
+            <input
+              value={kingdom}
+              onChange={(e) => setKingdom(e.target.value)}
+              style={{ ...INPUT_STYLE, fontSize: 14, flex: isMobile ? "1 1 180px" : undefined, minWidth: 0 }}
+              placeholder="Kingdom name"
+            />
+            <button onClick={() => void load()} style={{ ...BTN_STYLE, fontSize: 13, width: isMobile ? "100%" : undefined }}>Load</button>
           </div>
         </div>
         {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading...</div> : null}
@@ -5463,9 +5677,9 @@ function GuildhallView() {
         {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1", fontSize: 14 }}>{actionMsg}</div> : null}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
         {/* Left panel */}
-        <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
+        <div style={{ display: "grid", gap: 12, alignContent: "start", minWidth: 0 }}>
           <div style={CARD}>
             <div style={{ fontSize: 14, color: TEXT_MUTED, marginBottom: 6 }}>Rank: <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>#{rankNum || "N/A"}</span></div>
             <div style={{ fontSize: 14, color: TEXT_MUTED }}>Population at Home: <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>{populationHome.toLocaleString()}</span></div>
@@ -5508,7 +5722,7 @@ function GuildhallView() {
         </div>
 
         {/* Right panel */}
-        <div style={{ display: "grid", gap: 10, alignContent: "start" }}>
+        <div style={{ display: "grid", gap: 10, alignContent: "start", minWidth: 0 }}>
           <div style={CARD}>
             <button onClick={() => setTrainOpen(!trainOpen)} style={{ ...BTN_STYLE, width: "100%", textAlign: "left", marginBottom: trainOpen ? 12 : 0, fontSize: 14 }}>
               {trainOpen ? "▼" : "▶"} + TRAIN SPIES
@@ -5518,7 +5732,7 @@ function GuildhallView() {
                 <div style={{ fontSize: 13, color: TEXT_MUTED }}>
                   Train spies at your guildhall. Available slots: <span style={{ color: spyCapacityAvailable > 0 ? ACCENT : "#ffb0a5", fontWeight: 700 }}>{spyCapacityAvailable.toLocaleString()}</span>
                 </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <span style={{ fontSize: 14, color: TEXT_MUTED }}>Amount:</span>
                   <input
                     type="number"
@@ -5529,7 +5743,7 @@ function GuildhallView() {
                     style={{ ...INPUT_STYLE, width: 80, fontSize: 14 }}
                   />
                 </div>
-                <button type="submit" disabled={busy || spyCapacityAvailable <= 0} style={{ ...BTN_STYLE, width: "fit-content", fontSize: 13 }}>
+                <button type="submit" disabled={busy || spyCapacityAvailable <= 0} style={{ ...BTN_STYLE, width: isMobile ? "100%" : "fit-content", fontSize: 13 }}>
                   {busy ? "Training..." : spyCapacityAvailable <= 0 ? "No Capacity" : "Train Now"}
                 </button>
               </form>
@@ -5543,11 +5757,11 @@ function GuildhallView() {
             {spyOpen ? (
               <form onSubmit={sendSpies} style={{ display: "grid", gap: 8 }}>
                 <KingdomInput value={defenderKingdom} onChange={(v) => setDefenderKingdom(v)} placeholder="Target Kingdom" />
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <span style={{ fontSize: 14, color: TEXT_MUTED }}>Spies to send:</span>
                   <input type="number" min={1} value={spiesToSend} onChange={(e) => setSpiesToSend(Math.max(1, Number(e.target.value)))} style={{ ...INPUT_STYLE, width: 80, fontSize: 14 }} />
                 </div>
-                <button type="submit" disabled={busy} style={{ ...BTN_STYLE, width: "fit-content", fontSize: 13 }}>{busy ? "Sending..." : "Send Spies"}</button>
+                <button type="submit" disabled={busy} style={{ ...BTN_STYLE, width: isMobile ? "100%" : "fit-content", fontSize: 13 }}>{busy ? "Sending..." : "Send Spies"}</button>
               </form>
             ) : null}
           </div>
@@ -5558,12 +5772,12 @@ function GuildhallView() {
               <input value={sabotageTarget} onChange={(e) => setSabotageTarget(e.target.value)} placeholder="Target Kingdom" style={INPUT_STYLE} required />
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <span style={{ fontSize: 13, color: TEXT_MUTED }}>Operation</span>
-                <select value={sabotageOperation} onChange={(e) => setSabotageOperation(e.target.value as "resource_heist" | "priest_assassination")} style={INPUT_STYLE}>
+                <select value={sabotageOperation} onChange={(e) => setSabotageOperation(e.target.value as "resource_heist" | "priest_assassination")} style={{ ...INPUT_STYLE, minWidth: 0, flex: isMobile ? "1 1 100%" : undefined }}>
                   <option value="resource_heist">Resource Heist</option>
                   <option value="priest_assassination">Priest Assassination</option>
                 </select>
                 <span style={{ fontSize: 13, color: TEXT_MUTED }}>Resource</span>
-                <select disabled={sabotageOperation !== "resource_heist"} value={sabotageResource} onChange={(e) => setSabotageResource(e.target.value as "gold" | "food" | "wood" | "stone")} style={INPUT_STYLE}>
+                <select disabled={sabotageOperation !== "resource_heist"} value={sabotageResource} onChange={(e) => setSabotageResource(e.target.value as "gold" | "food" | "wood" | "stone")} style={{ ...INPUT_STYLE, minWidth: 0 }}>
                   <option value="gold">Gold</option>
                   <option value="food">Food</option>
                   <option value="wood">Wood</option>
@@ -5572,7 +5786,7 @@ function GuildhallView() {
                 <span style={{ fontSize: 13, color: TEXT_MUTED }}>Spies</span>
                 <input type="number" min={1} value={sabotageSpies} onChange={(e) => setSabotageSpies(Math.max(1, Number(e.target.value || 1)))} style={{ ...INPUT_STYLE, width: 90 }} />
               </div>
-              <button type="submit" disabled={busy} style={{ ...BTN_STYLE, width: "fit-content", fontSize: 13 }}>
+              <button type="submit" disabled={busy} style={{ ...BTN_STYLE, width: isMobile ? "100%" : "fit-content", fontSize: 13 }}>
                 {busy ? "Executing..." : "Run Sabotage"}
               </button>
             </form>
@@ -5607,6 +5821,14 @@ function EmbassyView() {
   const [missionType, setMissionType] = useState<"peace" | "trade" | "intel">("peace");
   const [targetKingdom, setTargetKingdom] = useState("");
   const [missionNote, setMissionNote] = useState("");
+  const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 980);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   async function load() {
     if (!kingdom.trim()) return;
@@ -5690,15 +5912,20 @@ function EmbassyView() {
   const TD: React.CSSProperties = { padding: "6px 10px", fontSize: 13, borderBottom: "1px solid rgba(255,255,255,.05)" };
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div style={{ display: "grid", gap: 12, minWidth: 0 }}>
       <div style={CARD}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
-          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 28, fontWeight: 800, color: "#fff7ec" }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontSize: isMobile ? 24 : 28, fontWeight: 800, color: "#fff7ec" }}>
             Embassy — {allianceTag ? `[${allianceTag}] ` : ""}{kingdom || "..."}
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={{ ...INPUT_STYLE, fontSize: 14 }} placeholder="Kingdom name" />
-            <button onClick={() => void load()} style={{ ...BTN_STYLE, fontSize: 13 }}>Load</button>
+          <div style={{ display: "flex", gap: 8, flexWrap: isMobile ? "wrap" : "nowrap", width: isMobile ? "100%" : undefined }}>
+            <input
+              value={kingdom}
+              onChange={(e) => setKingdom(e.target.value)}
+              style={{ ...INPUT_STYLE, fontSize: 14, flex: isMobile ? "1 1 180px" : undefined, minWidth: 0 }}
+              placeholder="Kingdom name"
+            />
+            <button onClick={() => void load()} style={{ ...BTN_STYLE, fontSize: 13, width: isMobile ? "100%" : undefined }}>Load</button>
           </div>
         </div>
         {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading...</div> : null}
@@ -5706,74 +5933,78 @@ function EmbassyView() {
         {statusMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{statusMsg}</div> : null}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
         {/* Left panel */}
-        <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
+        <div style={{ display: "grid", gap: 12, alignContent: "start", minWidth: 0 }}>
           <div style={CARD}>
             <div style={{ fontSize: 14, color: TEXT_MUTED, marginBottom: 6 }}>Rank: <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>#{rankNum || "N/A"}</span></div>
             <div style={{ fontSize: 14, color: TEXT_MUTED, marginBottom: 12 }}>Religion: <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>Nastfuru</span></div>
             <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6 }}>Kingdom Diplomats</div>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th style={TH}>Location</th>
-                  <th style={TH}>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td style={TD}>Home</td>
-                  <td style={TD}>{Number(diplomats?.home || 0).toLocaleString()} diplomats</td>
-                </tr>
-                <tr>
-                  <td style={TD}>Training</td>
-                  <td style={TD}>{Number(diplomats?.train || 0).toLocaleString()} diplomats</td>
-                </tr>
-                <tr>
-                  <td style={TD}>Away (missions)</td>
-                  <td style={TD}>{Number(diplomats?.away || 0).toLocaleString()} diplomats</td>
-                </tr>
-              </tbody>
-            </table>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 280 }}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Location</th>
+                    <th style={TH}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={TD}>Home</td>
+                    <td style={TD}>{Number(diplomats?.home || 0).toLocaleString()} diplomats</td>
+                  </tr>
+                  <tr>
+                    <td style={TD}>Training</td>
+                    <td style={TD}>{Number(diplomats?.train || 0).toLocaleString()} diplomats</td>
+                  </tr>
+                  <tr>
+                    <td style={TD}>Away (missions)</td>
+                    <td style={TD}>{Number(diplomats?.away || 0).toLocaleString()} diplomats</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
 
         {/* Right panel */}
-        <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
+        <div style={{ display: "grid", gap: 12, alignContent: "start", minWidth: 0 }}>
           <div style={CARD}>
             <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Foreign Diplomats</div>
             {incomingMissions.length === 0 ? (
               <div style={{ color: TEXT_MUTED, fontSize: 14 }}>No diplomats currently deployed to this kingdom.</div>
             ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th style={TH}>Kingdom</th>
-                    <th style={TH}>Status</th>
-                    <th style={TH}>Count</th>
-                    <th style={TH}>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {incomingMissions.map((d: any, i: number) => (
-                    <tr key={i}>
-                      <td style={TD}>{String(d.from_kingdom || "Unknown")}</td>
-                      <td style={{ ...TD, color: d.status === "accepted" ? "#a8e6a3" : d.status === "declined" ? "#ff7f7f" : TEXT_MUTED }}>
-                        {String(d.mission_type || "").toUpperCase()} • {String(d.status || "")}
-                      </td>
-                      <td style={TD}>{String(d.note || "-")}</td>
-                      <td style={TD}>
-                        {String(d.status) === "pending" ? (
-                          <div style={{ display: "flex", gap: 6 }}>
-                            <button disabled={busy} onClick={() => void respondMission(Number(d.id), "accepted")} style={{ ...BTN_STYLE, fontSize: 11, padding: "3px 8px" }}>Accept</button>
-                            <button disabled={busy} onClick={() => void respondMission(Number(d.id), "declined")} style={{ ...BTN_STYLE, fontSize: 11, padding: "3px 8px", background: "rgba(180,60,60,.5)" }}>Decline</button>
-                          </div>
-                        ) : <span style={{ fontSize: 12, color: TEXT_MUTED }}>Closed</span>}
-                      </td>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
+                  <thead>
+                    <tr>
+                      <th style={TH}>Kingdom</th>
+                      <th style={TH}>Status</th>
+                      <th style={TH}>Count</th>
+                      <th style={TH}>Action</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {incomingMissions.map((d: any, i: number) => (
+                      <tr key={i}>
+                        <td style={TD}>{String(d.from_kingdom || "Unknown")}</td>
+                        <td style={{ ...TD, color: d.status === "accepted" ? "#a8e6a3" : d.status === "declined" ? "#ff7f7f" : TEXT_MUTED }}>
+                          {String(d.mission_type || "").toUpperCase()} • {String(d.status || "")}
+                        </td>
+                        <td style={TD}>{String(d.note || "-")}</td>
+                        <td style={TD}>
+                          {String(d.status) === "pending" ? (
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                              <button disabled={busy} onClick={() => void respondMission(Number(d.id), "accepted")} style={{ ...BTN_STYLE, fontSize: 11, padding: "3px 8px" }}>Accept</button>
+                              <button disabled={busy} onClick={() => void respondMission(Number(d.id), "declined")} style={{ ...BTN_STYLE, fontSize: 11, padding: "3px 8px", background: "rgba(180,60,60,.5)" }}>Decline</button>
+                            </div>
+                          ) : <span style={{ fontSize: 12, color: TEXT_MUTED }}>Closed</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
 
@@ -5787,7 +6018,7 @@ function EmbassyView() {
                 <option value="intel">Intel Exchange</option>
               </select>
               <textarea value={missionNote} onChange={(e) => setMissionNote(e.target.value)} placeholder="Optional note" rows={3} style={{ ...INPUT_STYLE, resize: "vertical" }} />
-              <button type="submit" disabled={busy} style={{ ...BTN_STYLE, width: "fit-content", fontSize: 13 }}>{busy ? "Sending..." : "Send Mission"}</button>
+              <button type="submit" disabled={busy} style={{ ...BTN_STYLE, width: isMobile ? "100%" : "fit-content", fontSize: 13 }}>{busy ? "Sending..." : "Send Mission"}</button>
             </form>
           </div>
 
@@ -6188,6 +6419,23 @@ function App() {
           setAuth(null);
           return;
         }
+        const nextAuth: AuthState = {
+          token,
+          user: {
+            id: String(j?.user?.id || auth?.user?.id || ""),
+            username: String(j?.user?.username || auth?.user?.username || ""),
+            email: String(j?.user?.email || auth?.user?.email || ""),
+            emailVerified: Boolean(j?.user?.emailVerified),
+            isAdmin: Boolean(j?.user?.isAdmin),
+            premium: j?.user?.premium || auth?.user?.premium || undefined,
+          },
+          kingdom: j?.kingdom
+            ? { id: Number(j.kingdom.id), name: String(j.kingdom.name) }
+            : (auth?.kingdom || null),
+          expiresAt: String(j?.session?.expiresAt || auth?.expiresAt || ""),
+        };
+        setAuth(nextAuth);
+        localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(nextAuth));
         if (j?.kingdom?.name) localStorage.setItem(KINGDOM_STORAGE_KEY, String(j.kingdom.name));
       } catch {
         if (cancelled) return;

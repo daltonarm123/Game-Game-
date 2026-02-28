@@ -189,6 +189,9 @@ export async function ensureSchema(): Promise<void> {
       email TEXT,
       referral_code TEXT UNIQUE,
       password_hash TEXT,
+      premium_started_at TIMESTAMPTZ,
+      premium_ends_at TIMESTAMPTZ,
+      premium_shield_last_used_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
@@ -711,6 +714,9 @@ export async function ensureSchema(): Promise<void> {
   await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT false`);
   await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN NOT NULL DEFAULT false`);
   await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS banned_reason TEXT`);
+  await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS premium_started_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS premium_ends_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS premium_shield_last_used_at TIMESTAMPTZ`);
   // Ensure priests are trainable (in case old seed set is_trainable=false)
   await pool.query(`UPDATE troop_types SET is_trainable = TRUE, gold_cost = 400, food_cost = 150, train_seconds = 3600, notes = 'Max 5 per Temple. Each priest generates 4 mana/hr.' WHERE code = 'priests' AND is_trainable = FALSE`);
   await pool.query(`ALTER TABLE settlement_building_types ADD COLUMN IF NOT EXISTS required_settlement_size INT NOT NULL DEFAULT 1`);
