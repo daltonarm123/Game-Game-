@@ -580,7 +580,7 @@ function OverviewView() {
               {bq.length === 0 ? <div style={{ color: TEXT_MUTED, fontSize: 14 }}>No active build queue.</div> : null}
               {bq.map((q: any) => (
                 <div key={`bq-${q.id}`} style={{ marginBottom: 6, fontSize: 14, display: "grid", gridTemplateColumns: isMobileOv ? "1fr" : "1fr auto auto", alignItems: "center", gap: 8 }}>
-                  <span style={{ color: TEXT_MUTED }}>{String(q.building_code || "").replace(/_/g, " ")} {"->"} Lvl {q.target_level}</span>
+                  <span style={{ color: TEXT_MUTED }}>{String(q.building_code || "").replace(/_/g, " ")} {"->"} {Number(q.quantity || 1).toLocaleString()}</span>
                   <QueueCountdown completesAt={q.completes_at} onComplete={() => void load()} />
                   <button
                     onClick={() => void cancelOverviewBuildQueueItem(Number(q.id))}
@@ -644,7 +644,7 @@ function BuildingsView() {
   const buildQty = useMemo(() => {
     const n = Math.floor(Number(buildQtyInput || "1"));
     if (!Number.isFinite(n)) return 1;
-    return Math.max(1, Math.min(500, n));
+    return Math.max(1, Math.min(50000, n));
   }, [buildQtyInput]);
 
   useEffect(() => {
@@ -698,7 +698,7 @@ function BuildingsView() {
     const m: Record<string, number> = {};
     for (const q of buildQueue) {
       const code = String(q.building_code || "");
-      m[code] = (m[code] || 0) + 1;
+      m[code] = (m[code] || 0) + Number(q.quantity || 1);
     }
     return m;
   }, [buildQueue]);
@@ -714,7 +714,7 @@ function BuildingsView() {
     let used = 0;
     for (const q of buildQueue) {
       const b = buildingMap[String(q.building_code)];
-      used += Number(b?.land_cost || 0);
+      used += Number(b?.land_cost || 0) * Number(q.quantity || 1);
     }
     return used;
   }, [buildQueue, buildingMap]);
@@ -732,25 +732,15 @@ function BuildingsView() {
     setBuildBusy(true);
     try {
       const qty = Math.max(1, Math.floor(Number(buildQty || 1)));
-      let success = 0;
-      for (let i = 0; i < qty; i += 1) {
-        const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/build`, {
-          method: "POST",
-          headers: authHeaders(),
-          body: JSON.stringify({ buildingCode: buildCode }),
-        });
-        const j = await r.json();
-        if (!r.ok || !j?.ok) {
-          if (success === 0) throw new Error(j?.error || `HTTP ${r.status}`);
-          setActionMsg(`Queued ${success} x ${buildCode}. Stopped: ${String(j?.error || `HTTP ${r.status}`)}`);
-          await load();
-          setBuildBusy(false);
-          return;
-        }
-        success += 1;
-      }
-      setActionMsg(`Queued ${success} x ${buildCode}.`);
-      await load();
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/build`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ buildingCode: buildCode, quantity: qty }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Queued ${qty.toLocaleString()} x ${buildCode}.`);
+      void load();
     } catch (e: any) {
       setActionMsg(`Build failed: ${String(e?.message || e)}`);
     } finally {
@@ -972,7 +962,7 @@ function BuildingsView() {
               <input
                 type="number"
                 min={1}
-                max={500}
+                max={50000}
                 inputMode="numeric"
                 pattern="[0-9]*"
                 value={buildQtyInput}
@@ -984,7 +974,7 @@ function BuildingsView() {
                 style={{ ...INPUT_STYLE, width: isMobile ? "100%" : 90 }}
               />
               <button type="submit" style={{ ...BTN_STYLE, width: isMobile ? "100%" : "auto" }} disabled={buildBusy}>
-                {buildBusy ? "Queueing..." : "Queue Build"}
+                {buildBusy ? "Submitting..." : "Queue Build"}
               </button>
             </form>
 
@@ -992,6 +982,11 @@ function BuildingsView() {
           const bm = buildingMap[buildCode];
           const meta = BUILDING_META[buildCode] || { sigil: "??", summary: "Kingdom structure.", unlocks: "" };
           const prod = BUILDING_PROD[buildCode];
+          const currentBuilt = Number(bm.level || 0);
+          const currentQueued = Number(queueCounts[buildCode] || 0);
+          const firstLevel = currentBuilt + currentQueued + 1;
+          const lastLevel = firstLevel + buildQty - 1;
+          const levelSum = (buildQty * (firstLevel + lastLevel)) / 2;
           const rawSec = Number(bm.base_build_seconds || 0);
           const buildTimeTxt = rawSec >= 604800
             ? `${Math.floor(rawSec / 604800)} week`
@@ -1000,8 +995,8 @@ function BuildingsView() {
             : rawSec >= 3600
             ? `${Math.floor(rawSec / 3600)} hour${Math.floor(rawSec / 3600) !== 1 ? "s" : ""}`
             : `${Math.floor(rawSec / 60)} min`;
-          const totalWood = Number(bm.wood_cost || 0) * buildQty;
-          const totalStone = Number(bm.stone_cost || 0) * buildQty;
+          const totalWood = Math.floor(Number(bm.wood_cost || 0) * levelSum);
+          const totalStone = Math.floor(Number(bm.stone_cost || 0) * levelSum);
           const totalLand = Number(bm.land_cost || 0) * buildQty;
           const canAffordWood = Number(k?.wood || 0) >= totalWood;
           const canAffordStone = Number(k?.stone || 0) >= totalStone;
@@ -1062,7 +1057,7 @@ function BuildingsView() {
           <div key={q.id} style={{ marginBottom: 8, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr auto auto", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 14, overflowWrap: "anywhere" }}>
               <span style={{ color: ACCENT, fontWeight: 700 }}>{BUILDING_META[String(q.building_code)]?.sigil || "??"}</span>
-              {" "}{String(q.building_code).replace(/_/g, " ")} {"->"} Lvl {q.target_level}
+              {" "}{String(q.building_code).replace(/_/g, " ")} {"->"} {Number(q.quantity || 1).toLocaleString()}
             </span>
             <QueueCountdown completesAt={q.completes_at} onComplete={() => void load()} />
             <button
@@ -2695,7 +2690,7 @@ function WarRoomView() {
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       setActionMsg(`Queued ${Number(trainQty || 0).toLocaleString()} ${trainTroop}.`);
-      await load();
+      void load();
     } catch (e: any) {
       setActionMsg(`Train failed: ${String(e?.message || e)}`);
     }
@@ -3175,7 +3170,7 @@ function TrainTroopsView() {
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       setActionMsg(`Queued ${Number(trainQty || 0).toLocaleString()} ${trainTroop}.`);
-      await load();
+      void load();
     } catch (e: any) {
       setActionMsg(`Train failed: ${String(e?.message || e)}`);
     }
@@ -4727,6 +4722,39 @@ function AdminView() {
     if (tab === "users") loadUsers(search);
   };
 
+  const resendVerification = async (userId: string) => {
+    const j = await api("/api/admin/resend-verification", "POST", { userId });
+    setMsg(j.ok ? (j.message || "Verification email sent.") : j.error);
+    if (tab === "users") loadUsers(search);
+  };
+
+  const editAccount = async (u: UserRow) => {
+    const nextUsername = window.prompt(`Username for ${u.username}:`, String(u.username || ""));
+    if (nextUsername === null) return;
+    const nextEmail = window.prompt(`Email for ${u.username}:`, String(u.email || ""));
+    if (nextEmail === null) return;
+    const nextPassword = window.prompt("New password (leave blank to keep current):", "") ?? "";
+    const trimmedUsername = String(nextUsername || "").trim();
+    const trimmedEmail = String(nextEmail || "").trim();
+    if (!trimmedUsername) {
+      setMsg("Username cannot be empty.");
+      return;
+    }
+    if (!trimmedEmail) {
+      setMsg("Email cannot be empty.");
+      return;
+    }
+    if (nextPassword && nextPassword.length < 8) {
+      setMsg("Password must be at least 8 characters.");
+      return;
+    }
+    const body: any = { userId: u.id, username: trimmedUsername, email: trimmedEmail };
+    if (nextPassword) body.password = String(nextPassword);
+    const j = await api("/api/admin/update-user", "POST", body);
+    setMsg(j.ok ? "Account updated." : j.error);
+    if (tab === "users") loadUsers(search);
+  };
+
   const TAB_BTN = (id: typeof tab, label: string) => (
     <button
       key={id}
@@ -4899,6 +4927,20 @@ function AdminView() {
                             ) : (
                               <button onClick={() => setAdminUser(u.id, false)} style={{ ...BTN_STYLE, fontSize: 12, padding: "4px 8px" }}>Revoke Admin</button>
                             )}
+                            <button
+                              onClick={() => void resendVerification(u.id)}
+                              style={{ ...BTN_STYLE, fontSize: 12, padding: "4px 8px" }}
+                              disabled={Boolean(u.email_verified)}
+                              title={u.email_verified ? "Email is already verified" : "Send a new verification email"}
+                            >
+                              Resend Email
+                            </button>
+                            <button
+                              onClick={() => void editAccount(u)}
+                              style={{ ...BTN_STYLE, fontSize: 12, padding: "4px 8px" }}
+                            >
+                              Edit Account
+                            </button>
                           </div>
                         </td>
                       </tr>

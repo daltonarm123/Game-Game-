@@ -273,6 +273,7 @@ export async function ensureSchema(): Promise<void> {
       id BIGSERIAL PRIMARY KEY,
       kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
       building_code TEXT NOT NULL REFERENCES building_types(code),
+      quantity INT NOT NULL DEFAULT 1,
       target_level INT NOT NULL,
       started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       completes_at TIMESTAMPTZ NOT NULL,
@@ -670,6 +671,7 @@ export async function ensureSchema(): Promise<void> {
   await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS email TEXT`);
   await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS referral_code TEXT`);
   await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS password_hash TEXT`);
+  await pool.query(`ALTER TABLE build_queue ADD COLUMN IF NOT EXISTS quantity INT NOT NULL DEFAULT 1`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS app_users_email_lower_uq ON app_users((LOWER(email))) WHERE email IS NOT NULL`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS app_users_referral_code_uq ON app_users(referral_code) WHERE referral_code IS NOT NULL`);
 

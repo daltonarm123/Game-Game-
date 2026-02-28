@@ -174,6 +174,7 @@ const authLoginBody = z.object({
 
 const buildBody = z.object({
   buildingCode: z.string().min(1),
+  quantity: z.number().int().min(1).max(50000).optional().default(1),
 });
 
 const trainBody = z.object({
@@ -1744,7 +1745,7 @@ app.get("/api/kingdom/:name", async (req, res) => {
 
     const buildQueue = await pool.query(
       `
-      SELECT id, building_code, target_level, started_at, completes_at, status
+      SELECT id, building_code, quantity, target_level, started_at, completes_at, status
       FROM build_queue
       WHERE kingdom_id = $1
       ORDER BY started_at DESC
@@ -1816,6 +1817,7 @@ app.post("/api/kingdom/:name/build", requireAuth, async (req, res) => {
   if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
 
   const buildingCode = parsed.data.buildingCode.toLowerCase();
+  const qty = Math.max(1, Number(parsed.data.quantity || 1));
 
   try {
     const out = await withTx(async (c) => {
@@ -1845,7 +1847,7 @@ app.post("/api/kingdom/:name/build", requireAuth, async (req, res) => {
       const usedLand = Number(landUse.rows[0]?.used_land || 0);
       const queuedLandQ = await c.query(
         `
-        SELECT COALESCE(SUM(bt.land_cost), 0) AS queued_land
+        SELECT COALESCE(SUM(bt.land_cost * COALESCE(bq.quantity, 1)), 0) AS queued_land
         FROM build_queue bq
         JOIN building_types bt ON bt.code = bq.building_code
         WHERE bq.kingdom_id = $1 AND bq.status='queued'
@@ -1861,11 +1863,14 @@ app.post("/api/kingdom/:name/build", requireAuth, async (req, res) => {
          WHERE kingdom_id=$1 AND building_code=$3 AND status='queued'`,
         [kingdom.id, currentLevel, buildingCode],
       );
-      const nextLevel = Number(q.rows[0]?.max_target || currentLevel) + 1;
+      const maxTarget = Number(q.rows[0]?.max_target || currentLevel);
+      const firstLevel = maxTarget + 1;
+      const targetLevel = maxTarget + qty;
+      const levelSum = (qty * (firstLevel + targetLevel)) / 2;
 
-      const woodCost = Number(def.wood_cost) * nextLevel;
-      const stoneCost = Number(def.stone_cost) * nextLevel;
-      const landCost = Number(def.land_cost || 0);
+      const woodCost = Math.floor(Number(def.wood_cost || 0) * levelSum);
+      const stoneCost = Math.floor(Number(def.stone_cost || 0) * levelSum);
+      const landCost = Math.floor(Number(def.land_cost || 0) * qty);
       if (availableLand < landCost) {
         throw new Error(`not enough land (need ${landCost}, available ${availableLand})`);
       }
@@ -1877,10 +1882,10 @@ app.post("/api/kingdom/:name/build", requireAuth, async (req, res) => {
 
       const seconds = LOCAL_DEMO_FAST ? FAST_BUILD_SECONDS : Math.max(1, Number(def.base_build_seconds || 0));
       const ins = await c.query(
-        `INSERT INTO build_queue(kingdom_id, building_code, target_level, started_at, completes_at, status)
-         VALUES ($1,$2,$3, now(), now() + ($4 * INTERVAL '1 second'), 'queued')
-         RETURNING id, kingdom_id, building_code, target_level, started_at, completes_at, status`,
-        [kingdom.id, buildingCode, nextLevel, seconds],
+        `INSERT INTO build_queue(kingdom_id, building_code, quantity, target_level, started_at, completes_at, status)
+         VALUES ($1,$2,$3,$4, now(), now() + ($5 * INTERVAL '1 second'), 'queued')
+         RETURNING id, kingdom_id, building_code, quantity, target_level, started_at, completes_at, status`,
+        [kingdom.id, buildingCode, qty, targetLevel, seconds],
       );
 
       return { queue: ins.rows[0], costs: { land: landCost, wood: woodCost, stone: stoneCost } };
@@ -1907,7 +1912,7 @@ app.post("/api/kingdom/:name/build/cancel", requireAuth, async (req, res) => {
 
       const q = await c.query(
         `
-        SELECT bq.id, bq.building_code, bq.target_level, bt.name AS building_name, bt.wood_cost, bt.stone_cost
+        SELECT bq.id, bq.building_code, bq.quantity, bq.target_level, bt.name AS building_name, bt.wood_cost, bt.stone_cost
         FROM build_queue bq
         JOIN building_types bt ON bt.code = bq.building_code
         WHERE bq.id = $1 AND bq.kingdom_id = $2 AND bq.status = 'queued'
@@ -1917,9 +1922,12 @@ app.post("/api/kingdom/:name/build/cancel", requireAuth, async (req, res) => {
       );
       if (!q.rowCount) throw new Error("build queue item not found or already processed");
       const row = q.rows[0];
+      const qty = Math.max(1, Number(row.quantity || 1));
       const targetLevel = Number(row.target_level || 1);
-      const refundWood = Math.max(0, Math.floor(Number(row.wood_cost || 0) * targetLevel));
-      const refundStone = Math.max(0, Math.floor(Number(row.stone_cost || 0) * targetLevel));
+      const firstLevel = Math.max(1, targetLevel - qty + 1);
+      const levelSum = (qty * (firstLevel + targetLevel)) / 2;
+      const refundWood = Math.max(0, Math.floor(Number(row.wood_cost || 0) * levelSum));
+      const refundStone = Math.max(0, Math.floor(Number(row.stone_cost || 0) * levelSum));
 
       await c.query(`UPDATE build_queue SET status='cancelled', completed_at=now() WHERE id=$1 AND status='queued'`, [queueId]);
       await c.query(`UPDATE kingdoms SET wood = wood + $2, stone = stone + $3 WHERE id=$1`, [kingdomId, refundWood, refundStone]);
@@ -1928,6 +1936,7 @@ app.post("/api/kingdom/:name/build/cancel", requireAuth, async (req, res) => {
         queueId,
         buildingCode: String(row.building_code || ""),
         buildingName: String(row.building_name || row.building_code || ""),
+        quantity: qty,
         refunds: { wood: refundWood, stone: refundStone },
       };
     });
@@ -2286,17 +2295,27 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
       }
 
       const sentOnly = Object.fromEntries(Object.entries(sentTroopsRaw).filter(([, v]) => v > 0));
-      const attackerPower = effectivePowerVsComposition(sentOnly, troopAtt, defenderTroops);
+      const isPeasantOnlyAttack = Object.keys(sentOnly).length > 0
+        && Object.entries(sentOnly).every(([code, sent]) => code === "peasants" && Number(sent) > 0);
+      let attackerPower = effectivePowerVsComposition(sentOnly, troopAtt, defenderTroops);
       const defenderPowerRaw = effectivePowerVsComposition(defenderTroops, troopDef, sentOnly);
       const castles = Number(defCastle.rows[0]?.lvl || 0);
       const castleBonus = castles > 0 ? Math.sqrt(castles) / 100 : 0;
       const defenderPower = defenderPowerRaw * (1 + castleBonus);
 
-      const ratio = attackerPower <= 0 ? 0 : attackerPower / Math.max(1, defenderPower);
-      const result = combatResultFromRatio(ratio);
+      let ratio = attackerPower <= 0 ? 0 : attackerPower / Math.max(1, defenderPower);
+      let result = combatResultFromRatio(ratio);
 
-      const aLossPct = attackerLossPct(result);
-      const dLossPct = defenderLossPct(result);
+      let aLossPct = attackerLossPct(result);
+      let dLossPct = defenderLossPct(result);
+      if (isPeasantOnlyAttack) {
+        // Hard punish peasant-only attacks: no defender damage, attackers are wiped out.
+        attackerPower = 0;
+        ratio = 0;
+        result = "FLEE";
+        aLossPct = 1;
+        dLossPct = 0;
+      }
 
       const attackerAfterSend: Record<string, number> = { ...attackerTroops };
       for (const [code, sent] of Object.entries(sentOnly)) {
@@ -5497,6 +5516,116 @@ app.post("/api/admin/set-admin", requireAdmin, async (req, res) => {
     if (!r.rowCount) return res.status(404).json({ ok: false, error: "user not found" });
     return res.json({ ok: true });
   } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+app.post("/api/admin/resend-verification", requireAdmin, async (req, res) => {
+  const parsed = z.object({ userId: z.string().min(1) }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  try {
+    const u = await pool.query(`SELECT id, email, username, email_verified FROM app_users WHERE id=$1 LIMIT 1`, [parsed.data.userId]);
+    if (!u.rowCount) return res.status(404).json({ ok: false, error: "user not found" });
+    const user = u.rows[0];
+    const email = String(user.email || "").trim();
+    if (!email) return res.status(400).json({ ok: false, error: "user has no email address" });
+    if (Boolean(user.email_verified)) return res.status(400).json({ ok: false, error: "email is already verified" });
+
+    await pool.query(`DELETE FROM email_verification_tokens WHERE user_id=$1 AND used_at IS NULL`, [user.id]);
+    const verifyToken = randomBytes(32).toString("hex");
+    await pool.query(`INSERT INTO email_verification_tokens(token, user_id) VALUES($1,$2)`, [verifyToken, user.id]);
+    void sendEmail(
+      email,
+      "Verify your Crownforge email",
+      `<p>Hi ${String(user.username || "Commander")},</p><p><a href="${APP_BASE_URL}/?verify=${verifyToken}">Verify Email</a></p><p>Expires in 24 hours.</p>`,
+    ).catch((e: any) => { console.error("Failed to send admin resend-verification email", e); });
+
+    return res.json({ ok: true, message: `Verification email sent to ${email}.` });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/admin/update-user", requireAdmin, async (req, res) => {
+  const parsed = z.object({
+    userId: z.string().min(1),
+    username: z.string().min(3).max(32).optional(),
+    email: z.string().email().optional(),
+    password: z.string().min(8).max(128).optional(),
+  }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+
+  const hasUpdate = parsed.data.username !== undefined || parsed.data.email !== undefined || parsed.data.password !== undefined;
+  if (!hasUpdate) return res.status(400).json({ ok: false, error: "no fields provided to update" });
+
+  try {
+    const out = await withTx(async (c) => {
+      const u = await c.query(`SELECT id, username, email, email_verified FROM app_users WHERE id=$1 LIMIT 1 FOR UPDATE`, [parsed.data.userId]);
+      if (!u.rowCount) throw new Error("user not found");
+      const current = u.rows[0];
+
+      const updates: string[] = [];
+      const vals: any[] = [current.id];
+      let idx = 2;
+
+      const nextUsername = parsed.data.username !== undefined ? normalizeUsername(parsed.data.username) : null;
+      if (nextUsername !== null) {
+        if (nextUsername.length < 3 || nextUsername.length > 32) throw new Error("username must be 3 to 32 characters");
+        const uq = await c.query(`SELECT 1 FROM app_users WHERE LOWER(username)=LOWER($1) AND id <> $2 LIMIT 1`, [nextUsername, current.id]);
+        if (uq.rowCount) throw new Error("username already in use");
+        updates.push(`username=$${idx++}`);
+        vals.push(nextUsername);
+      }
+
+      const nextEmail = parsed.data.email !== undefined ? normalizeEmail(parsed.data.email) : null;
+      let emailChanged = false;
+      if (nextEmail !== null) {
+        const eq = await c.query(`SELECT 1 FROM app_users WHERE LOWER(email)=LOWER($1) AND id <> $2 LIMIT 1`, [nextEmail, current.id]);
+        if (eq.rowCount) throw new Error("email already in use");
+        updates.push(`email=$${idx++}`);
+        vals.push(nextEmail);
+        emailChanged = normalizeEmail(String(current.email || "")) !== nextEmail;
+        if (emailChanged) updates.push(`email_verified=false`);
+      }
+
+      if (parsed.data.password !== undefined) {
+        updates.push(`password_hash=$${idx++}`);
+        vals.push(hashPassword(parsed.data.password));
+      }
+
+      if (!updates.length) throw new Error("no changes to apply");
+      const updated = await c.query(
+        `UPDATE app_users SET ${updates.join(", ")} WHERE id=$1 RETURNING id, username, email, email_verified, is_admin, is_banned`,
+        vals,
+      );
+      const row = updated.rows[0];
+
+      if (emailChanged) {
+        await c.query(`DELETE FROM email_verification_tokens WHERE user_id=$1 AND used_at IS NULL`, [row.id]);
+        const verifyToken = randomBytes(32).toString("hex");
+        await c.query(`INSERT INTO email_verification_tokens(token, user_id) VALUES($1,$2)`, [verifyToken, row.id]);
+        const targetEmail = String(row.email || "").trim();
+        if (targetEmail) {
+          void sendEmail(
+            targetEmail,
+            "Verify your Crownforge email",
+            `<p>Hi ${String(row.username || "Commander")},</p><p><a href="${APP_BASE_URL}/?verify=${verifyToken}">Verify Email</a></p><p>Expires in 24 hours.</p>`,
+          ).catch((e: any) => { console.error("Failed to send verification email after admin email update", e); });
+        }
+      }
+
+      return {
+        id: String(row.id),
+        username: String(row.username || ""),
+        email: String(row.email || ""),
+        email_verified: Boolean(row.email_verified),
+        is_admin: Boolean(row.is_admin),
+        is_banned: Boolean(row.is_banned),
+      };
+    });
+    return res.json({ ok: true, user: out });
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    return res.status(msg.includes("not found") ? 404 : 400).json({ ok: false, error: msg });
+  }
 });
 
 app.post("/api/admin/set-land", requireAdmin, async (req, res) => {
