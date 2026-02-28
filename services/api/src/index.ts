@@ -1283,7 +1283,7 @@ app.post("/api/auth/resend-verification", async (req, res) => {
     await pool.query(`DELETE FROM email_verification_tokens WHERE user_id=$1 AND used_at IS NULL`, [user.id]);
     const verifyToken = randomBytes(32).toString("hex");
     await pool.query(`INSERT INTO email_verification_tokens(token, user_id) VALUES($1,$2)`, [verifyToken, user.id]);
-    void sendEmail(user.email, "Verify your Crownforge email", `<p>Hi ${String(user.username)},</p><p><a href="${APP_BASE_URL}/?verify=${verifyToken}">Verify Email</a></p><p>Expires in 24 hours.</p>`);
+    void sendEmail(user.email, "Verify your Crownforge email", `<p>Hi ${String(user.username)},</p><p><a href="${APP_BASE_URL}/?verify=${verifyToken}">Verify Email</a></p><p>Expires in 24 hours.</p>`).catch((e: any) => { console.error("Failed to send resend-verification email", e); });
     return res.json({ ok: true, message: "Verification email sent." });
   } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
 });
@@ -1298,7 +1298,7 @@ app.post("/api/auth/forgot-password", async (req, res) => {
     await pool.query(`DELETE FROM password_reset_tokens WHERE user_id=$1 AND used_at IS NULL`, [user.id]);
     const resetToken = randomBytes(32).toString("hex");
     await pool.query(`INSERT INTO password_reset_tokens(token, user_id) VALUES($1,$2)`, [resetToken, user.id]);
-    void sendEmail(user.email, "Reset your Crownforge password", `<p>Hi ${String(user.username)},</p><p><a href="${APP_BASE_URL}/?reset=${resetToken}">Reset Password</a></p><p>Expires in 1 hour.</p><p style="color:#888;font-size:12px">If you didn't request this, ignore this email.</p>`);
+    void sendEmail(user.email, "Reset your Crownforge password", `<p>Hi ${String(user.username)},</p><p><a href="${APP_BASE_URL}/?reset=${resetToken}">Reset Password</a></p><p>Expires in 1 hour.</p><p style="color:#888;font-size:12px">If you didn't request this, ignore this email.</p>`).catch((e: any) => { console.error("Failed to send forgot-password email", e); });
     return res.json({ ok: true, message: "If that email exists, a reset link has been sent." });
   } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
 });
