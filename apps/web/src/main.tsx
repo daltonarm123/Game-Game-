@@ -2866,6 +2866,26 @@ function AuthGate(props: { onAuthenticated: (auth: AuthState) => void }) {
       throw new Error(`HTTP ${r.status}: ${text.slice(0, 200)}`);
     }
   }
+  function formatApiError(j: any, fallback: string) {
+    const err = j?.error;
+    if (typeof err === "string" && err.trim()) return err;
+    if (err && typeof err === "object") {
+      const formErrors = Array.isArray(err.formErrors) ? err.formErrors.filter((v: any) => typeof v === "string" && v.trim()) : [];
+      if (formErrors.length) return formErrors.join("; ");
+      const fieldErrors = err.fieldErrors && typeof err.fieldErrors === "object"
+        ? Object.entries(err.fieldErrors)
+          .flatMap(([k, arr]) => (Array.isArray(arr) ? arr.map((msg) => `${k}: ${String(msg)}`) : []))
+          .filter((v) => v.trim())
+        : [];
+      if (fieldErrors.length) return fieldErrors.join(" | ");
+      try {
+        return JSON.stringify(err);
+      } catch {
+        return fallback;
+      }
+    }
+    return fallback;
+  }
 
   // Auto-verify if token is in URL
   useEffect(() => {
@@ -2879,7 +2899,7 @@ function AuthGate(props: { onAuthenticated: (auth: AuthState) => void }) {
         .then((r) => readJsonSafe(r))
         .then((j) => {
           if (j?.ok) setMsg("Your email has been verified! You can now log in.");
-          else setError(j?.error || "Verification failed.");
+          else setError(formatApiError(j, "Verification failed."));
         })
         .catch((e: any) => setError(String(e?.message || e || "Network error during verification.")))
         .finally(() => {
@@ -2915,7 +2935,7 @@ function AuthGate(props: { onAuthenticated: (auth: AuthState) => void }) {
         body: JSON.stringify({ emailOrUsername, password }),
       });
       const j = await readJsonSafe(r);
-      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}: empty or invalid response`);
+      if (!r.ok || !j?.ok) throw new Error(formatApiError(j, `HTTP ${r.status}: empty or invalid response`));
       const auth = buildAuth(j);
       localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth));
       if (auth.kingdom?.name) localStorage.setItem(KINGDOM_STORAGE_KEY, auth.kingdom.name);
@@ -2938,7 +2958,7 @@ function AuthGate(props: { onAuthenticated: (auth: AuthState) => void }) {
         body: JSON.stringify({ email, username, password, kingdomName }),
       });
       const j = await readJsonSafe(r);
-      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}: empty or invalid response`);
+      if (!r.ok || !j?.ok) throw new Error(formatApiError(j, `HTTP ${r.status}: empty or invalid response`));
       // Log in immediately but show the "check your email" screen
       const auth = buildAuth(j);
       localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth));
@@ -2965,7 +2985,7 @@ function AuthGate(props: { onAuthenticated: (auth: AuthState) => void }) {
         body: JSON.stringify({ email }),
       });
       const j = await readJsonSafe(r);
-      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}: empty or invalid response`);
+      if (!r.ok || !j?.ok) throw new Error(formatApiError(j, `HTTP ${r.status}: empty or invalid response`));
       setMsg(j.message || "If that email exists, a reset link has been sent.");
     } catch (e: any) {
       setError(String(e?.message || e));
@@ -2985,7 +3005,7 @@ function AuthGate(props: { onAuthenticated: (auth: AuthState) => void }) {
         body: JSON.stringify({ token: urlResetToken, newPassword }),
       });
       const j = await readJsonSafe(r);
-      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}: empty or invalid response`);
+      if (!r.ok || !j?.ok) throw new Error(formatApiError(j, `HTTP ${r.status}: empty or invalid response`));
       setMsg("Password reset successfully. You can now log in.");
       window.history.replaceState({}, "", window.location.pathname);
       setTimeout(() => setScreen("login"), 2000);
