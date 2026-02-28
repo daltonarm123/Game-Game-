@@ -1499,19 +1499,31 @@ app.post("/api/dev/register", async (req, res) => {
 
 // Creates/resets the DEV admin account with a maxed-out kingdom
 app.post("/api/dev/setup-dev-account", async (req, res) => {
-  const DEV_USER_ID = "00000000-0000-0000-0000-000000000001";
   const DEV_PASSWORD = "devpassword123";
   try {
     const out = await withTx(async (c) => {
       const passwordHash = hashPassword(DEV_PASSWORD);
-      await c.query(
-        `INSERT INTO app_users(id, username, email, password_hash, email_verified, is_admin)
-         VALUES ($1,'DEV','dev@crownforge.local',$2,true,true)
-         ON CONFLICT (id) DO UPDATE SET
-           username='DEV', password_hash=$2, email_verified=true, is_admin=true`,
-        [DEV_USER_ID, passwordHash],
-      );
-      // Upsert kingdom (never delete — avoids FK cascade issues)
+
+      // Find or create the DEV user — resolve by username to avoid UUID conflicts
+      const existing = await c.query(`SELECT id FROM app_users WHERE LOWER(username)='dev' LIMIT 1`);
+      let devUserId: string;
+      if (existing.rowCount && existing.rowCount > 0) {
+        devUserId = String(existing.rows[0].id);
+        await c.query(
+          `UPDATE app_users SET password_hash=$2, email_verified=true, is_admin=true WHERE id=$1`,
+          [devUserId, passwordHash],
+        );
+      } else {
+        const ins = await c.query(
+          `INSERT INTO app_users(id, username, email, password_hash, email_verified, is_admin)
+           VALUES (gen_random_uuid(),'DEV','dev@crownforge.local',$1,true,true)
+           RETURNING id`,
+          [passwordHash],
+        );
+        devUserId = String(ins.rows[0].id);
+      }
+
+      // Upsert kingdom by user_id
       const k = await c.query(
         `INSERT INTO kingdoms(user_id, name, gold, food, wood, stone, land, horses)
          VALUES ($1,'DEV Kingdom',999999999,999999999,999999999,999999999,500000,999999)
@@ -1519,7 +1531,7 @@ app.post("/api/dev/setup-dev-account", async (req, res) => {
            gold=999999999, food=999999999, wood=999999999, stone=999999999,
            land=500000, horses=999999
          RETURNING id`,
-        [DEV_USER_ID],
+        [devUserId],
       );
       const kingdomId = k.rows[0].id;
       await c.query(
@@ -1534,7 +1546,6 @@ app.post("/api/dev/setup-dev-account", async (req, res) => {
          ON CONFLICT (kingdom_id, troop_code) DO UPDATE SET amount=999999`,
         [kingdomId],
       );
-      // Max out all research
       const researchCodes = await c.query(`SELECT code FROM research_types`);
       for (const row of researchCodes.rows) {
         await c.query(
@@ -1544,7 +1555,7 @@ app.post("/api/dev/setup-dev-account", async (req, res) => {
           [kingdomId, row.code],
         );
       }
-      const session = await createAuthSession(c, DEV_USER_ID);
+      const session = await createAuthSession(c, devUserId);
       return { session, kingdomId };
     });
     return res.json({ ok: true, username: "DEV", password: DEV_PASSWORD, token: out.session.token, kingdomId: out.kingdomId });
