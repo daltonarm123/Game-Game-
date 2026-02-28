@@ -577,11 +577,20 @@ function BuildingsView() {
   const [buildCode, setBuildCode] = useState("farm");
   const [buildQtyInput, setBuildQtyInput] = useState("1");
   const [buildBusy, setBuildBusy] = useState(false);
+  const [buildPanelOpen, setBuildPanelOpen] = useState(true);
+  const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
   const buildQty = useMemo(() => {
     const n = Math.floor(Number(buildQtyInput || "1"));
     if (!Number.isFinite(n)) return 1;
     return Math.max(1, Math.min(500, n));
   }, [buildQtyInput]);
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 980);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   async function load() {
     setLoading(true);
@@ -692,13 +701,13 @@ function BuildingsView() {
       <div style={CARD}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ minWidth: 0, flex: "1 1 320px" }}>
-            <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>
+            <div style={{ fontSize: isMobile ? 28 : 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY, lineHeight: 1.05 }}>
               Buildings - {k ? k.name : kingdom}
             </div>
-            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 18, fontWeight: 700, overflowWrap: "anywhere" }}>
+            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: isMobile ? 16 : 18, fontWeight: 700, overflowWrap: "anywhere" }}>
               Rank #{war?.kingdom?.rank || "N/A"} • Land: {availableLand.toLocaleString()} / {Number(k?.land || 0).toLocaleString()} Acres
             </div>
-            <div style={{ marginTop: 4, color: TEXT_MUTED, fontSize: 17, fontWeight: 700, overflowWrap: "anywhere" }}>
+            <div style={{ marginTop: 4, color: TEXT_MUTED, fontSize: isMobile ? 15 : 17, fontWeight: 700, overflowWrap: "anywhere" }}>
               Stone: {Number(k?.stone || 0).toLocaleString()} ({Number(econ.stone || 0) >= 0 ? "+" : ""}{Number(econ.stone || 0).toLocaleString()}/h) • Wood: {Number(k?.wood || 0).toLocaleString()} ({Number(econ.wood || 0) >= 0 ? "+" : ""}{Number(econ.wood || 0).toLocaleString()}/h)
             </div>
           </div>
@@ -722,6 +731,51 @@ function BuildingsView() {
 
       <div style={CARD}>
         <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 24 }}>Kingdom Buildings</div>
+        {isMobile ? (
+          <div style={{ display: "grid", gap: 6 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 64px 64px 64px", gap: 8, padding: "6px 8px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 12, fontWeight: 700 }}>
+              <span>Building</span>
+              <span style={{ textAlign: "right" }}>Built</span>
+              <span style={{ textAlign: "right" }}>Bldg</span>
+              <span style={{ textAlign: "right" }}>Total</span>
+            </div>
+            {buildings.map((b) => {
+              const code = String(b.building_code);
+              const meta = BUILDING_META[code] || { sigil: code.slice(0, 2).toUpperCase(), summary: "Core kingdom infrastructure.", unlocks: "General growth and economy support." };
+              const built = Number(b.level || 0);
+              const bldg = Number(queueCounts[code] || 0);
+              const total = built + bldg;
+              const isSelected = buildCode === code;
+              return (
+                <button
+                  key={`m-${code}`}
+                  onClick={() => setBuildCode(code)}
+                  style={{
+                    textAlign: "left",
+                    borderRadius: 8,
+                    border: "1px solid rgba(216,176,117,.22)",
+                    background: isSelected ? "rgba(216,176,117,.2)" : "rgba(8,8,10,.28)",
+                    color: TEXT_MAIN,
+                    cursor: "pointer",
+                    padding: "8px 10px",
+                  }}
+                >
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 64px 64px 64px", gap: 8, alignItems: "center" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                      <div style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid rgba(216,176,117,.55)", background: "linear-gradient(180deg, rgba(89,67,37,.82), rgba(35,27,15,.92))", display: "grid", placeItems: "center", fontWeight: 800, color: "#f2dfbf", fontSize: 11, flexShrink: 0 }}>
+                        {meta.sigil}
+                      </div>
+                      <span style={{ fontWeight: 700, fontSize: 16, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{String(b.building_name || code)}</span>
+                    </div>
+                    <span style={{ textAlign: "right", fontWeight: 700 }}>{built.toLocaleString()}</span>
+                    <span style={{ textAlign: "right", color: bldg > 0 ? "#a8e6a3" : TEXT_MUTED }}>{bldg.toLocaleString()}</span>
+                    <span style={{ textAlign: "right", color: ACCENT, fontWeight: 700 }}>{total.toLocaleString()}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
         <div style={{ overflowX: "auto", maxWidth: "100%", WebkitOverflowScrolling: "touch" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
             <colgroup>
@@ -799,37 +853,58 @@ function BuildingsView() {
             </tbody>
           </table>
         </div>
+        )}
       </div>
 
       <div style={CARD}>
-        <div style={{ fontWeight: 700, marginBottom: 10, fontSize: 18 }}>Queue a Build</div>
-        <form onSubmit={submitBuild} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <select value={buildCode} onChange={(e) => setBuildCode(e.target.value)} style={{ ...INPUT_STYLE, minWidth: 180 }}>
-            {buildOptions.map((code) => {
-              const name = buildingMap[code]?.building_name || String(code).replace(/_/g, " ");
-              return <option key={code} value={code}>{name}</option>;
-            })}
-          </select>
-          <input
-            type="number"
-            min={1}
-            max={500}
-            inputMode="numeric"
-            pattern="[0-9]*"
-            value={buildQtyInput}
-            onChange={(e) => {
-              const next = e.target.value;
-              if (/^\d*$/.test(next)) setBuildQtyInput(next);
-            }}
-            onBlur={() => setBuildQtyInput(String(buildQty))}
-            style={{ ...INPUT_STYLE, width: 90 }}
-          />
-          <button type="submit" style={BTN_STYLE} disabled={buildBusy}>
-            {buildBusy ? "Queueing..." : "Queue Build"}
-          </button>
-        </form>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10 }}>
+          <div style={{ fontWeight: 700, fontSize: 18 }}>{isMobile ? "Actions" : "Queue a Build"}</div>
+          {isMobile ? (
+            <button
+              onClick={() => setBuildPanelOpen((v) => !v)}
+              style={{ ...BTN_STYLE, padding: "6px 10px", fontSize: 13 }}
+            >
+              {buildPanelOpen ? "-" : "+"} Build New
+            </button>
+          ) : null}
+        </div>
+        {!isMobile || buildPanelOpen ? (
+          <>
+            <form
+              onSubmit={submitBuild}
+              style={{
+                display: "grid",
+                gap: 8,
+                gridTemplateColumns: isMobile ? "1fr" : "minmax(180px,1fr) 90px auto",
+                alignItems: "center",
+              }}
+            >
+              <select value={buildCode} onChange={(e) => setBuildCode(e.target.value)} style={{ ...INPUT_STYLE, minWidth: 0, width: "100%" }}>
+                {buildOptions.map((code) => {
+                  const name = buildingMap[code]?.building_name || String(code).replace(/_/g, " ");
+                  return <option key={code} value={code}>{name}</option>;
+                })}
+              </select>
+              <input
+                type="number"
+                min={1}
+                max={500}
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={buildQtyInput}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  if (/^\d*$/.test(next)) setBuildQtyInput(next);
+                }}
+                onBlur={() => setBuildQtyInput(String(buildQty))}
+                style={{ ...INPUT_STYLE, width: isMobile ? "100%" : 90 }}
+              />
+              <button type="submit" style={{ ...BTN_STYLE, width: isMobile ? "100%" : "auto" }} disabled={buildBusy}>
+                {buildBusy ? "Queueing..." : "Queue Build"}
+              </button>
+            </form>
 
-        {buildingMap[buildCode] ? (() => {
+            {buildingMap[buildCode] ? (() => {
           const bm = buildingMap[buildCode];
           const meta = BUILDING_META[buildCode] || { sigil: "??", summary: "Kingdom structure.", unlocks: "" };
           const prod = BUILDING_PROD[buildCode];
@@ -891,15 +966,17 @@ function BuildingsView() {
               </div>
             </div>
           );
-        })() : null}
+            })() : null}
+          </>
+        ) : null}
       </div>
 
       <div style={CARD}>
         <div style={{ fontWeight: 700, marginBottom: 8 }}>Building Queue</div>
         {buildQueue.length === 0 ? <div style={{ color: TEXT_MUTED }}>No active building queue.</div> : null}
         {buildQueue.map((q) => (
-          <div key={q.id} style={{ marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-            <span style={{ fontSize: 14 }}>
+          <div key={q.id} style={{ marginBottom: 8, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr auto", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 14, overflowWrap: "anywhere" }}>
               <span style={{ color: ACCENT, fontWeight: 700 }}>{BUILDING_META[String(q.building_code)]?.sigil || "??"}</span>
               {" "}{String(q.building_code).replace(/_/g, " ")} → Lvl {q.target_level}
             </span>
@@ -2601,6 +2678,38 @@ function WarRoomView() {
           <div style={{ ...CARD, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.05fr 1fr", gap: 16 }}>
             <div>
               <div style={{ fontWeight: 800, marginBottom: 10, fontSize: 24, fontFamily: FONT_DISPLAY }}>Kingdom Troops</div>
+              {isMobile ? (
+                <div style={{ display: "grid", gap: 6 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 68px 68px 68px", gap: 8, padding: "6px 8px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 12, fontWeight: 700 }}>
+                    <span>Troop</span>
+                    <span style={{ textAlign: "right" }}>Home</span>
+                    <span style={{ textAlign: "right" }}>Train</span>
+                    <span style={{ textAlign: "right" }}>Away</span>
+                  </div>
+                  {troops.map((t) => {
+                    const code = String(t.troopCode || "");
+                    const meta = TROOP_META[code] || { sigil: code.slice(0, 2).toUpperCase(), tint: "linear-gradient(180deg, rgba(86,70,48,.72), rgba(42,32,22,.9))", role: "Kingdom military unit." };
+                    return (
+                      <div key={`m-${code}`} style={{ border: "1px solid rgba(216,176,117,.22)", borderRadius: 8, background: "rgba(8,8,10,.28)", padding: "8px 10px" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 68px 68px 68px", gap: 8, alignItems: "center" }}>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0 }}>
+                            <div style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid rgba(216,176,117,.58)", background: meta.tint, display: "grid", placeItems: "center", color: "#f5e4c9", fontWeight: 800, fontSize: 11, flexShrink: 0 }}>
+                              {meta.sigil}
+                            </div>
+                            <span style={{ fontSize: 18, fontFamily: FONT_DISPLAY, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.troopName}</span>
+                          </div>
+                          <span style={{ textAlign: "right", fontWeight: 700 }}>{Number(t.home || 0).toLocaleString()}</span>
+                          <span style={{ textAlign: "right", color: TEXT_MUTED }}>{Number(t.train || 0).toLocaleString()}</span>
+                          <span style={{ textAlign: "right", color: TEXT_MUTED }}>{Number(t.away || 0).toLocaleString()}</span>
+                        </div>
+                        <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
+                          <button style={{ ...BTN_STYLE, padding: "5px 9px", fontSize: 12 }} onClick={() => void disbandTroop(code, Number(t.home || 0))}>Trash</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
                   <thead>
@@ -2651,6 +2760,7 @@ function WarRoomView() {
                   </tbody>
                 </table>
               </div>
+              )}
             </div>
 
             <div>
