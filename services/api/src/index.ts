@@ -1815,7 +1815,7 @@ app.post("/api/kingdom/:name/build", requireAuth, async (req, res) => {
 
   try {
     const out = await withTx(async (c) => {
-      const k = await c.query(`SELECT id, name, wood, stone FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [name]);
+      const k = await c.query(`SELECT id, name, wood, stone, land FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [name]);
       if (!k.rowCount) throw new Error("kingdom not found");
       const kingdom = k.rows[0];
 
@@ -1839,7 +1839,17 @@ app.post("/api/kingdom/:name/build", requireAuth, async (req, res) => {
         [kingdom.id],
       );
       const usedLand = Number(landUse.rows[0]?.used_land || 0);
-      const availableLand = Number(kingdom.land || 0) - usedLand;
+      const queuedLandQ = await c.query(
+        `
+        SELECT COALESCE(SUM(bt.land_cost), 0) AS queued_land
+        FROM build_queue bq
+        JOIN building_types bt ON bt.code = bq.building_code
+        WHERE bq.kingdom_id = $1 AND bq.status='queued'
+        `,
+        [kingdom.id],
+      );
+      const queuedLand = Number(queuedLandQ.rows[0]?.queued_land || 0);
+      const availableLand = Number(kingdom.land || 0) - usedLand - queuedLand;
 
       const q = await c.query(
         `SELECT COALESCE(MAX(target_level), $2::int) AS max_target
@@ -5334,6 +5344,63 @@ app.post("/api/admin/set-land", requireAdmin, async (req, res) => {
 });
 
 // ── Prayer endpoints ─────────────────────────────────────────────────────────
+app.post("/api/admin/reconcile-land", requireAdmin, async (req, res) => {
+  const parsed = z.object({
+    kingdom: z.string().min(2).optional(),
+    buffer: z.number().int().min(0).max(100000).optional(),
+    dryRun: z.boolean().optional(),
+  }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const kingdomFilter = String(parsed.data.kingdom || "").trim();
+  const buffer = Number(parsed.data.buffer ?? 0);
+  const dryRun = Boolean(parsed.data.dryRun);
+  try {
+    const out = await withTx(async (c) => {
+      const kingdomsQ = await c.query(
+        `
+        SELECT id, name, land
+        FROM kingdoms
+        WHERE ($1 = '' OR LOWER(name)=LOWER($1))
+        ORDER BY id ASC
+        FOR UPDATE
+        `,
+        [kingdomFilter],
+      );
+      if (!kingdomsQ.rowCount) throw new Error("kingdom not found");
+      const changed: Array<{ id: number; name: string; oldLand: number; usedLand: number; newLand: number }> = [];
+      let checked = 0;
+      for (const k of kingdomsQ.rows) {
+        checked += 1;
+        const usedQ = await c.query(
+          `
+          SELECT COALESCE(SUM(kb.level * bt.land_cost), 0)::int AS used_land
+          FROM kingdom_buildings kb
+          JOIN building_types bt ON bt.code = kb.building_code
+          WHERE kb.kingdom_id = $1
+          `,
+          [k.id],
+        );
+        const usedLand = Number(usedQ.rows[0]?.used_land || 0);
+        const oldLand = Number(k.land || 0);
+        const minRequired = usedLand + buffer;
+        if (oldLand < minRequired) {
+          const newLand = minRequired;
+          if (!dryRun) {
+            await c.query(`UPDATE kingdoms SET land=$2 WHERE id=$1`, [k.id, newLand]);
+            await ensureSettlementsForKingdom(c, Number(k.id), String(k.name), newLand);
+          }
+          changed.push({ id: Number(k.id), name: String(k.name), oldLand, usedLand, newLand });
+        }
+      }
+      return { checked, changed };
+    });
+    return res.json({ ok: true, ...out, dryRun, buffer });
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    return res.status(msg.includes("not found") ? 404 : 500).json({ ok: false, error: msg });
+  }
+});
+
 app.get("/api/pray/:kingdom", async (req, res) => {
   try {
     const k = await pool.query(`SELECT id, mana FROM kingdoms WHERE LOWER(name)=LOWER($1)`, [req.params.kingdom]);
