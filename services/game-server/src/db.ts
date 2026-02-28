@@ -194,6 +194,18 @@ export async function ensureSchemaLite(): Promise<void> {
       nw_value NUMERIC(8,2) NOT NULL DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS explore_missions (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL,
+      soldiers_sent INT NOT NULL,
+      land_gained INT NOT NULL DEFAULT 0,
+      departed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      returns_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL DEFAULT 'out'
+    );
+
+    CREATE INDEX IF NOT EXISTS explore_missions_due_idx ON explore_missions(status, returns_at);
+    CREATE INDEX IF NOT EXISTS explore_missions_kingdom_idx ON explore_missions(kingdom_id, status);
     CREATE INDEX IF NOT EXISTS build_queue_due_idx ON build_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS build_queue_kingdom_due_idx ON build_queue(kingdom_id, status, completes_at);
     CREATE INDEX IF NOT EXISTS train_queue_due_idx ON train_queue(status, completes_at);

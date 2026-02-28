@@ -1511,11 +1511,13 @@ app.post("/api/dev/setup-dev-account", async (req, res) => {
            username='DEV', password_hash=$2, email_verified=true, is_admin=true`,
         [DEV_USER_ID, passwordHash],
       );
-      // Delete existing kingdom so we can recreate cleanly
-      await c.query(`DELETE FROM kingdoms WHERE user_id=$1`, [DEV_USER_ID]);
+      // Upsert kingdom (never delete — avoids FK cascade issues)
       const k = await c.query(
         `INSERT INTO kingdoms(user_id, name, gold, food, wood, stone, land, horses)
          VALUES ($1,'DEV Kingdom',999999999,999999999,999999999,999999999,500000,999999)
+         ON CONFLICT (user_id) DO UPDATE SET
+           gold=999999999, food=999999999, wood=999999999, stone=999999999,
+           land=500000, horses=999999
          RETURNING id`,
         [DEV_USER_ID],
       );

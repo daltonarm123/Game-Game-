@@ -2191,6 +2191,8 @@ function WarRoomView() {
   const [actionMsg, setActionMsg] = useState("");
   const [trainOpen, setTrainOpen] = useState(true);
   const [attackOpen, setAttackOpen] = useState(false);
+  const [exploreOpen, setExploreOpen] = useState(false);
+  const [exploreSentTroops, setExploreSentTroops] = useState<Record<string, number>>({});
   const [trainTroop, setTrainTroop] = useState("footmen");
   const [trainQty, setTrainQty] = useState(1);
   const [attackTarget, setAttackTarget] = useState("");
@@ -2316,6 +2318,26 @@ function WarRoomView() {
       await load();
     } catch (e: any) {
       setActionMsg(`Attack failed: ${String(e?.message || e)}`);
+    }
+  }
+
+  async function submitExplore(e: React.FormEvent) {
+    e.preventDefault();
+    setActionMsg("");
+    try {
+      const payload = Object.fromEntries(Object.entries(exploreSentTroops).filter(([, v]) => Number(v || 0) > 0));
+      const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}/explore`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ sentTroops: payload }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Explored! +${Number(j.landFound || 0).toLocaleString()} land. Troops return in ${j.returnEta || "?"}.`);
+      setExploreSentTroops({});
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Explore failed: ${String(e?.message || e)}`);
     }
   }
 
@@ -2495,6 +2517,44 @@ function WarRoomView() {
                       ))}
                     </div>
                     <button type="submit" style={BTN_STYLE}>Send Attack</button>
+                  </form>
+                ) : null}
+
+                <button onClick={() => setExploreOpen((v) => !v)} style={{ ...BTN_STYLE, width: "100%", textAlign: "left", borderRadius: 0, border: "none", borderTop: "1px solid rgba(216,176,117,.2)" }}>
+                  {exploreOpen ? "-" : "+"} Explore Land
+                </button>
+                {exploreOpen ? (
+                  <form onSubmit={submitExplore} style={{ padding: 10, display: "grid", gap: 8 }}>
+                    <div style={{ color: TEXT_MUTED, fontSize: 13 }}>
+                      Send troops to explore unclaimed wilderness and gain land. Land cap: <strong style={{ color: ACCENT }}>{(data?.explore?.landCap || 20000).toLocaleString()}</strong>.
+                      You currently have <strong style={{ color: ACCENT }}>{Number(k?.land || 0).toLocaleString()}</strong> land
+                      ({Math.max(0, (data?.explore?.landCap || 20000) - Number(k?.land || 0)).toLocaleString()} remaining to explore).
+                      More troops = more land. Troops return in 5 min – 8 hours depending on size.
+                    </div>
+                    {Number(k?.land || 0) >= (data?.explore?.landCap || 20000) ? (
+                      <div style={{ color: "#ffae9a", fontWeight: 700 }}>You've reached the explore land cap. Attack kingdoms for more land.</div>
+                    ) : (
+                      <>
+                        <div style={{ fontWeight: 700 }}>Troops To Send...</div>
+                        <div style={{ display: "grid", gap: 6 }}>
+                          {troops.filter((t) => Number(t.home || 0) > 0).map((t) => (
+                            <div key={`exp-${t.troopCode}`} style={{ display: "grid", gridTemplateColumns: "170px 1fr 120px", gap: 8, alignItems: "center" }}>
+                              <div>{t.troopName}</div>
+                              <input
+                                type="number"
+                                min={0}
+                                max={Number(t.home || 0)}
+                                value={Number(exploreSentTroops[t.troopCode] || 0)}
+                                onChange={(e) => setExploreSentTroops((prev) => ({ ...prev, [t.troopCode]: Math.min(Number(t.home || 0), Math.max(0, Number(e.target.value || 0))) }))}
+                                style={INPUT_STYLE}
+                              />
+                              <div style={{ textAlign: "right" }}>/ {Number(t.home || 0).toLocaleString()}</div>
+                            </div>
+                          ))}
+                        </div>
+                        <button type="submit" style={BTN_STYLE}>Explore!</button>
+                      </>
+                    )}
                   </form>
                 ) : null}
               </div>

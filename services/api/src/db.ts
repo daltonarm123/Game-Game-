@@ -719,6 +719,19 @@ export async function ensureSchema(): Promise<void> {
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_ends_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '7 days')`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS worker_last_tick_at TIMESTAMPTZ NOT NULL DEFAULT now()`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS explore_missions (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id),
+      soldiers_sent INT NOT NULL CHECK (soldiers_sent > 0),
+      land_gained INT NOT NULL DEFAULT 0,
+      departed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      returns_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL DEFAULT 'out' CHECK (status IN ('out','returned'))
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS explore_missions_due_idx ON explore_missions(status, returns_at)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS explore_missions_kingdom_idx ON explore_missions(kingdom_id, status)`);
   await pool.query(
     `
     INSERT INTO game_state(id, season_index, season_code, season_started_at, season_ends_at, updated_at)
