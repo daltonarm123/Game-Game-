@@ -2158,6 +2158,20 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
         if (have < sent) throw new Error(`not enough ${code} (have ${have}, need ${sent})`);
       }
 
+      // NW range check: prevent hitting kingdoms far below your own NW
+      const [atkNwQ, defNwQ] = await Promise.all([
+        c.query(`SELECT COALESCE(networth,0) AS nw FROM kingdom_networth_history WHERE kingdom_id=$1 ORDER BY recorded_at DESC LIMIT 1`, [atk.id]),
+        c.query(`SELECT COALESCE(networth,0) AS nw FROM kingdom_networth_history WHERE kingdom_id=$1 ORDER BY recorded_at DESC LIMIT 1`, [def.id]),
+      ]);
+      const atkNw = Number(atkNwQ.rows[0]?.nw || 0);
+      const defNw = Number(defNwQ.rows[0]?.nw || 0);
+      const NW_RATIO_MIN = 0.25; // defender must be at least 25% of attacker NW
+      if (atkNw > 1000 && defNw < atkNw * NW_RATIO_MIN) {
+        throw new Error(
+          `Cannot attack ${String(def.name)}: their networth (${Math.round(defNw).toLocaleString()}) is too low compared to yours (${Math.round(atkNw).toLocaleString()}). Minimum target NW: ${Math.round(atkNw * NW_RATIO_MIN).toLocaleString()}.`,
+        );
+      }
+
       const sentOnly = Object.fromEntries(Object.entries(sentTroopsRaw).filter(([, v]) => v > 0));
       const attackerPower = effectivePowerVsComposition(sentOnly, troopAtt, defenderTroops);
       const defenderPowerRaw = effectivePowerVsComposition(defenderTroops, troopDef, sentOnly);
@@ -2264,6 +2278,37 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
         }
       }
 
+      // Resource looting: winner takes a % of defender's food/gold/wood/stone
+      const LOOT_RATE: Record<string, number> = {
+        "MINOR VICTORY": 0.05, "VICTORY": 0.10, "MAJOR VICTORY": 0.15, "OVERWHELMING VICTORY": 0.20,
+      };
+      const lootRate = LOOT_RATE[result] || 0;
+      let lootFood = 0, lootGold = 0, lootWood = 0, lootStone = 0;
+      if (lootRate > 0) {
+        const defResQ = await c.query(`SELECT food, gold, wood, stone FROM kingdoms WHERE id=$1`, [def.id]);
+        const dr = defResQ.rows[0];
+        lootFood = Math.floor(Number(dr?.food || 0) * lootRate);
+        lootGold = Math.floor(Number(dr?.gold || 0) * lootRate);
+        lootWood = Math.floor(Number(dr?.wood || 0) * lootRate);
+        lootStone = Math.floor(Number(dr?.stone || 0) * lootRate);
+        if (lootFood + lootGold + lootWood + lootStone > 0) {
+          await c.query(`UPDATE kingdoms SET food=GREATEST(0,food-$2), gold=GREATEST(0,gold-$3), wood=GREATEST(0,wood-$4), stone=GREATEST(0,stone-$5) WHERE id=$1`, [def.id, lootFood, lootGold, lootWood, lootStone]);
+          await c.query(`UPDATE kingdoms SET food=food+$2, gold=gold+$3, wood=wood+$4, stone=stone+$5 WHERE id=$1`, [atk.id, lootFood, lootGold, lootWood, lootStone]);
+        }
+      }
+
+      // Gem rewards for victories
+      const GEM_TABLE: Record<string, number> = {
+        "MINOR VICTORY": Math.random() < 0.4 ? 1 : 0,
+        "VICTORY": 1,
+        "MAJOR VICTORY": 2,
+        "OVERWHELMING VICTORY": Math.floor(Math.random() * 3) + 2,
+      };
+      const gemsAwarded = GEM_TABLE[result] ?? 0;
+      if (gemsAwarded > 0) {
+        await c.query(`UPDATE kingdoms SET green_gems = COALESCE(green_gems,0) + $2 WHERE id=$1`, [atk.id, gemsAwarded]);
+      }
+
       // Fair settlement capture rules:
       // - max one settlement capture from same defender per 24h
       // - chance scales with land taken but reduced by target wall level
@@ -2357,12 +2402,45 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
         );
       }
 
-      const attackSummary = `${atk.name} vs ${def.name} • ${result} • Land ${landTaken.toLocaleString()} • Ratio ${Number(ratio || 0).toFixed(2)}`;
-      const attackerBody = `${attackSummary}\nAttacker losses: ${JSON.stringify(attackerBattle.losses)}\nDefender losses: ${JSON.stringify(defenderBattle.losses)}`;
-      const defenderBody = `${attackSummary}\nYour losses: ${JSON.stringify(defenderBattle.losses)}\nEnemy losses: ${JSON.stringify(attackerBattle.losses)}`;
-      await sendMailTx(c, Number(atk.id), "attack", `Attack Report #${rep.rows[0].id}`, attackerBody);
-      await sendMailTx(c, Number(def.id), "attack", `Defence Report #${rep.rows[0].id}`, defenderBody);
-      await sendNoticeTx(c, Number(atk.id), "success", `Attack ${result} vs ${def.name}. Land +${landTaken.toLocaleString()}`, { reportId: rep.rows[0].id });
+      const isWin = ["MINOR VICTORY", "VICTORY", "MAJOR VICTORY", "OVERWHELMING VICTORY"].includes(result);
+      const nwGained = Math.floor(landTaken * 0.04);
+      const fmtLosses = (losses: Record<string, number>) => {
+        const parts = Object.entries(losses).filter(([, v]) => v > 0).map(([k, v]) => `${v.toLocaleString()} ${k.replace(/_/g, " ")}`);
+        return parts.length ? parts.join(", ") : "None";
+      };
+
+      let attackerBody = `Attack Report: ${String(def.name)} (NW Gained: +${nwGained.toLocaleString()})\n`;
+      attackerBody += `Attack Result: ${result}\n\n`;
+      if (isWin) {
+        const gains: string[] = [];
+        if (landTaken > 0) gains.push(`${landTaken.toLocaleString()} Land`);
+        if (lootFood > 0) gains.push(`${lootFood.toLocaleString()} Food`);
+        if (lootGold > 0) gains.push(`${lootGold.toLocaleString()} Gold`);
+        if (lootStone > 0) gains.push(`${lootStone.toLocaleString()} Stone`);
+        if (lootWood > 0) gains.push(`${lootWood.toLocaleString()} Wood`);
+        if (gains.length) attackerBody += `You have gained the following during the attack: ${gains.join(", ")}\n\n`;
+      }
+      attackerBody += `We regret to inform you of the following casualties during the attack: ${fmtLosses(attackerBattle.losses)}\n`;
+      attackerBody += `Enemy casualties: ${fmtLosses(defenderBattle.losses)}`;
+      if (gemsAwarded > 0) attackerBody += `\n\nYou have also been awarded ${gemsAwarded} Green Gem${gemsAwarded !== 1 ? "s" : ""} for your victorious attack!`;
+
+      let defenderBody = `Defence Report: ${String(atk.name)} attacked you!\n`;
+      defenderBody += `Attack Result: ${result}\n\n`;
+      if (isWin) {
+        const lost: string[] = [];
+        if (landTaken > 0) lost.push(`${landTaken.toLocaleString()} Land`);
+        if (lootFood > 0) lost.push(`${lootFood.toLocaleString()} Food`);
+        if (lootGold > 0) lost.push(`${lootGold.toLocaleString()} Gold`);
+        if (lootStone > 0) lost.push(`${lootStone.toLocaleString()} Stone`);
+        if (lootWood > 0) lost.push(`${lootWood.toLocaleString()} Wood`);
+        if (lost.length) defenderBody += `You have lost the following: ${lost.join(", ")}\n\n`;
+      }
+      defenderBody += `Your casualties: ${fmtLosses(defenderBattle.losses)}\n`;
+      defenderBody += `Enemy casualties: ${fmtLosses(attackerBattle.losses)}`;
+
+      await sendMailTx(c, Number(atk.id), "attack", `Attack Report: ${String(def.name)}`, attackerBody);
+      await sendMailTx(c, Number(def.id), "attack", `Defence Report: ${String(atk.name)} attacked you`, defenderBody);
+      await sendNoticeTx(c, Number(atk.id), "success", `Attack ${result} vs ${def.name}. Land +${landTaken.toLocaleString()}${gemsAwarded > 0 ? ` • ${gemsAwarded} gem${gemsAwarded !== 1 ? "s" : ""}` : ""}`, { reportId: rep.rows[0].id });
       await sendNoticeTx(c, Number(def.id), landTaken > 0 ? "warning" : "info", `${atk.name} attacked you: ${result}. Land ${landTaken > 0 ? "-" : ""}${landTaken.toLocaleString()}`, { reportId: rep.rows[0].id });
 
       return {
@@ -2372,6 +2450,8 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
         attackerPower: Number(attackerPower.toFixed(2)),
         defenderPower: Number(defenderPower.toFixed(2)),
         landTaken,
+        lootFood, lootGold, lootWood, lootStone,
+        gemsAwarded,
         attackerLosses: attackerBattle.losses,
         defenderLosses: defenderBattle.losses,
         attackerSurvivorsAway: attackerSurvivors,
