@@ -1084,13 +1084,22 @@ app.post("/api/auth/register", async (req, res) => {
         horses: 0,
       });
       const session = await createAuthSession(c, userId);
+      await c.query(`DELETE FROM email_verification_tokens WHERE user_id=$1 AND used_at IS NULL`, [userId]);
+      const verifyToken = randomBytes(32).toString("hex");
+      await c.query(`INSERT INTO email_verification_tokens(token, user_id) VALUES($1,$2)`, [verifyToken, userId]);
       return {
         session,
         user: { id: userId, username, email },
         kingdom: { id: Number(kingdom.id), name: String(kingdom.name) },
+        verifyToken,
       };
     });
-    return res.json({ ok: true, ...out });
+    const verifyEmailHtml = `<p>Hi ${out.user.username},</p><p><a href="${APP_BASE_URL}/?verify=${out.verifyToken}">Verify Email</a></p><p>Expires in 24 hours.</p>`;
+    void sendEmail(out.user.email, "Verify your Crownforge email", verifyEmailHtml).catch((e: any) => {
+      console.error("Failed to send verification email on register", e);
+    });
+    const { verifyToken: _verifyToken, ...responseOut } = out;
+    return res.json({ ok: true, ...responseOut });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });
   }
