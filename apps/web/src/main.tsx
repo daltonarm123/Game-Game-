@@ -29,30 +29,30 @@ function useKingdomStream(kingdom: string, onRefresh: () => void) {
   }, [kingdom]);
 }
 
-type NavItem = { id: string; label: string; group: "top" | "kingdom" };
+type NavItem = { id: string; label: string; group: "top" | "kingdom"; icon: string };
 
 const NAV_ITEMS: NavItem[] = [
-  { id: "home", label: "Home", group: "top" },
-  { id: "forums", label: "Forums", group: "top" },
-  { id: "how-to-play", label: "How To Play", group: "top" },
-  { id: "overview", label: "Overview", group: "kingdom" },
-  { id: "buildings", label: "Buildings", group: "kingdom" },
-  { id: "war-room", label: "War Room", group: "kingdom" },
-  { id: "train-troops", label: "Train Troops", group: "kingdom" },
-  { id: "attack-kingdom", label: "Attack Kingdom", group: "kingdom" },
-  { id: "guildhall", label: "Guildhall", group: "kingdom" },
-  { id: "holy-circle", label: "Holy Circle", group: "kingdom" },
-  { id: "alliance", label: "Alliance", group: "kingdom" },
-  { id: "alliance-forums", label: "Alliance Forums", group: "kingdom" },
-  { id: "embassy", label: "Embassy", group: "kingdom" },
-  { id: "marketplace", label: "Marketplace", group: "kingdom" },
-  { id: "settlements", label: "Settlements", group: "kingdom" },
-  { id: "rankings", label: "Rankings", group: "kingdom" },
-  { id: "research", label: "Research", group: "kingdom" },
-  { id: "pigeons", label: "Pigeons", group: "kingdom" },
-  { id: "account", label: "Account", group: "kingdom" },
-  { id: "admin", label: "Admin Panel", group: "kingdom" },
-  { id: "logout", label: "Logout", group: "kingdom" },
+  { id: "home",            label: "Home",             group: "top",     icon: "🏠" },
+  { id: "forums",          label: "Forums",           group: "top",     icon: "💬" },
+  { id: "how-to-play",     label: "How To Play",      group: "top",     icon: "📖" },
+  { id: "overview",        label: "Overview",         group: "kingdom", icon: "👑" },
+  { id: "buildings",       label: "Buildings",        group: "kingdom", icon: "🏰" },
+  { id: "war-room",        label: "War Room",         group: "kingdom", icon: "⚔️" },
+  { id: "train-troops",    label: "Train Troops",     group: "kingdom", icon: "🪖" },
+  { id: "attack-kingdom",  label: "Attack Kingdom",   group: "kingdom", icon: "🗡️" },
+  { id: "guildhall",       label: "Guildhall",        group: "kingdom", icon: "🕵️" },
+  { id: "holy-circle",     label: "Holy Circle",      group: "kingdom", icon: "🙏" },
+  { id: "alliance",        label: "Alliance",         group: "kingdom", icon: "🤝" },
+  { id: "alliance-forums", label: "Alliance Forums",  group: "kingdom", icon: "📜" },
+  { id: "embassy",         label: "Embassy",          group: "kingdom", icon: "🏛️" },
+  { id: "marketplace",     label: "Marketplace",      group: "kingdom", icon: "🏪" },
+  { id: "settlements",     label: "Settlements",      group: "kingdom", icon: "🏘️" },
+  { id: "rankings",        label: "Rankings",         group: "kingdom", icon: "🏆" },
+  { id: "research",        label: "Research",         group: "kingdom", icon: "🔬" },
+  { id: "pigeons",         label: "Pigeons",          group: "kingdom", icon: "🕊️" },
+  { id: "account",         label: "Account",          group: "kingdom", icon: "👤" },
+  { id: "admin",           label: "Admin Panel",      group: "kingdom", icon: "⚙️" },
+  { id: "logout",          label: "Logout",           group: "kingdom", icon: "🚪" },
 ];
 
 const TEXT_MAIN = "#f8efe2";
@@ -546,19 +546,26 @@ function OverviewView() {
             <div style={SEC_HDR}>Resources</div>
             <div style={{ display: "grid", gap: 4 }}>
               {[
-                { label: "Food", icon: "F", cur: Number(k?.food || 0), cap: Number(econCaps.food || 0), rate: Number(econPerHour.food || 0) },
-                { label: "Gold", icon: "G", cur: Number(k?.gold || 0), cap: Number(econCaps.gold || 0), rate: Number(econPerHour.gold || 0) },
-                { label: "Mana", icon: "M", cur: Number(k?.mana || 0), cap: 0, rate: manaPerHour },
-                { label: "Stone", icon: "S", cur: Number(k?.stone || 0), cap: Number(econCaps.stone || 0), rate: Number(econPerHour.stone || 0) },
-                { label: "Wood", icon: "W", cur: Number(k?.wood || 0), cap: Number(econCaps.wood || 0), rate: Number(econPerHour.wood || 0) },
-              ].map((res) => (
-                <div key={res.label} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0", borderBottom: "1px solid rgba(216,176,117,.1)", fontSize: 14 }}>
-                  <span style={{ width: 22, height: 22, borderRadius: 4, background: "rgba(216,176,117,.2)", border: "1px solid rgba(216,176,117,.35)", display: "grid", placeItems: "center", fontSize: 11, fontWeight: 800, flexShrink: 0 }}>{res.icon}</span>
-                  <span style={{ width: 46, color: TEXT_MUTED, flexShrink: 0 }}>{res.label}</span>
-                  <span style={{ fontWeight: 600, minWidth: 80 }}>{fmtNum(res.cur)}{res.cap > 0 ? ` / ${fmtNum(res.cap)}` : ""}</span>
-                  {fmtRate(res.rate)}
-                </div>
-              ))}
+                { label: "Food",  icon: "🌾", cur: Number(k?.food || 0),  cap: Number(econCaps.food || 0),  rate: Number(econPerHour.food || 0) },
+                { label: "Gold",  icon: "💰", cur: Number(k?.gold || 0),  cap: Number(econCaps.gold || 0),  rate: Number(econPerHour.gold || 0) },
+                { label: "Mana",  icon: "✨", cur: Number(k?.mana || 0),  cap: 0,                           rate: manaPerHour },
+                { label: "Stone", icon: "🪨", cur: Number(k?.stone || 0), cap: Number(econCaps.stone || 0), rate: Number(econPerHour.stone || 0) },
+                { label: "Wood",  icon: "🪵", cur: Number(k?.wood || 0),  cap: Number(econCaps.wood || 0),  rate: Number(econPerHour.wood || 0) },
+              ].map((res) => {
+                const isStarving = res.rate < 0 && res.cur === 0;
+                const fillPct = res.cap > 0 ? res.cur / res.cap : 1;
+                const curColor = isStarving ? "#ff5c5c" : res.rate < 0 ? "#ffcc88" : fillPct < 0.2 && res.cap > 0 ? "#ffab9c" : "#9ddb8f";
+                const rowBg = isStarving ? "rgba(255,70,70,.1)" : res.rate < 0 ? "rgba(255,160,80,.06)" : "transparent";
+                return (
+                  <div key={res.label} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 6px", borderRadius: 6, borderBottom: "1px solid rgba(216,176,117,.1)", fontSize: 14, background: rowBg }}>
+                    <span style={{ fontSize: 18, lineHeight: 1, flexShrink: 0 }}>{res.icon}</span>
+                    <span style={{ width: 44, color: TEXT_MUTED, flexShrink: 0 }}>{res.label}</span>
+                    <span style={{ fontWeight: 700, minWidth: 80, color: curColor }}>{fmtNum(res.cur)}{res.cap > 0 ? <span style={{ color: TEXT_MUTED, fontWeight: 400 }}> / {fmtNum(res.cap)}</span> : ""}</span>
+                    {fmtRate(res.rate)}
+                    {isStarving && <span style={{ fontSize: 12, color: "#ff5c5c", fontWeight: 700, marginLeft: "auto" }}>⚠ STARVING</span>}
+                  </div>
+                );
+              })}
             </div>
             <div style={{ marginTop: 10, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 14 }}>
               <span style={{ color: TEXT_MUTED }}>Blue Gems: <span style={{ color: "#7eb8ff", fontWeight: 700 }}>{fmtNum(Number(k?.blue_gems || 0))}</span></span>
@@ -5810,21 +5817,28 @@ function GuildhallView() {
             <div style={{ fontWeight: 700, marginBottom: 8 }}>Sabotage Mission</div>
             <form onSubmit={sabotage} style={{ display: "grid", gap: 8 }}>
               <input value={sabotageTarget} onChange={(e) => setSabotageTarget(e.target.value)} placeholder="Target Kingdom" style={INPUT_STYLE} required />
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: isMobile ? "1fr" : "auto minmax(120px,1fr) auto minmax(120px,1fr) auto 100px",
+                  gap: 8,
+                  alignItems: "center",
+                }}
+              >
                 <span style={{ fontSize: 13, color: TEXT_MUTED }}>Operation</span>
                 <select value={sabotageOperation} onChange={(e) => setSabotageOperation(e.target.value as "resource_heist" | "priest_assassination")} style={{ ...INPUT_STYLE, minWidth: 0, flex: isMobile ? "1 1 100%" : undefined }}>
                   <option value="resource_heist">Resource Heist</option>
                   <option value="priest_assassination">Priest Assassination</option>
                 </select>
                 <span style={{ fontSize: 13, color: TEXT_MUTED }}>Resource</span>
-                <select disabled={sabotageOperation !== "resource_heist"} value={sabotageResource} onChange={(e) => setSabotageResource(e.target.value as "gold" | "food" | "wood" | "stone")} style={{ ...INPUT_STYLE, minWidth: 0 }}>
+                <select disabled={sabotageOperation !== "resource_heist"} value={sabotageResource} onChange={(e) => setSabotageResource(e.target.value as "gold" | "food" | "wood" | "stone")} style={{ ...INPUT_STYLE, minWidth: 0, width: isMobile ? "100%" : undefined }}>
                   <option value="gold">Gold</option>
                   <option value="food">Food</option>
                   <option value="wood">Wood</option>
                   <option value="stone">Stone</option>
                 </select>
                 <span style={{ fontSize: 13, color: TEXT_MUTED }}>Spies</span>
-                <input type="number" min={1} value={sabotageSpies} onChange={(e) => setSabotageSpies(Math.max(1, Number(e.target.value || 1)))} style={{ ...INPUT_STYLE, width: 90 }} />
+                <input type="number" min={1} value={sabotageSpies} onChange={(e) => setSabotageSpies(Math.max(1, Number(e.target.value || 1)))} style={{ ...INPUT_STYLE, width: isMobile ? "100%" : 90 }} />
               </div>
               <button type="submit" disabled={busy} style={{ ...BTN_STYLE, width: isMobile ? "100%" : "fit-content", fontSize: 13 }}>
                 {busy ? "Executing..." : "Run Sabotage"}
@@ -6650,7 +6664,7 @@ function App() {
                   fontWeight: 700,
                 }}
               >
-                <span style={{ width: 18, height: 18, border: "1px solid rgba(216,176,117,.55)", borderRadius: 4, background: "rgba(216,176,117,.18)" }} />
+                <span style={{ fontSize: 18, lineHeight: 1, width: 24, textAlign: "center", flexShrink: 0 }}>{item.icon}</span>
                 {item.label}
               </button>
             ))}
@@ -6677,7 +6691,7 @@ function App() {
                   fontWeight: 700,
                 }}
               >
-                <span style={{ width: 26, height: 26, border: "1px solid rgba(216,176,117,.6)", borderRadius: 4, background: "linear-gradient(180deg, rgba(216,176,117,.3), rgba(87,61,31,.3))" }} />
+                <span style={{ fontSize: 18, lineHeight: 1, width: 24, textAlign: "center", flexShrink: 0 }}>{item.icon}</span>
                 {item.label}
               </button>
             ))}
