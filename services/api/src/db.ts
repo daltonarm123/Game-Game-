@@ -31,7 +31,7 @@ const BUILDINGS = [
 
 const TROOPS = [
   { code: "peasants", name: "Peasants", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 2, upkeepGold: 0, att: 0.1, def: 0.1, nw: 0.0, housing: "Infantry, Barracks", notes: "", isTrainable: false },
-  { code: "footmen", name: "Footmen", trainGoldCost: 30, trainFoodCost: 20, horseCost: 0, trainSeconds: 45, upkeepFood: 10, upkeepGold: 4, att: 1, def: 1, nw: 0.38, housing: "Infantry, Barracks", notes: "", isTrainable: true },
+  { code: "footmen", name: "Footmen", trainGoldCost: 30, trainFoodCost: 20, horseCost: 0, trainSeconds: 45, upkeepFood: 10, upkeepGold: 4, att: 2, def: 1, nw: 0.38, housing: "Infantry, Barracks", notes: "", isTrainable: true },
   { code: "pikemen", name: "Pikemen", trainGoldCost: 45, trainFoodCost: 35, horseCost: 0, trainSeconds: 55, upkeepFood: 25, upkeepGold: 6, att: 2, def: 2, nw: 0.5, housing: "Infantry, Barracks", notes: "", isTrainable: true },
   { code: "elites", name: "Elites", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 25, upkeepGold: 13, att: 10, def: 10, nw: 0.8, housing: "Infantry, Barracks", notes: "Only gained in battle.", isTrainable: false },
   { code: "archers", name: "Archers", trainGoldCost: 50, trainFoodCost: 40, horseCost: 0, trainSeconds: 60, upkeepFood: 38, upkeepGold: 6, att: 1, def: 4, nw: 0.5, housing: "Archers, Archery Ranges", notes: "", isTrainable: true },
@@ -868,4 +868,25 @@ export async function ensureSchema(): Promise<void> {
     UPDATE kingdom_buildings SET level = GREATEST(level, 1)
     WHERE building_code = 'castles' AND level < 1
   `);
+
+  // Castles cost 40 land. Kingdoms that received the free starter castle via migration
+  // never paid that land cost. Give them +40 land once to compensate.
+  // Guarded by a flag in game_state so it only ever runs once.
+  await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS castle_land_granted_at TIMESTAMPTZ`);
+  const grantCheck = await pool.query(`SELECT castle_land_granted_at FROM game_state WHERE id=1 LIMIT 1`);
+  if (!grantCheck.rows[0]?.castle_land_granted_at) {
+    await pool.query(`
+      UPDATE kingdoms k
+      SET land = land + 40
+      WHERE NOT EXISTS (
+        SELECT 1 FROM build_queue bq
+        WHERE bq.kingdom_id = k.id AND bq.building_code = 'castles'
+      )
+      AND EXISTS (
+        SELECT 1 FROM kingdom_buildings kb
+        WHERE kb.kingdom_id = k.id AND kb.building_code = 'castles' AND kb.level >= 1
+      )
+    `);
+    await pool.query(`UPDATE game_state SET castle_land_granted_at = now() WHERE id=1`);
+  }
 }
