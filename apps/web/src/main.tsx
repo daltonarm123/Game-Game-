@@ -723,7 +723,15 @@ function BuildingsView() {
       <div style={CARD}>
         <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 24 }}>Kingdom Buildings</div>
         <div style={{ overflowX: "auto", maxWidth: "100%", WebkitOverflowScrolling: "touch" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 820 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
+            <colgroup>
+              <col style={{ width: 240 }} />
+              <col style={{ width: 340 }} />
+              <col style={{ width: 220 }} />
+              <col style={{ width: 70 }} />
+              <col style={{ width: 70 }} />
+              <col style={{ width: 70 }} />
+            </colgroup>
             <thead>
               <tr>
                 <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.4)", color: ACCENT, fontSize: 13 }}>Building</th>
@@ -748,12 +756,12 @@ function BuildingsView() {
                   : `${Math.floor(rawSec / 3600)}h`;
                 return (
                   <tr key={code} style={{ cursor: "pointer" }} onClick={() => setBuildCode(code)}>
-                    <td style={{ padding: "10px 10px", borderBottom: "1px solid rgba(216,176,117,.1)", whiteSpace: "nowrap" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <td style={{ padding: "10px 10px", borderBottom: "1px solid rgba(216,176,117,.1)", whiteSpace: "nowrap", minWidth: 220 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 220 }}>
                         <div style={{ width: 36, height: 36, borderRadius: 6, border: "1px solid rgba(216,176,117,.55)", background: "linear-gradient(180deg, rgba(89,67,37,.82), rgba(35,27,15,.92))", display: "grid", placeItems: "center", fontWeight: 800, color: "#f2dfbf", fontSize: 12, flexShrink: 0 }}>
                           {meta.sigil}
                         </div>
-                        <span style={{ fontWeight: 600 }}>{String(b.building_name || code)}</span>
+                        <span style={{ fontWeight: 600, whiteSpace: "nowrap", wordBreak: "normal", overflowWrap: "normal" }}>{String(b.building_name || code)}</span>
                       </div>
                     </td>
                     <td style={{ padding: "10px 10px", borderBottom: "1px solid rgba(216,176,117,.1)" }}>
