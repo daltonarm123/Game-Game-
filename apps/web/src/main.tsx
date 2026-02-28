@@ -2978,6 +2978,7 @@ function AuthGate(props: { onAuthenticated: (auth: AuthState) => void }) {
         username: String(j?.user?.username || ""),
         email: String(j?.user?.email || ""),
         emailVerified: Boolean(j?.user?.emailVerified),
+        isAdmin: Boolean(j?.user?.isAdmin),
       },
       kingdom: j?.kingdom ? { id: Number(j.kingdom.id), name: String(j.kingdom.name) } : null,
       expiresAt: String(j?.session?.expiresAt || ""),
