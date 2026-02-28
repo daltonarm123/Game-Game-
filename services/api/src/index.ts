@@ -1092,6 +1092,7 @@ app.post("/api/auth/register", async (req, res) => {
         stone: 5_000,
         land: 1_000,
         horses: 0,
+        troopAmounts: { peasants: 1000 },
       });
       const session = await createAuthSession(c, userId);
       await c.query(`DELETE FROM email_verification_tokens WHERE user_id=$1 AND used_at IS NULL`, [userId]);
@@ -1652,6 +1653,24 @@ app.post("/api/dev/boost-kingdom", async (req, res) => {
     return res.json({ ok: true, message: `Kingdom "${kingdomName}" boosted to god-tier.` });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/dev/give-starter-troops", async (req, res) => {
+  const kingdom = String(req.body?.kingdom || "").trim();
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  try {
+    const k = await pool.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const kr = k.rows[0];
+    await pool.query(
+      `UPDATE kingdom_troops SET amount = GREATEST(amount, 1000) WHERE kingdom_id=$1 AND troop_code='peasants'`,
+      [kr.id],
+    );
+    const cur = await pool.query(`SELECT amount FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='peasants' LIMIT 1`, [kr.id]);
+    return res.json({ ok: true, message: `Kingdom "${kr.name}" now has ${Number(cur.rows[0]?.amount || 0).toLocaleString()} peasants.` });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 

@@ -166,6 +166,84 @@ const TROOP_META: Record<string, { sigil: string; tint: string; role: string }> 
   spies: { sigil: "SP", tint: "linear-gradient(180deg, rgba(86,86,96,.72), rgba(40,40,46,.9))", role: "Covert agents for intelligence and sabotage." },
 };
 
+// ── Kingdom Autocomplete Input ─────────────────────────────────────────────────
+function KingdomInput({ value, onChange, onSelect, placeholder, style, inputStyle }: {
+  value: string;
+  onChange: (v: string) => void;
+  onSelect?: (v: string) => void;
+  placeholder?: string;
+  style?: React.CSSProperties;
+  inputStyle?: React.CSSProperties;
+}) {
+  const [hints, setHints] = useState<string[]>([]);
+  const [open, setOpen] = useState(false);
+  const [highlighted, setHighlighted] = useState(-1);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function fetchHints(q: string) {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (q.length < 1) { setHints([]); setOpen(false); return; }
+    timerRef.current = setTimeout(async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/kingdom-search?q=${encodeURIComponent(q)}&limit=8`);
+        const j = await r.json();
+        if (j?.ok && Array.isArray(j.items) && j.items.length > 0) {
+          setHints(j.items);
+          setOpen(true);
+        } else {
+          setHints([]);
+          setOpen(false);
+        }
+      } catch { setHints([]); setOpen(false); }
+    }, 180);
+  }
+
+  function pick(name: string) {
+    onChange(name);
+    if (onSelect) onSelect(name);
+    setOpen(false);
+    setHints([]);
+    setHighlighted(-1);
+  }
+
+  function handleKey(e: React.KeyboardEvent) {
+    if (!open || hints.length === 0) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setHighlighted((h) => Math.min(h + 1, hints.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHighlighted((h) => Math.max(h - 1, 0)); }
+    else if (e.key === "Enter" && highlighted >= 0) { e.preventDefault(); pick(hints[highlighted]); }
+    else if (e.key === "Escape") { setOpen(false); }
+  }
+
+  return (
+    <div style={{ position: "relative", ...style }}>
+      <input
+        value={value}
+        onChange={(e) => { onChange(e.target.value); fetchHints(e.target.value); setHighlighted(-1); }}
+        onKeyDown={handleKey}
+        onBlur={() => setTimeout(() => setOpen(false), 160)}
+        onFocus={() => { if (hints.length > 0) setOpen(true); }}
+        placeholder={placeholder || "Kingdom name..."}
+        style={{ ...INPUT_STYLE, width: "100%", ...inputStyle }}
+        autoComplete="off"
+      />
+      {open && hints.length > 0 && (
+        <div style={{ position: "absolute", top: "calc(100% + 3px)", left: 0, right: 0, background: "#1c1c22", border: "1px solid rgba(216,176,117,.45)", borderRadius: 8, zIndex: 600, overflow: "hidden", boxShadow: "0 8px 24px rgba(0,0,0,.5)" }}>
+          {hints.map((name, i) => (
+            <div
+              key={name}
+              onMouseDown={() => pick(name)}
+              style={{ padding: "8px 12px", fontSize: 14, cursor: "pointer", color: highlighted === i ? "#fff7ec" : TEXT_MUTED, background: highlighted === i ? "rgba(216,176,117,.2)" : "transparent", transition: "background .1s" }}
+              onMouseEnter={() => setHighlighted(i)}
+            >
+              {name}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OverviewView() {
   const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "Elixer");
   const [details, setDetails] = useState<any>(null);
@@ -2595,19 +2673,11 @@ function WarRoomView() {
                   <form onSubmit={submitAttack} style={{ padding: 10, display: "grid", gap: 8 }}>
                     <div style={{ display: "grid", gridTemplateColumns: "170px 1fr", gap: 8 }}>
                       <div style={{ ...INPUT_STYLE }}>Kingdom Name</div>
-                      <input
+                      <KingdomInput
                         value={attackTarget}
-                        onChange={(e) => {
-                          setAttackTarget(e.target.value);
-                          void searchTargets(e.target.value);
-                        }}
+                        onChange={(v) => setAttackTarget(v)}
                         placeholder="Kingdom to attack..."
-                        style={INPUT_STYLE}
-                        list="attack-hints"
                       />
-                      <datalist id="attack-hints">
-                        {targetHints.map((n) => <option key={n} value={n} />)}
-                      </datalist>
                     </div>
                     <div style={{ fontWeight: 700 }}>Troops To Send...</div>
                     <div style={{ display: "grid", gap: 6 }}>
@@ -2926,7 +2996,7 @@ function AttackKingdomView() {
 
       <div style={CARD}>
         <form onSubmit={submitAttack} style={{ display: "grid", gap: 8 }}>
-          <input value={attackTarget} onChange={(e) => setAttackTarget(e.target.value)} placeholder="Defender kingdom" style={{ ...INPUT_STYLE, minWidth: 220 }} />
+          <KingdomInput value={attackTarget} onChange={(v) => setAttackTarget(v)} placeholder="Defender kingdom" style={{ minWidth: 220 }} />
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 8 }}>
             {troops.map((t) => (
               <label key={t.troopCode} style={{ display: "grid", gap: 4 }}>
@@ -4728,7 +4798,7 @@ function PigeonsView() {
         {composing ? (
           <form onSubmit={sendMessage} style={{ ...CARD, display: "grid", gap: 10, marginBottom: 16, background: "rgba(0,0,0,.3)" }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Send Pigeon</div>
-            <input value={toKingdom} onChange={(e) => setToKingdom(e.target.value)} placeholder="To Kingdom" style={INPUT_STYLE} required />
+            <KingdomInput value={toKingdom} onChange={(v) => setToKingdom(v)} placeholder="To Kingdom" />
             <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" style={INPUT_STYLE} required />
             <textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="Message body..." style={{ ...INPUT_STYLE, minHeight: 100, resize: "vertical" }} required />
             {statusMsg ? <div style={{ color: "#c8e7b1", fontSize: 13 }}>{statusMsg}</div> : null}
@@ -4980,7 +5050,7 @@ function GuildhallView() {
             </button>
             {spyOpen ? (
               <form onSubmit={sendSpies} style={{ display: "grid", gap: 8 }}>
-                <input value={defenderKingdom} onChange={(e) => setDefenderKingdom(e.target.value)} placeholder="Target Kingdom" style={INPUT_STYLE} required />
+                <KingdomInput value={defenderKingdom} onChange={(v) => setDefenderKingdom(v)} placeholder="Target Kingdom" />
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   <span style={{ fontSize: 14, color: TEXT_MUTED }}>Spies to send:</span>
                   <input type="number" min={1} value={spiesToSend} onChange={(e) => setSpiesToSend(Math.max(1, Number(e.target.value)))} style={{ ...INPUT_STYLE, width: 80, fontSize: 14 }} />
