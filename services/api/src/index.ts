@@ -879,14 +879,6 @@ async function ensureSettlementsForKingdom(c: PoolClient, kingdomId: number, kin
       `UPDATE settlements SET settlement_type=$3, level=$4, slots_total=$5 WHERE id=$1 AND kingdom_id=$2`,
       [cur.id, kingdomId, t, def.level, slots],
     );
-    await c.query(
-      `
-      INSERT INTO settlement_buildings(settlement_id, building_code, level)
-      SELECT $1::bigint, code, 0 FROM settlement_building_types
-      ON CONFLICT (settlement_id, building_code) DO NOTHING
-      `,
-      [cur.id],
-    );
   }
 
   if (current.rows.length === 0) {
@@ -900,14 +892,6 @@ async function ensureSettlementsForKingdom(c: PoolClient, kingdomId: number, kin
       [kingdomId, `${kingdomName} Capital`, firstType, firstDef.level, firstSlots],
     );
     const settlementId = Number(ins.rows[0].id);
-    await c.query(
-      `
-      INSERT INTO settlement_buildings(settlement_id, building_code, level)
-      SELECT $1::bigint, code, 0 FROM settlement_building_types
-      ON CONFLICT (settlement_id, building_code) DO NOTHING
-      `,
-      [settlementId],
-    );
     await c.query(
       `INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`,
       [settlementId, "Settlement founded"],
