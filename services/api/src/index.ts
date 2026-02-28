@@ -1563,6 +1563,98 @@ app.post("/api/dev/setup-dev-account", async (req, res) => {
   }
 });
 
+// Boost any kingdom to dev-god status by kingdom name
+app.post("/api/dev/boost-kingdom", async (req, res) => {
+  const kingdomName = String(req.body?.kingdomName || "").trim();
+  if (!kingdomName) return res.status(400).json({ ok: false, error: "kingdomName required" });
+  try {
+    await withTx(async (c) => {
+      const kr = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdomName]);
+      if (!kr.rowCount) throw new Error(`Kingdom "${kingdomName}" not found`);
+      const kid = kr.rows[0].id;
+
+      // Max resources + land
+      await c.query(
+        `UPDATE kingdoms SET gold=999999999, food=999999999, wood=999999999, stone=999999999,
+         land=400000, horses=500000, mana=999999 WHERE id=$1`,
+        [kid],
+      );
+
+      // Max buildings — heavy on farms, lumberyards, quarries, castles, barracks, stables
+      await c.query(
+        `INSERT INTO kingdom_buildings(kingdom_id, building_code, level)
+         SELECT $1::bigint, code, 0 FROM building_types
+         ON CONFLICT (kingdom_id, building_code) DO NOTHING`,
+        [kid],
+      );
+      const buildingBoosts: Record<string, number> = {
+        farm: 8000, lumberyard: 6000, quarry: 6000, barns: 4000,
+        barracks: 2000, stables: 2000, castles: 1500, archery_ranges: 1500,
+        houses: 5000, horse_farms: 3000, markets: 1000, guildhalls: 500,
+        temples: 500, embassies: 300,
+      };
+      for (const [code, level] of Object.entries(buildingBoosts)) {
+        await c.query(
+          `UPDATE kingdom_buildings SET level=$3 WHERE kingdom_id=$1 AND building_code=$2`,
+          [kid, code, level],
+        );
+      }
+
+      // Max troops
+      await c.query(
+        `INSERT INTO kingdom_troops(kingdom_id, troop_code, amount)
+         SELECT $1::bigint, code, 0 FROM troop_types
+         ON CONFLICT (kingdom_id, troop_code) DO NOTHING`,
+        [kid],
+      );
+      const troopBoosts: Record<string, number> = {
+        footmen: 500000, pikemen: 300000, archers: 200000,
+        light_cavalry: 250000, heavy_cavalry: 150000, knights: 50000,
+        elites: 25000, peasants: 1000000, spies: 10000, priests: 2000,
+      };
+      for (const [code, amount] of Object.entries(troopBoosts)) {
+        await c.query(
+          `UPDATE kingdom_troops SET amount=$3 WHERE kingdom_id=$1 AND troop_code=$2`,
+          [kid, code, amount],
+        );
+      }
+
+      // Max all research
+      const rc = await c.query(`SELECT code FROM research_types`);
+      for (const row of rc.rows) {
+        await c.query(
+          `INSERT INTO kingdom_research(kingdom_id, research_code, level)
+           VALUES ($1,$2,10) ON CONFLICT (kingdom_id, research_code) DO UPDATE SET level=10`,
+          [kid, row.code],
+        );
+      }
+
+      // Create settlements matching 400k land plan
+      const settlements = [
+        { name: "Grand Capital", type: "large_city", level: 6, slots: 25, wall: 5 },
+        { name: "Royal Harbor", type: "large_city", level: 6, slots: 25, wall: 5 },
+        { name: "Iron Citadel", type: "large_city", level: 6, slots: 25, wall: 5 },
+        { name: "Goldvein City", type: "medium_city", level: 5, slots: 17, wall: 4 },
+        { name: "Stonekeep", type: "small_city", level: 4, slots: 12, wall: 3 },
+        { name: "East March", type: "large_town", level: 3, slots: 8, wall: 2 },
+        { name: "West Reach", type: "medium_town", level: 2, slots: 5, wall: 1 },
+        { name: "Southgate", type: "small_town", level: 1, slots: 3, wall: 1 },
+      ];
+      for (const s of settlements) {
+        await c.query(
+          `INSERT INTO settlements(kingdom_id, name, settlement_type, level, slots_total, wellbeing, wall_level)
+           VALUES ($1,$2,$3,$4,$5,100,$6)
+           ON CONFLICT DO NOTHING`,
+          [kid, s.name, s.type, s.level, s.slots, s.wall],
+        );
+      }
+    });
+    return res.json({ ok: true, message: `Kingdom "${kingdomName}" boosted to god-tier.` });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 app.get("/api/kingdom/:name", async (req, res) => {
   const name = String(req.params.name || "").trim();
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
