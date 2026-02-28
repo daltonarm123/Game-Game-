@@ -686,19 +686,19 @@ function BuildingsView() {
     <div style={{ display: "grid", gap: 12 }}>
       <div style={CARD}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
-          <div>
+          <div style={{ minWidth: 0, flex: "1 1 320px" }}>
             <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>
               Buildings - {k ? k.name : kingdom}
             </div>
-            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 18, fontWeight: 700 }}>
+            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 18, fontWeight: 700, overflowWrap: "anywhere" }}>
               Rank #{war?.kingdom?.rank || "N/A"} • Land: {availableLand.toLocaleString()} / {Number(k?.land || 0).toLocaleString()} Acres
             </div>
-            <div style={{ marginTop: 4, color: TEXT_MUTED, fontSize: 17, fontWeight: 700 }}>
+            <div style={{ marginTop: 4, color: TEXT_MUTED, fontSize: 17, fontWeight: 700, overflowWrap: "anywhere" }}>
               Stone: {Number(k?.stone || 0).toLocaleString()} ({Number(econ.stone || 0) >= 0 ? "+" : ""}{Number(econ.stone || 0).toLocaleString()}/h) • Wood: {Number(k?.wood || 0).toLocaleString()} ({Number(econ.wood || 0) >= 0 ? "+" : ""}{Number(econ.wood || 0).toLocaleString()}/h)
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={INPUT_STYLE} />
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={{ ...INPUT_STYLE, maxWidth: "100%" }} />
             <button onClick={() => void load()} style={BTN_STYLE}>Load</button>
           </div>
         </div>
@@ -717,8 +717,8 @@ function BuildingsView() {
 
       <div style={CARD}>
         <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 24 }}>Kingdom Buildings</div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <div style={{ overflowX: "auto", maxWidth: "100%", WebkitOverflowScrolling: "touch" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 820 }}>
             <thead>
               <tr>
                 <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.4)", color: ACCENT, fontSize: 13 }}>Building</th>
@@ -5797,11 +5797,12 @@ function App() {
           gridTemplateColumns: isMobile ? "1fr" : "300px 1fr",
           gap: 16,
           padding: isMobile ? 10 : 16,
+          minWidth: 0,
           background:
             "linear-gradient(180deg, rgba(36,29,24,0.35), rgba(24,22,23,0.75))",
         }}
       >
-        <aside style={{ ...CARD, height: "fit-content", position: isMobile ? "relative" : "sticky", top: 16, background: "linear-gradient(180deg, rgba(29,29,33,0.86), rgba(19,19,22,0.88))", display: isMobile && !navOpen ? "none" : undefined }}>
+        <aside style={{ ...CARD, height: "fit-content", position: isMobile ? "relative" : "sticky", top: 16, minWidth: 0, background: "linear-gradient(180deg, rgba(29,29,33,0.86), rgba(19,19,22,0.88))", display: isMobile && !navOpen ? "none" : undefined }}>
           <div style={{ fontWeight: 800, marginBottom: 8, fontSize: isMobile ? 24 : 28, fontFamily: FONT_DISPLAY }}>Top Menu</div>
           <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
             {topNav.map((item) => (
@@ -5857,7 +5858,7 @@ function App() {
           </div>
         </aside>
 
-        <section style={{ display: "grid", gap: 12 }}>
+        <section style={{ display: "grid", gap: 12, minWidth: 0 }}>
           {/* Unverified email banner */}
           {auth.user.emailVerified === false && (
             <EmailVerifyBanner token={auth.token} onVerified={() => setAuth({ ...auth, user: { ...auth.user, emailVerified: true } })} />

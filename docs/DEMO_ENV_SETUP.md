@@ -1,9 +1,9 @@
-﻿# Live Demo Startup (Windows PowerShell)
+# Live Demo Startup (Windows PowerShell)
 
 ## Full startup (recommended)
 
 ```powershell
-cd C:\Users\dalto\OneDrive\Desktop\Game-Game-
+cd C:\path\to\Crownforge
 powershell -ExecutionPolicy Bypass -File .\scripts\start-demo-env.ps1
 ```
 

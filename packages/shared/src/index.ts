@@ -1,4 +1,4 @@
-export const GAME_NAME = "Game Game";
+export const GAME_NAME = "Crownforge";
 
 export type SeasonCode = "spring" | "summer" | "autumn" | "winter";
 
@@ -127,4 +127,3 @@ export function settlementTypeDisplay(size: number) {
   if (size >= 2) return "Medium Town";
   return "Small Town";
 }
-

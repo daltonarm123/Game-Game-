@@ -1,6 +1,6 @@
-﻿# Ruleset V1 (Game Game)
+# Ruleset V1 (Crownforge)
 
-This document defines the first public ruleset for Game Game.
+This document defines the first public ruleset for Crownforge.
 
 ## Design Goals
 - Keep gameplay familiar to existing kingdom-strategy players.

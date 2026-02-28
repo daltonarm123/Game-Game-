@@ -1,5 +1,4 @@
-﻿# Game Game
-
+# Crownforge
 Modern, maintained, tick-based kingdom strategy game platform.
 
 ## Monorepo Layout
