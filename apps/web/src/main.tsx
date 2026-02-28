@@ -4704,6 +4704,7 @@ function AdminView() {
 
   const [tab, setTab] = useState<"overview" | "kingdoms" | "users">("overview");
   const [stats, setStats] = useState<StatsData | null>(null);
+  const [backlog, setBacklog] = useState<any>(null);
   const [kingdoms, setKingdoms] = useState<KingdomRow[]>([]);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [kingdomTotal, setKingdomTotal] = useState(0);
@@ -4711,6 +4712,7 @@ function AdminView() {
   const [search, setSearch] = useState("");
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
+  const [opsBusy, setOpsBusy] = useState(false);
 
   const api = async (path: string, method = "GET", body?: object) => {
     const r = await fetch(`${API_BASE}${path}`, {
@@ -4724,6 +4726,10 @@ function AdminView() {
   const loadStats = async () => {
     const j = await api("/api/admin/stats");
     if (j.ok) setStats(j.stats);
+  };
+  const loadBacklog = async () => {
+    const j = await api("/api/admin/backlog");
+    if (j.ok) setBacklog(j);
   };
 
   const loadKingdoms = async (s = search) => {
@@ -4742,6 +4748,7 @@ function AdminView() {
 
   useEffect(() => {
     loadStats();
+    void loadBacklog();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -4777,6 +4784,22 @@ function AdminView() {
     const j = await api("/api/admin/set-admin", "POST", { userId, grant });
     setMsg(j.ok ? (grant ? "Admin granted." : "Admin revoked.") : j.error);
     if (tab === "users") loadUsers(search);
+  };
+
+  const runReconcile = async (path: string, body: any) => {
+    setOpsBusy(true);
+    try {
+      const j = await api(path, "POST", body);
+      if (!j?.ok) throw new Error(j?.error || "request failed");
+      const changed = Array.isArray(j.changed) ? j.changed.length : Number(j?.changed || 0);
+      const checked = Number(j?.checked || 0);
+      setMsg(`${path.replace("/api/admin/", "")}: checked ${checked.toLocaleString()}, changed ${changed.toLocaleString()}${body?.dryRun ? " (dry run)" : ""}.`);
+      await loadBacklog();
+    } catch (e: any) {
+      setMsg(`Ops failed: ${String(e?.message || e)}`);
+    } finally {
+      setOpsBusy(false);
+    }
   };
 
   const resendVerification = async (userId: string) => {
@@ -4824,36 +4847,6 @@ function AdminView() {
 
   const TH: React.CSSProperties = { padding: "8px 10px", textAlign: "left", color: ACCENT, fontSize: 13, borderBottom: "1px solid rgba(216,176,117,.25)", whiteSpace: "nowrap" };
   const TD: React.CSSProperties = { padding: "7px 10px", fontSize: 13, borderBottom: "1px solid rgba(255,255,255,.06)" };
-  const chartGeom = useMemo(() => {
-    const points = chartItems
-      .map((p) => ({ x: new Date(String(p.recordedAt || "")).getTime(), y: Number(p.networth || 0), at: String(p.recordedAt || "") }))
-      .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
-      .sort((a, b) => a.x - b.x);
-    if (points.length < 2) return null;
-    const width = 920;
-    const height = 230;
-    const padL = 52;
-    const padR = 18;
-    const padT = 16;
-    const padB = 40;
-    const minX = points[0].x;
-    const maxX = points[points.length - 1].x;
-    const minYRaw = Math.min(...points.map((p) => p.y));
-    const maxYRaw = Math.max(...points.map((p) => p.y));
-    const yPad = Math.max(1, (maxYRaw - minYRaw) * 0.08);
-    const minY = Math.max(0, minYRaw - yPad);
-    const maxY = maxYRaw + yPad;
-    const xScale = (x: number) => (maxX === minX ? padL : padL + ((x - minX) / (maxX - minX)) * (width - padL - padR));
-    const yScale = (y: number) => (maxY === minY ? (height - padB) : (height - padB) - ((y - minY) / (maxY - minY)) * (height - padT - padB));
-    const plotted = points.map((p) => ({ px: xScale(p.x), py: yScale(p.y), y: p.y, at: p.at }));
-    const linePath = plotted.map((p, i) => `${i === 0 ? "M" : "L"} ${p.px.toFixed(2)} ${p.py.toFixed(2)}`).join(" ");
-    const areaPath = `${linePath} L ${plotted[plotted.length - 1].px.toFixed(2)} ${(height - padB).toFixed(2)} L ${plotted[0].px.toFixed(2)} ${(height - padB).toFixed(2)} Z`;
-    const yTicks = [0, 0.25, 0.5, 0.75, 1].map((t) => {
-      const val = minY + (maxY - minY) * t;
-      return { y: yScale(val), val };
-    });
-    return { width, height, padL, padR, padT, padB, plotted, linePath, areaPath, yTicks };
-  }, [chartItems]);
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
@@ -4878,7 +4871,10 @@ function AdminView() {
         {/* Overview tab */}
         {tab === "overview" && (
           <div>
-            <button onClick={loadStats} style={{ ...BTN_STYLE, fontSize: 13, marginBottom: 14 }}>Refresh</button>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+              <button onClick={loadStats} style={{ ...BTN_STYLE, fontSize: 13 }}>Refresh Stats</button>
+              <button onClick={() => void loadBacklog()} style={{ ...BTN_STYLE, fontSize: 13 }}>Refresh Backlog</button>
+            </div>
             {stats ? (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12 }}>
                 {([
@@ -4896,6 +4892,28 @@ function AdminView() {
             ) : (
               <div style={{ color: TEXT_MUTED }}>Loading stats…</div>
             )}
+            {backlog?.ok ? (
+              <div style={{ ...CARD, marginTop: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>Queue Backlog</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 8, fontSize: 13 }}>
+                  <div>Builds: {Number(backlog?.queues?.builds?.due || 0).toLocaleString()} due</div>
+                  <div>Training: {Number(backlog?.queues?.training?.due || 0).toLocaleString()} due</div>
+                  <div>Research: {Number(backlog?.queues?.research?.due || 0).toLocaleString()} due</div>
+                  <div>Settlement: {Number(backlog?.queues?.settlementBuilds?.due || 0).toLocaleString()} due</div>
+                  <div>Returns: {Number(backlog?.queues?.troopReturns?.due || 0).toLocaleString()} due</div>
+                  <div>Worker Lag: {Number(backlog?.worker?.lagSeconds || 0).toLocaleString()}s</div>
+                </div>
+              </div>
+            ) : null}
+            <div style={{ ...CARD, marginTop: 12 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Integrity Reconcile</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button disabled={opsBusy} onClick={() => void runReconcile("/api/admin/reconcile-land", { dryRun: true, buffer: 0 })} style={{ ...BTN_STYLE, fontSize: 12, padding: "6px 10px" }}>Land Dry Run</button>
+                <button disabled={opsBusy} onClick={() => void runReconcile("/api/admin/reconcile-population", { dryRun: true })} style={{ ...BTN_STYLE, fontSize: 12, padding: "6px 10px" }}>Population Dry Run</button>
+                <button disabled={opsBusy} onClick={() => void runReconcile("/api/admin/reconcile-spy-capacity", { dryRun: true })} style={{ ...BTN_STYLE, fontSize: 12, padding: "6px 10px" }}>Spy Cap Dry Run</button>
+                <button disabled={opsBusy} onClick={() => void runReconcile("/api/admin/reconcile-train-queue-times", { dryRun: true })} style={{ ...BTN_STYLE, fontSize: 12, padding: "6px 10px" }}>Train Time Dry Run</button>
+              </div>
+            </div>
           </div>
         )}
 

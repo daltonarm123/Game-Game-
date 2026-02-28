@@ -12,6 +12,7 @@ import {
   SEASONS,
   SETTLEMENT_TYPE_DEF,
   clampNumber,
+  effectivePeasantCap,
   expectedSettlementPlan,
   researchGoldCost,
   researchSeconds,
@@ -122,15 +123,43 @@ app.use((req, res, next) => {
 });
 
 // ── Rate limiting ────────────────────────────────────────────────────────────
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, message: { ok: false, error: "Too many attempts. Please wait 15 minutes." } });
-const generalLimiter = rateLimit({ windowMs: 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false, message: { ok: false, error: "Too many requests. Please slow down." } });
-const actionLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false, message: { ok: false, error: "Too many actions. Please wait a moment." } });
+const limiterKey = (req: express.Request) => {
+  const token = String(req.headers.authorization || "").trim().replace(/^Bearer\s+/i, "");
+  if (token) return `tok:${token.slice(0, 32)}`;
+  return `ip:${String(req.ip || req.socket.remoteAddress || "unknown")}`;
+};
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: limiterKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "Too many attempts. Please wait 15 minutes." },
+});
+const generalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 900,
+  keyGenerator: limiterKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "Too many requests. Please slow down." },
+});
+const actionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 90,
+  keyGenerator: limiterKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "Too many actions. Please wait a moment." },
+});
 app.use("/api/auth/login", authLimiter);
 app.use("/api/auth/register", authLimiter);
 app.use("/api/auth/forgot-password", authLimiter);
 app.use("/api/auth/reset-password", authLimiter);
-app.use("/api/kingdom/:name/attack", actionLimiter);
-app.use("/api/kingdom/:name/spy", actionLimiter);
+app.use("/api/war-room/:attacker/attack", actionLimiter);
+app.use("/api/war-room/:attacker/explore", actionLimiter);
+app.use("/api/war-room/:attacker/spy", actionLimiter);
+app.use("/api/guildhall/:kingdom/sabotage", actionLimiter);
 app.use("/api/market/:kingdom/buy", actionLimiter);
 app.use("/api", generalLimiter);
 
@@ -444,6 +473,8 @@ async function getAuthSession(token: string) {
 }
 
 async function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const existing = (req as any).authSession;
+  if (existing && !existing.is_banned) return next();
   const token = extractAuthToken(req);
   if (!token) return res.status(401).json({ ok: false, error: "missing auth token" });
   const session = await getAuthSession(token);
@@ -468,6 +499,55 @@ function extractAuthToken(req: express.Request) {
   if (h.toLowerCase().startsWith("bearer ")) return h.slice(7).trim();
   const alt = String(req.headers["x-auth-token"] || "").trim();
   return alt || "";
+}
+
+async function logAdminActionTx(
+  c: PoolClient,
+  session: any,
+  action: string,
+  targetKind: string,
+  targetId: string,
+  payload: Record<string, unknown> = {},
+) {
+  await c.query(
+    `
+    INSERT INTO admin_audit_log(actor_user_id, actor_username, action, target_kind, target_id, payload)
+    VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+    `,
+    [
+      String(session?.user_id || ""),
+      String(session?.username || "admin"),
+      String(action || "unknown"),
+      String(targetKind || "system"),
+      String(targetId || ""),
+      JSON.stringify(payload || {}),
+    ],
+  );
+}
+
+function requireOwnedKingdomParam(paramName: string) {
+  const writeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+  return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!writeMethods.has(String(req.method || "GET").toUpperCase())) return next();
+    const kingdomName = String((req.params as any)?.[paramName] || "").trim();
+    if (!kingdomName) return res.status(400).json({ ok: false, error: "kingdom name required" });
+    try {
+      const token = extractAuthToken(req);
+      if (!token) return res.status(401).json({ ok: false, error: "missing auth token" });
+      const session = await getAuthSession(token);
+      if (!session) return res.status(401).json({ ok: false, error: "invalid or expired session" });
+      if (session.is_banned) return res.status(403).json({ ok: false, error: "account is banned" });
+      const own = await pool.query(
+        `SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1`,
+        [kingdomName, session.user_id],
+      );
+      if (!own.rowCount) return res.status(403).json({ ok: false, error: "cannot modify another kingdom" });
+      (req as any).authSession = session;
+      return next();
+    } catch (e: any) {
+      return res.status(500).json({ ok: false, error: String(e?.message || e) });
+    }
+  };
 }
 
 async function getAllianceMembershipByKingdom(q: { query: PoolClient["query"] }, kingdom: string) {
@@ -1109,12 +1189,52 @@ async function seedKingdom(c: PoolClient, opts: {
   return kingdom;
 }
 
+// Ownership guard for authenticated kingdom write routes.
+app.use("/api/kingdom/:name", requireOwnedKingdomParam("name"));
+app.use("/api/war-room/:attacker/attack", requireOwnedKingdomParam("attacker"));
+app.use("/api/war-room/:attacker/explore", requireOwnedKingdomParam("attacker"));
+app.use("/api/war-room/:attacker/spy", requireOwnedKingdomParam("attacker"));
+app.use("/api/research/:kingdom", requireOwnedKingdomParam("kingdom"));
+app.use("/api/settlements/:kingdom", requireOwnedKingdomParam("kingdom"));
+app.use("/api/alliance/:kingdom", requireOwnedKingdomParam("kingdom"));
+app.use("/api/alliance-forums/:kingdom", requireOwnedKingdomParam("kingdom"));
+app.use("/api/embassy/:kingdom", requireOwnedKingdomParam("kingdom"));
+app.use("/api/guildhall/:kingdom", requireOwnedKingdomParam("kingdom"));
+app.use("/api/pray/:kingdom", requireOwnedKingdomParam("kingdom"));
+app.use("/api/market/:kingdom", requireOwnedKingdomParam("kingdom"));
+app.use("/api/pigeons/:kingdom/send", requireOwnedKingdomParam("kingdom"));
+app.use("/api/pigeons/:kingdom/delete-many", requireOwnedKingdomParam("kingdom"));
+app.use("/api/pigeons/:kingdom/:mailId/read", requireOwnedKingdomParam("kingdom"));
+app.use("/api/notifications/:kingdom/ack", requireOwnedKingdomParam("kingdom"));
+
 app.get("/healthz", async (_req, res) => {
   try {
     await pool.query("SELECT 1");
     res.json({ ok: true, service: "api", db: "up", ts: new Date().toISOString() });
   } catch (e: any) {
     res.status(500).json({ ok: false, service: "api", db: "down", error: String(e?.message || e) });
+  }
+});
+
+app.get("/readyz", async (_req, res) => {
+  try {
+    await pool.query("SELECT 1");
+    const gs = await pool.query(`SELECT worker_last_tick_at FROM game_state WHERE id=1 LIMIT 1`);
+    const lastTickAt = new Date(gs.rows[0]?.worker_last_tick_at || Date.now());
+    const tickLagSeconds = Math.max(0, Math.floor((Date.now() - lastTickAt.getTime()) / 1000));
+    const maxLag = Math.max(30, OBS_TICK_INTERVAL_SECONDS * 3);
+    const ready = tickLagSeconds <= maxLag;
+    return res.status(ready ? 200 : 503).json({
+      ok: ready,
+      service: "api",
+      db: "up",
+      workerLastTickAt: lastTickAt.toISOString(),
+      workerLagSeconds: tickLagSeconds,
+      maxLagSeconds: maxLag,
+      ts: new Date().toISOString(),
+    });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, service: "api", db: "down", error: String(e?.message || e) });
   }
 });
 
@@ -1983,6 +2103,35 @@ app.post("/api/kingdom/:name/build", requireAuth, async (req, res) => {
       await c.query(`UPDATE kingdoms SET wood = wood - $2, stone = stone - $3 WHERE id=$1`, [kingdom.id, woodCost, stoneCost]);
 
       const seconds = LOCAL_DEMO_FAST ? FAST_BUILD_SECONDS : Math.max(1, Number(def.base_build_seconds || 0));
+      const existing = await c.query(
+        `
+        SELECT id, quantity, target_level, started_at, completes_at
+        FROM build_queue
+        WHERE kingdom_id=$1 AND building_code=$2 AND status='queued'
+        ORDER BY id DESC
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [kingdom.id, buildingCode],
+      );
+      if (existing.rowCount) {
+        const row = existing.rows[0];
+        const mergedQty = Number(row.quantity || 0) + qty;
+        const mergedTarget = Math.max(targetLevel, Number(row.target_level || 0));
+        const up = await c.query(
+          `
+          UPDATE build_queue
+          SET quantity=$2,
+              target_level=$3,
+              completes_at=GREATEST(completes_at, now() + ($4 * INTERVAL '1 second'))
+          WHERE id=$1
+          RETURNING id, kingdom_id, building_code, quantity, target_level, started_at, completes_at, status
+          `,
+          [row.id, mergedQty, mergedTarget, seconds],
+        );
+        return { queue: up.rows[0], costs: { land: landCost, wood: woodCost, stone: stoneCost } };
+      }
+
       const ins = await c.query(
         `INSERT INTO build_queue(kingdom_id, building_code, quantity, target_level, started_at, completes_at, status)
          VALUES ($1,$2,$3,$4, now(), now() + ($5 * INTERVAL '1 second'), 'queued')
@@ -2126,6 +2275,33 @@ app.post("/api/kingdom/:name/train", requireAuth, async (req, res) => {
 
       // Training duration is fixed per queue entry by troop type (not multiplied by quantity).
       const totalSeconds = LOCAL_DEMO_FAST ? FAST_TRAIN_SECONDS : Math.max(1, Number(def.train_seconds));
+      const existing = await c.query(
+        `
+        SELECT id, quantity, started_at, completes_at
+        FROM train_queue
+        WHERE kingdom_id=$1 AND troop_code=$2 AND status='queued'
+        ORDER BY id DESC
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [kingdom.id, troopCode],
+      );
+      if (existing.rowCount) {
+        const row = existing.rows[0];
+        const mergedQty = Number(row.quantity || 0) + qty;
+        const up = await c.query(
+          `
+          UPDATE train_queue
+          SET quantity=$2,
+              completes_at=GREATEST(completes_at, now() + ($3 * INTERVAL '1 second'))
+          WHERE id=$1
+          RETURNING id, kingdom_id, troop_code, quantity, started_at, completes_at, status
+          `,
+          [row.id, mergedQty, totalSeconds],
+        );
+        return { queue: up.rows[0], costs: { gold: totalGold, food: totalFood, horses: totalHorses } };
+      }
+
       const ins = await c.query(
         `INSERT INTO train_queue(kingdom_id, troop_code, quantity, started_at, completes_at, status)
          VALUES ($1,$2,$3, now(), now() + ($4 * INTERVAL '1 second'), 'queued')
@@ -2476,6 +2652,9 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
         attackerAfterSend[code] = Number(attackerAfterSend[code] || 0) - Number(sent);
       }
       const attackerBattle = applyLosses(sentOnly, aLossPct, sentOnly);
+      const attackerLossesSentOnly = Object.fromEntries(
+        Object.entries(attackerBattle.losses).filter(([code, n]) => Number(sentOnly[code] || 0) > 0 && Number(n || 0) > 0),
+      );
       const attackerSurvivors: Record<string, number> = {};
       for (const [code, sent] of Object.entries(sentOnly)) {
         const survivors = Math.max(0, Number(sent) - Number(attackerBattle.losses[code] || 0));
@@ -2690,7 +2869,7 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
           attackerPower,
           defenderPower,
           JSON.stringify(sentOnly),
-          JSON.stringify(attackerBattle.losses),
+          JSON.stringify(attackerLossesSentOnly),
           JSON.stringify(defenderBattle.losses),
         ],
       );
@@ -2727,7 +2906,7 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
         if (lootWood > 0) gains.push(`${lootWood.toLocaleString()} Wood`);
         if (gains.length) attackerBody += `You have gained the following during the attack: ${gains.join(", ")}\n\n`;
       }
-      attackerBody += `We regret to inform you of the following casualties during the attack: ${fmtLosses(attackerBattle.losses)}\n`;
+      attackerBody += `We regret to inform you of the following casualties during the attack: ${fmtLosses(attackerLossesSentOnly)}\n`;
       attackerBody += `Enemy casualties: ${fmtLosses(defenderBattle.losses)}`;
       if (gemsAwarded > 0) attackerBody += `\n\nYou have also been awarded ${gemsAwarded} Green Gem${gemsAwarded !== 1 ? "s" : ""} for your victorious attack!`;
 
@@ -2744,7 +2923,7 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
         if (lost.length) defenderBody += `You have lost the following: ${lost.join(", ")}\n\n`;
       }
       defenderBody += `Your casualties: ${fmtLosses(defenderBattle.losses)}\n`;
-      defenderBody += `Enemy casualties: ${fmtLosses(attackerBattle.losses)}`;
+      defenderBody += `Enemy casualties: ${fmtLosses(attackerLossesSentOnly)}`;
 
       await sendMailTx(c, Number(atk.id), "attack", `Attack Report: ${String(def.name)}`, attackerBody);
       await sendMailTx(c, Number(def.id), "attack", `Defence Report: ${String(atk.name)} attacked you`, defenderBody);
@@ -2760,7 +2939,7 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
         landTaken,
         lootFood, lootGold, lootWood, lootStone,
         gemsAwarded,
-        attackerLosses: attackerBattle.losses,
+        attackerLosses: attackerLossesSentOnly,
         defenderLosses: defenderBattle.losses,
         attackerSurvivorsAway: attackerSurvivors,
         elitesPromoted,
@@ -2833,7 +3012,10 @@ app.post("/api/war-room/:attacker/explore", requireAuth, async (req, res) => {
         const base = Number(qty || 0);
         const aRating = Number(troopAtt[code] || 0);
         const dRating = Number(troopDef[code] || 0);
-        return acc + base * Math.max(0.1, aRating * 0.75 + dRating * 0.25);
+        let unitPower = Math.max(0.1, aRating * 0.75 + dRating * 0.25);
+        // Peasants can explore, but their efficiency is intentionally low.
+        if (code === "peasants") unitPower *= 0.25;
+        return acc + base * unitPower;
       }, 0);
       if (sentPower < EXPLORE_MIN_EFFECTIVE_POWER) {
         throw new Error(`explore party too small (need power ${EXPLORE_MIN_EFFECTIVE_POWER.toFixed(0)}, sent ${sentPower.toFixed(1)})`);
@@ -2841,8 +3023,10 @@ app.post("/api/war-room/:attacker/explore", requireAuth, async (req, res) => {
 
       const remainingCap = Math.max(0, EXPLORE_LAND_CAP - Number(atk.land || 0));
       const randomness = 0.85 + Math.random() * 0.30;
-      const sizeBonus = 1 + Math.min(0.25, Math.log10(totalSent + 1) * 0.05);
-      const baseLand = Math.floor(sentPower * EXPLORE_POWER_TO_LAND * sizeBonus * randomness);
+      // Larger coordinated parties get better yield efficiency than many tiny sends.
+      const sizeBonus = 0.9 + Math.min(0.6, Math.log10(totalSent + 10) * 0.18);
+      const coordinationBonus = 1 + Math.min(0.35, Math.sqrt(totalSent) / 1200);
+      const baseLand = Math.floor(sentPower * EXPLORE_POWER_TO_LAND * sizeBonus * coordinationBonus * randomness);
       if (baseLand <= 0) throw new Error("explore party was too small to claim land");
       const landFound = Math.min(remainingCap, baseLand);
       if (landFound <= 0) throw new Error(`explore unavailable at ${EXPLORE_LAND_CAP.toLocaleString()} land cap`);
@@ -5169,6 +5353,35 @@ app.get("/api/admin/alerts", requireAdmin, async (_req, res) => {
   }
 });
 
+app.get("/api/admin/backlog", requireAdmin, async (_req, res) => {
+  try {
+    const [buildQ, trainQ, researchQ, settlementQ, movementQ, stateQ] = await Promise.all([
+      pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='queued' AND completes_at <= now())::int AS due FROM build_queue WHERE status='queued'`),
+      pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='queued' AND completes_at <= now())::int AS due FROM train_queue WHERE status='queued'`),
+      pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='queued' AND completes_at <= now())::int AS due FROM research_queue WHERE status='queued'`),
+      pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='queued' AND completes_at <= now())::int AS due FROM settlement_build_queue WHERE status='queued'`),
+      pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='out' AND returns_at <= now())::int AS due FROM troop_movements WHERE status='out'`),
+      pool.query(`SELECT worker_last_tick_at FROM game_state WHERE id=1 LIMIT 1`),
+    ]);
+    const workerLastTickAt = new Date(stateQ.rows[0]?.worker_last_tick_at || Date.now());
+    const workerLagSeconds = Math.max(0, Math.floor((Date.now() - workerLastTickAt.getTime()) / 1000));
+    return res.json({
+      ok: true,
+      worker: { lastTickAt: workerLastTickAt.toISOString(), lagSeconds: workerLagSeconds },
+      queues: {
+        builds: { total: Number(buildQ.rows[0]?.total || 0), due: Number(buildQ.rows[0]?.due || 0) },
+        training: { total: Number(trainQ.rows[0]?.total || 0), due: Number(trainQ.rows[0]?.due || 0) },
+        research: { total: Number(researchQ.rows[0]?.total || 0), due: Number(researchQ.rows[0]?.due || 0) },
+        settlementBuilds: { total: Number(settlementQ.rows[0]?.total || 0), due: Number(settlementQ.rows[0]?.due || 0) },
+        troopReturns: { total: Number(movementQ.rows[0]?.total || 0), due: Number(movementQ.rows[0]?.due || 0) },
+      },
+      capturedAt: new Date().toISOString(),
+    });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 app.get("/api/alliance-forums/:kingdom", async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const search = String(req.query.q || "").trim();
@@ -5266,6 +5479,9 @@ app.get("/api/alliance-forums/:kingdom/mod-log", requireAuth, async (req, res) =
   const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
   try {
+    const session = (req as any).authSession;
+    const own = await pool.query(`SELECT 1 FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1`, [kingdom, session.user_id]);
+    if (!own.rowCount) return res.status(403).json({ ok: false, error: "cannot view moderator log for another kingdom" });
     const membership = await getAllianceMembershipByKingdom(pool, kingdom);
     if (!isAllianceModerator(membership.role)) return res.status(403).json({ ok: false, error: "moderator permissions required" });
     const q = await pool.query(
@@ -5793,25 +6009,75 @@ app.get("/api/admin/users", requireAdmin, async (req, res) => {
   } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
 });
 
+app.get("/api/admin/audit-log", requireAdmin, async (req, res) => {
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit || 100)));
+  const offset = Math.max(0, Number(req.query.offset || 0));
+  const actor = String(req.query.actor || "").trim();
+  const action = String(req.query.action || "").trim();
+  try {
+    const q = await pool.query(
+      `
+      SELECT id, actor_user_id, actor_username, action, target_kind, target_id, payload, created_at
+      FROM admin_audit_log
+      WHERE ($1='' OR LOWER(actor_username)=LOWER($1))
+        AND ($2='' OR LOWER(action)=LOWER($2))
+      ORDER BY created_at DESC
+      LIMIT $3 OFFSET $4
+      `,
+      [actor, action, limit, offset],
+    );
+    const total = await pool.query(
+      `
+      SELECT COUNT(*)::int AS cnt
+      FROM admin_audit_log
+      WHERE ($1='' OR LOWER(actor_username)=LOWER($1))
+        AND ($2='' OR LOWER(action)=LOWER($2))
+      `,
+      [actor, action],
+    );
+    return res.json({ ok: true, items: q.rows, total: Number(total.rows[0]?.cnt || 0) });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 app.post("/api/admin/ban", requireAdmin, async (req, res) => {
   const parsed = z.object({ userId: z.string().min(1), reason: z.string().max(500).optional() }).safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const admin = (req as any).adminSession;
   try {
-    const r = await pool.query(`UPDATE app_users SET is_banned=true, banned_reason=$2 WHERE id=$1 AND is_admin=false RETURNING id`, [parsed.data.userId, parsed.data.reason || null]);
-    if (!r.rowCount) return res.status(404).json({ ok: false, error: "user not found or user is an admin" });
-    await pool.query(`DELETE FROM auth_sessions WHERE user_id=$1`, [parsed.data.userId]);
+    const out = await withTx(async (c) => {
+      const r = await c.query(`UPDATE app_users SET is_banned=true, banned_reason=$2 WHERE id=$1 AND is_admin=false RETURNING id`, [parsed.data.userId, parsed.data.reason || null]);
+      if (!r.rowCount) throw new Error("user not found or user is an admin");
+      await c.query(`DELETE FROM auth_sessions WHERE user_id=$1`, [parsed.data.userId]);
+      await logAdminActionTx(c, admin, "ban_user", "user", parsed.data.userId, { reason: parsed.data.reason || null });
+      return true;
+    });
+    if (!out) return res.status(404).json({ ok: false, error: "user not found or user is an admin" });
     return res.json({ ok: true });
-  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    return res.status(msg.includes("not found") ? 404 : 500).json({ ok: false, error: msg });
+  }
 });
 
 app.post("/api/admin/unban", requireAdmin, async (req, res) => {
   const parsed = z.object({ userId: z.string().min(1) }).safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const admin = (req as any).adminSession;
   try {
-    const r = await pool.query(`UPDATE app_users SET is_banned=false, banned_reason=NULL WHERE id=$1 RETURNING id`, [parsed.data.userId]);
-    if (!r.rowCount) return res.status(404).json({ ok: false, error: "user not found" });
+    const out = await withTx(async (c) => {
+      const r = await c.query(`UPDATE app_users SET is_banned=false, banned_reason=NULL WHERE id=$1 RETURNING id`, [parsed.data.userId]);
+      if (!r.rowCount) throw new Error("user not found");
+      await logAdminActionTx(c, admin, "unban_user", "user", parsed.data.userId, {});
+      return true;
+    });
+    if (!out) return res.status(404).json({ ok: false, error: "user not found" });
     return res.json({ ok: true });
-  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    return res.status(msg.includes("not found") ? 404 : 500).json({ ok: false, error: msg });
+  }
 });
 
 app.post("/api/admin/set-admin", requireAdmin, async (req, res) => {
@@ -5820,10 +6086,18 @@ app.post("/api/admin/set-admin", requireAdmin, async (req, res) => {
   const self = (req as any).adminSession;
   if (String(self.user_id) === parsed.data.userId && !parsed.data.grant) return res.status(400).json({ ok: false, error: "cannot revoke your own admin" });
   try {
-    const r = await pool.query(`UPDATE app_users SET is_admin=$2 WHERE id=$1 RETURNING id`, [parsed.data.userId, parsed.data.grant]);
-    if (!r.rowCount) return res.status(404).json({ ok: false, error: "user not found" });
+    const out = await withTx(async (c) => {
+      const r = await c.query(`UPDATE app_users SET is_admin=$2 WHERE id=$1 RETURNING id`, [parsed.data.userId, parsed.data.grant]);
+      if (!r.rowCount) throw new Error("user not found");
+      await logAdminActionTx(c, self, parsed.data.grant ? "grant_admin" : "revoke_admin", "user", parsed.data.userId, {});
+      return true;
+    });
+    if (!out) return res.status(404).json({ ok: false, error: "user not found" });
     return res.json({ ok: true });
-  } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    return res.status(msg.includes("not found") ? 404 : 500).json({ ok: false, error: msg });
+  }
 });
 
 app.post("/api/admin/set-premium", requireAdmin, async (req, res) => {
@@ -5832,6 +6106,7 @@ app.post("/api/admin/set-premium", requireAdmin, async (req, res) => {
     days: z.number().int().min(0).max(3650),
   }).safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const admin = (req as any).adminSession;
   try {
     const out = await withTx(async (c) => {
       const q = await c.query(
@@ -5854,6 +6129,7 @@ app.post("/api/admin/set-premium", requireAdmin, async (req, res) => {
            RETURNING id, premium_started_at, premium_ends_at, premium_shield_last_used_at`,
           [parsed.data.userId],
         );
+        await logAdminActionTx(c, admin, "clear_premium", "user", parsed.data.userId, {});
         return cleared.rows[0];
       }
       const now = new Date();
@@ -5870,6 +6146,7 @@ app.post("/api/admin/set-premium", requireAdmin, async (req, res) => {
          RETURNING id, premium_started_at, premium_ends_at, premium_shield_last_used_at`,
         [parsed.data.userId, startedAt.toISOString(), nextEnds.toISOString()],
       );
+      await logAdminActionTx(c, admin, "set_premium", "user", parsed.data.userId, { days: parsed.data.days });
       return updated.rows[0];
     });
     return res.json({ ok: true, premium: premiumStatusFromRow(out) });
@@ -5882,26 +6159,31 @@ app.post("/api/admin/set-premium", requireAdmin, async (req, res) => {
 app.post("/api/admin/resend-verification", requireAdmin, async (req, res) => {
   const parsed = z.object({ userId: z.string().min(1) }).safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const admin = (req as any).adminSession;
   try {
-    const u = await pool.query(`SELECT id, email, username, email_verified FROM app_users WHERE id=$1 LIMIT 1`, [parsed.data.userId]);
-    if (!u.rowCount) return res.status(404).json({ ok: false, error: "user not found" });
-    const user = u.rows[0];
-    const email = String(user.email || "").trim();
-    if (!email) return res.status(400).json({ ok: false, error: "user has no email address" });
-    if (Boolean(user.email_verified)) return res.status(400).json({ ok: false, error: "email is already verified" });
+    const out = await withTx(async (c) => {
+      const u = await c.query(`SELECT id, email, username, email_verified FROM app_users WHERE id=$1 LIMIT 1 FOR UPDATE`, [parsed.data.userId]);
+      if (!u.rowCount) throw new Error("user not found");
+      const user = u.rows[0];
+      const email = String(user.email || "").trim();
+      if (!email) throw new Error("user has no email address");
+      if (Boolean(user.email_verified)) throw new Error("email is already verified");
 
-    await pool.query(`DELETE FROM email_verification_tokens WHERE user_id=$1 AND used_at IS NULL`, [user.id]);
-    const verifyToken = randomBytes(32).toString("hex");
-    await pool.query(`INSERT INTO email_verification_tokens(token, user_id) VALUES($1,$2)`, [verifyToken, user.id]);
+      await c.query(`DELETE FROM email_verification_tokens WHERE user_id=$1 AND used_at IS NULL`, [user.id]);
+      const verifyToken = randomBytes(32).toString("hex");
+      await c.query(`INSERT INTO email_verification_tokens(token, user_id) VALUES($1,$2)`, [verifyToken, user.id]);
+      await logAdminActionTx(c, admin, "resend_verification", "user", parsed.data.userId, { email });
+      return { email, username: String(user.username || "Commander"), verifyToken };
+    });
     void sendEmail(
-      email,
+      out.email,
       "Verify your Crownforge email",
-      `<p>Hi ${String(user.username || "Commander")},</p><p><a href="${APP_BASE_URL}/?verify=${verifyToken}">Verify Email</a></p><p>Expires in 24 hours.</p>`,
+      `<p>Hi ${out.username},</p><p><a href="${APP_BASE_URL}/?verify=${out.verifyToken}">Verify Email</a></p><p>Expires in 24 hours.</p>`,
     ).catch((e: any) => { console.error("Failed to send admin resend-verification email", e); });
-
-    return res.json({ ok: true, message: `Verification email sent to ${email}.` });
+    return res.json({ ok: true, message: `Verification email sent to ${out.email}.` });
   } catch (e: any) {
-    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+    const msg = String(e?.message || e);
+    return res.status(msg.includes("not found") ? 404 : 400).json({ ok: false, error: msg });
   }
 });
 
@@ -5916,6 +6198,7 @@ app.post("/api/admin/update-user", requireAdmin, async (req, res) => {
 
   const hasUpdate = parsed.data.username !== undefined || parsed.data.email !== undefined || parsed.data.password !== undefined;
   if (!hasUpdate) return res.status(400).json({ ok: false, error: "no fields provided to update" });
+  const admin = (req as any).adminSession;
 
   try {
     const out = await withTx(async (c) => {
@@ -5973,6 +6256,12 @@ app.post("/api/admin/update-user", requireAdmin, async (req, res) => {
         }
       }
 
+      await logAdminActionTx(c, admin, "update_user", "user", parsed.data.userId, {
+        usernameChanged: parsed.data.username !== undefined,
+        emailChanged: parsed.data.email !== undefined,
+        passwordChanged: parsed.data.password !== undefined,
+      });
+
       return {
         id: String(row.id),
         username: String(row.username || ""),
@@ -5995,6 +6284,7 @@ app.post("/api/admin/set-land", requireAdmin, async (req, res) => {
     land: z.number().int().min(0).max(2_000_000_000),
   }).safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const admin = (req as any).adminSession;
   try {
     const out = await withTx(async (c) => {
       const k = await c.query(
@@ -6007,6 +6297,7 @@ app.post("/api/admin/set-land", requireAdmin, async (req, res) => {
       if (!k.rowCount) throw new Error("kingdom not found");
       const row = k.rows[0];
       await ensureSettlementsForKingdom(c, Number(row.id), String(row.name), Number(row.land || 0));
+      await logAdminActionTx(c, admin, "set_land", "kingdom", String(row.id), { kingdom: row.name, land: Number(row.land || 0) });
       return { id: Number(row.id), name: String(row.name), land: Number(row.land || 0) };
     });
     return res.json({ ok: true, kingdom: out });
@@ -6024,6 +6315,7 @@ app.post("/api/admin/reconcile-land", requireAdmin, async (req, res) => {
     dryRun: z.boolean().optional(),
   }).safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const admin = (req as any).adminSession;
   const kingdomFilter = String(parsed.data.kingdom || "").trim();
   const buffer = Number(parsed.data.buffer ?? 0);
   const dryRun = Boolean(parsed.data.dryRun);
@@ -6065,9 +6357,186 @@ app.post("/api/admin/reconcile-land", requireAdmin, async (req, res) => {
           changed.push({ id: Number(k.id), name: String(k.name), oldLand, usedLand, newLand });
         }
       }
+      await logAdminActionTx(c, admin, "reconcile_land", kingdomFilter ? "kingdom" : "system", kingdomFilter || "all", {
+        dryRun,
+        buffer,
+        checked,
+        changed: changed.length,
+      });
       return { checked, changed };
     });
     return res.json({ ok: true, ...out, dryRun, buffer });
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    return res.status(msg.includes("not found") ? 404 : 500).json({ ok: false, error: msg });
+  }
+});
+
+app.post("/api/admin/reconcile-population", requireAdmin, async (req, res) => {
+  const parsed = z.object({
+    kingdom: z.string().min(2).optional(),
+    dryRun: z.boolean().optional(),
+  }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const admin = (req as any).adminSession;
+  const kingdomFilter = String(parsed.data.kingdom || "").trim();
+  const dryRun = Boolean(parsed.data.dryRun);
+
+  try {
+    const out = await withTx(async (c) => {
+      const kingdomsQ = await c.query(
+        `
+        SELECT id, name
+        FROM kingdoms
+        WHERE ($1 = '' OR LOWER(name)=LOWER($1))
+        ORDER BY id ASC
+        FOR UPDATE
+        `,
+        [kingdomFilter],
+      );
+      if (!kingdomsQ.rowCount) throw new Error("kingdom not found");
+
+      const changed: Array<{ id: number; name: string; cap: number; oldPeasants: number; newPeasants: number }> = [];
+      for (const k of kingdomsQ.rows) {
+        const bq = await c.query(
+          `
+          SELECT
+            COALESCE(MAX(CASE WHEN building_code='houses' THEN level END),0)::int AS houses,
+            COALESCE(MAX(CASE WHEN building_code='castles' THEN level END),0)::int AS castles
+          FROM kingdom_buildings
+          WHERE kingdom_id=$1
+          `,
+          [k.id],
+        );
+        const houses = Number(bq.rows[0]?.houses || 0);
+        const castles = Number(bq.rows[0]?.castles || 0);
+        const cap = Number(effectivePeasantCap({ houses, castles }));
+
+        const pq = await c.query(
+          `SELECT COALESCE(amount,0)::bigint AS peasants FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='peasants' LIMIT 1 FOR UPDATE`,
+          [k.id],
+        );
+        const oldPeasants = Number(pq.rows[0]?.peasants || 0);
+        const newPeasants = Math.max(0, Math.min(oldPeasants, cap));
+        if (newPeasants !== oldPeasants) {
+          if (!dryRun) {
+            await c.query(
+              `INSERT INTO kingdom_troops(kingdom_id, troop_code, amount)
+               VALUES ($1,'peasants',$2)
+               ON CONFLICT (kingdom_id, troop_code) DO UPDATE SET amount=$2`,
+              [k.id, newPeasants],
+            );
+          }
+          changed.push({ id: Number(k.id), name: String(k.name || ""), cap, oldPeasants, newPeasants });
+        }
+      }
+      await logAdminActionTx(c, admin, "reconcile_population", kingdomFilter ? "kingdom" : "system", kingdomFilter || "all", {
+        dryRun,
+        checked: Number(kingdomsQ.rowCount || 0),
+        changed: changed.length,
+      });
+      return { checked: Number(kingdomsQ.rowCount || 0), changed };
+    });
+    return res.json({ ok: true, dryRun, ...out });
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    return res.status(msg.includes("not found") ? 404 : 500).json({ ok: false, error: msg });
+  }
+});
+
+app.post("/api/admin/reconcile-spy-capacity", requireAdmin, async (req, res) => {
+  const parsed = z.object({
+    kingdom: z.string().min(2).optional(),
+    dryRun: z.boolean().optional(),
+  }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const admin = (req as any).adminSession;
+  const kingdomFilter = String(parsed.data.kingdom || "").trim();
+  const dryRun = Boolean(parsed.data.dryRun);
+
+  try {
+    const out = await withTx(async (c) => {
+      const kingdomsQ = await c.query(
+        `
+        SELECT id, name
+        FROM kingdoms
+        WHERE ($1 = '' OR LOWER(name)=LOWER($1))
+        ORDER BY id ASC
+        FOR UPDATE
+        `,
+        [kingdomFilter],
+      );
+      if (!kingdomsQ.rowCount) throw new Error("kingdom not found");
+
+      const changed: Array<{
+        id: number;
+        name: string;
+        capacity: number;
+        homeSpies: number;
+        trainSpies: number;
+        awaySpies: number;
+        oldHomeSpies: number;
+        newHomeSpies: number;
+      }> = [];
+
+      for (const k of kingdomsQ.rows) {
+        const bq = await c.query(
+          `SELECT COALESCE(MAX(level),0)::int AS guildhalls FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='guildhalls' LIMIT 1`,
+          [k.id],
+        );
+        const capacity = Number(bq.rows[0]?.guildhalls || 0) * SPY_CAPACITY_PER_GUILDHALL;
+        const usageQ = await c.query(
+          `
+          WITH home AS (
+            SELECT COALESCE(amount,0)::bigint AS qty FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='spies'
+          ),
+          train AS (
+            SELECT COALESCE(SUM(quantity),0)::bigint AS qty FROM train_queue WHERE kingdom_id=$1 AND troop_code='spies' AND status='queued'
+          ),
+          away AS (
+            SELECT COALESCE(SUM(quantity),0)::bigint AS qty FROM troop_movements WHERE owner_kingdom_id=$1 AND troop_code='spies' AND status='out' AND returns_at > now()
+          )
+          SELECT
+            COALESCE((SELECT qty FROM home),0)::bigint AS home_qty,
+            COALESCE((SELECT qty FROM train),0)::bigint AS train_qty,
+            COALESCE((SELECT qty FROM away),0)::bigint AS away_qty
+          `,
+          [k.id],
+        );
+        const oldHomeSpies = Number(usageQ.rows[0]?.home_qty || 0);
+        const trainSpies = Number(usageQ.rows[0]?.train_qty || 0);
+        const awaySpies = Number(usageQ.rows[0]?.away_qty || 0);
+        const maxHome = Math.max(0, capacity - trainSpies - awaySpies);
+        const newHomeSpies = Math.min(oldHomeSpies, maxHome);
+        if (newHomeSpies !== oldHomeSpies) {
+          if (!dryRun) {
+            await c.query(
+              `INSERT INTO kingdom_troops(kingdom_id, troop_code, amount)
+               VALUES ($1,'spies',$2)
+               ON CONFLICT (kingdom_id, troop_code) DO UPDATE SET amount=$2`,
+              [k.id, newHomeSpies],
+            );
+          }
+          changed.push({
+            id: Number(k.id),
+            name: String(k.name || ""),
+            capacity,
+            homeSpies: newHomeSpies,
+            trainSpies,
+            awaySpies,
+            oldHomeSpies,
+            newHomeSpies,
+          });
+        }
+      }
+      await logAdminActionTx(c, admin, "reconcile_spy_capacity", kingdomFilter ? "kingdom" : "system", kingdomFilter || "all", {
+        dryRun,
+        checked: Number(kingdomsQ.rowCount || 0),
+        changed: changed.length,
+      });
+      return { checked: Number(kingdomsQ.rowCount || 0), changed };
+    });
+    return res.json({ ok: true, dryRun, ...out });
   } catch (e: any) {
     const msg = String(e?.message || e);
     return res.status(msg.includes("not found") ? 404 : 500).json({ ok: false, error: msg });
@@ -6080,6 +6549,7 @@ app.post("/api/admin/reconcile-train-queue-times", requireAdmin, async (req, res
     dryRun: z.boolean().optional(),
   }).safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const admin = (req as any).adminSession;
   const kingdomFilter = String(parsed.data.kingdom || "").trim();
   const dryRun = Boolean(parsed.data.dryRun);
 
@@ -6140,6 +6610,11 @@ app.post("/api/admin/reconcile-train-queue-times", requireAdmin, async (req, res
           newCompletesAt: desired.toISOString(),
         });
       }
+      await logAdminActionTx(c, admin, "reconcile_train_queue_times", kingdomFilter ? "kingdom" : "system", kingdomFilter || "all", {
+        dryRun,
+        checked: Number(q.rowCount || 0),
+        changed: changed.length,
+      });
 
       return { checked: Number(q.rowCount || 0), changed };
     });

@@ -341,6 +341,7 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
           COALESCE(MAX(CASE WHEN building_code='quarry' THEN level END),0) AS quarry,
           COALESCE(MAX(CASE WHEN building_code='horse_farms' THEN level END),0) AS horse_farms,
           COALESCE(MAX(CASE WHEN building_code='temples' THEN level END),0) AS temples,
+          COALESCE(MAX(CASE WHEN building_code='guildhalls' THEN level END),0) AS guildhalls,
           COALESCE(MAX(CASE WHEN building_code='houses' THEN level END),0) AS houses,
           COALESCE(MAX(CASE WHEN building_code='castles' THEN level END),0) AS castles
         FROM kingdom_buildings
@@ -390,6 +391,25 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       const temples = Number(b.rows[0]?.temples || 0);
       const houses = Number(b.rows[0]?.houses || 0);
       const castles = Number(b.rows[0]?.castles || 0);
+      const guildhalls = Number((b.rows[0] as any)?.guildhalls || 0);
+
+      // Land integrity guard: if building land usage exceeds current land, raise land to used amount.
+      const usedLandQ = await c.query(
+        `
+        SELECT COALESCE(SUM(kb.level * bt.land_cost), 0)::bigint AS used_land
+        FROM kingdom_buildings kb
+        JOIN building_types bt ON bt.code = kb.building_code
+        WHERE kb.kingdom_id=$1
+        `,
+        [k.id],
+      );
+      const usedLand = Number(usedLandQ.rows[0]?.used_land || 0);
+      let effectiveLand = Number(k.land || 0);
+      if (effectiveLand < usedLand) {
+        effectiveLand = usedLand;
+        await c.query(`UPDATE kingdoms SET land=$2 WHERE id=$1`, [k.id, effectiveLand]);
+        await sendGameNotice(c, Number(k.id), "info", `Land reconciled to ${effectiveLand.toLocaleString()} to match built structures.`);
+      }
 
       // Count priests (capped at 5 per temple)
       const priestRow = await c.query(
@@ -417,7 +437,7 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       }
 
       const foodIncomePerHour = farm * ECON_BUILDING_HOURLY.farmFood * prayerFoodBonus;
-      const goldIncomePerHour = Number(k.land || 0) * ECON_BUILDING_HOURLY.baseGoldPerLand * prayerGoldBonus;
+      const goldIncomePerHour = effectiveLand * ECON_BUILDING_HOURLY.baseGoldPerLand * prayerGoldBonus;
       const woodIncomePerHour = lumber * ECON_BUILDING_HOURLY.lumberWood * prayerWoodBonus;
       const stoneIncomePerHour = quarry * ECON_BUILDING_HOURLY.quarryStone * prayerStoneBonus;
       const horseIncomePerHour = horseFarms * ECON_BUILDING_HOURLY.horseFarmHorses * prayerHorseBonus;
@@ -465,12 +485,63 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
         [k.id, foodDelta, goldDelta, woodDelta, stoneDelta, horsesDelta, manaDelta],
       );
 
+      // Population integrity guard: clamp peasants to current housing/castle cap.
+      const peasantCap = effectivePeasantCap({ houses, castles });
+      const peasantsTotal = Number(t.rows.find((row) => String(row.troop_code) === "peasants")?.amount || 0);
+      if (peasantsTotal > peasantCap) {
+        const homePeasantQ = await c.query(
+          `SELECT COALESCE(amount,0) AS amount FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='peasants' LIMIT 1 FOR UPDATE`,
+          [k.id],
+        );
+        const homePeasants = Number(homePeasantQ.rows[0]?.amount || 0);
+        const overflow = peasantsTotal - peasantCap;
+        const toRemove = Math.min(homePeasants, overflow);
+        if (toRemove > 0) {
+          await c.query(`UPDATE kingdom_troops SET amount=GREATEST(0, amount-$2) WHERE kingdom_id=$1 AND troop_code='peasants'`, [k.id, toRemove]);
+          await sendGameNotice(c, Number(k.id), "warning", `Peasants adjusted by -${toRemove.toLocaleString()} to fit population cap.`);
+        }
+      }
+
+      // Spy integrity guard: home spies cannot exceed remaining guildhall capacity after train/away.
+      const spyCap = guildhalls * 5;
+      const spyUsageQ = await c.query(
+        `
+        WITH home AS (
+          SELECT COALESCE(amount,0) AS qty FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='spies'
+        ),
+        train AS (
+          SELECT COALESCE(SUM(quantity),0) AS qty FROM train_queue WHERE kingdom_id=$1 AND troop_code='spies' AND status='queued'
+        ),
+        away AS (
+          SELECT COALESCE(SUM(quantity),0) AS qty FROM troop_movements WHERE owner_kingdom_id=$1 AND troop_code='spies' AND status='out' AND returns_at > now()
+        )
+        SELECT
+          COALESCE((SELECT qty FROM home),0)::bigint AS home_qty,
+          COALESCE((SELECT qty FROM train),0)::bigint AS train_qty,
+          COALESCE((SELECT qty FROM away),0)::bigint AS away_qty
+        `,
+        [k.id],
+      );
+      const homeSpies = Number(spyUsageQ.rows[0]?.home_qty || 0);
+      const trainSpies = Number(spyUsageQ.rows[0]?.train_qty || 0);
+      const awaySpies = Number(spyUsageQ.rows[0]?.away_qty || 0);
+      const maxHomeSpies = Math.max(0, spyCap - trainSpies - awaySpies);
+      if (homeSpies > maxHomeSpies) {
+        const removeSpies = homeSpies - maxHomeSpies;
+        await c.query(`UPDATE kingdom_troops SET amount=GREATEST(0, amount-$2) WHERE kingdom_id=$1 AND troop_code='spies'`, [k.id, removeSpies]);
+        await sendGameNotice(
+          c,
+          Number(k.id),
+          "warning",
+          `Spies adjusted by -${removeSpies.toLocaleString()} to fit guildhall capacity (${spyCap.toLocaleString()}).`,
+        );
+      }
+
       const basePeasantDelta = peasantDeltaPerHour(taxRate);
       const peasPerHour = basePeasantDelta * (basePeasantDelta > 0 ? prayerPopBonus : 1);
       let peasDelta = Math.floor(peasPerHour * TICK_HOURS);
       if (peasDelta > 0) {
         const currentPeasants = Number(t.rows.find((row) => String(row.troop_code) === "peasants")?.amount || 0);
-        const peasantCap = effectivePeasantCap({ houses, castles });
         const freeCapacity = Math.max(0, peasantCap - currentPeasants);
         peasDelta = Math.min(peasDelta, freeCapacity);
       }
@@ -546,7 +617,7 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
         }
       }
 
-      const networth = Number(k.land || 0) * 0.04 + newFood * 0.0001 + newGold * 0.0005 + newStone * 0.0002 + newWood * 0.0002 + troopNetworth;
+      const networth = effectiveLand * 0.04 + newFood * 0.0001 + newGold * 0.0005 + newStone * 0.0002 + newWood * 0.0002 + troopNetworth;
       await c.query(
         `INSERT INTO kingdom_networth_history(kingdom_id, networth, recorded_at) VALUES ($1,$2,now())`,
         [k.id, Number(networth.toFixed(2))],

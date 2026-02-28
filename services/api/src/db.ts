@@ -671,6 +671,21 @@ export async function ensureSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS app_users_username_lower_idx ON app_users((LOWER(username)));
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_audit_log (
+      id BIGSERIAL PRIMARY KEY,
+      actor_user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+      actor_username TEXT NOT NULL,
+      action TEXT NOT NULL,
+      target_kind TEXT NOT NULL DEFAULT 'system',
+      target_id TEXT NOT NULL DEFAULT '',
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS admin_audit_log_created_idx ON admin_audit_log(created_at DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS admin_audit_log_actor_idx ON admin_audit_log(actor_user_id, created_at DESC)`);
+
   await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS email TEXT`);
   await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS referral_code TEXT`);
   await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS password_hash TEXT`);

@@ -37,6 +37,7 @@ Modern, maintained, tick-based kingdom strategy game platform.
 ## API Endpoints (v1)
 
 - `GET /healthz`
+- `GET /readyz`
 - `POST /api/dev/register`
   - body: `{ "userId": "u1", "username": "Envy", "kingdomName": "NorthEast" }`
 - `GET /api/kingdom/:name`
@@ -75,3 +76,7 @@ Modern, maintained, tick-based kingdom strategy game platform.
   - includes automatic fast local mode for quick training/attack demos
 - Fallback recording checklist:
   - `docs/FALLBACK_VIDEO_SHOTLIST.md`
+- Ops runbook and backup/restore:
+  - `docs/OPERATIONS_RUNBOOK.md`
+  - `scripts/backup-db.ps1`
+  - `scripts/restore-db.ps1`
