@@ -705,7 +705,7 @@ function BuildingsView() {
               Buildings - {k ? k.name : kingdom}
             </div>
             <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: isMobile ? 16 : 18, fontWeight: 700, overflowWrap: "anywhere" }}>
-              Rank #{war?.kingdom?.rank || "N/A"} • Free Land: {availableLand.toLocaleString()} / Total: {Number(k?.land || 0).toLocaleString()} Acres
+              Rank #{war?.kingdom?.rank || "N/A"} • Free: {availableLand.toLocaleString()} • Used: {usedLand.toLocaleString()} • Queued: {queuedLand.toLocaleString()} • Total: {Number(k?.land || 0).toLocaleString()} Acres
             </div>
             <div style={{ marginTop: 4, color: TEXT_MUTED, fontSize: isMobile ? 15 : 17, fontWeight: 700, overflowWrap: "anywhere" }}>
               Stone: {Number(k?.stone || 0).toLocaleString()} ({Number(econ.stone || 0) >= 0 ? "+" : ""}{Number(econ.stone || 0).toLocaleString()}/h) • Wood: {Number(k?.wood || 0).toLocaleString()} ({Number(econ.wood || 0) >= 0 ? "+" : ""}{Number(econ.wood || 0).toLocaleString()}/h)
