@@ -2,7 +2,6 @@ import dotenv from "dotenv";
 import express from "express";
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import rateLimit from "express-rate-limit";
-import nodemailer from "nodemailer";
 import type { PoolClient } from "pg";
 import { z } from "zod";
 import {
@@ -349,25 +348,33 @@ const FOOTMAN_ELITE_PROMOTION_RATE = clamp(Number(process.env.FOOTMAN_ELITE_PROM
 const AUTH_SESSION_DAYS = 30;
 const APP_BASE_URL = String(process.env.APP_BASE_URL || "http://localhost:5173").replace(/\/$/, "");
 
-// ── Email transport ──────────────────────────────────────────────────────────
-const SMTP_HOST = process.env.SMTP_HOST || "";
-const emailTransport = SMTP_HOST
-  ? nodemailer.createTransport({
-      host: SMTP_HOST,
-      port: Number(process.env.SMTP_PORT || 587),
-      secure: Number(process.env.SMTP_PORT || 587) === 465,
-      auth: { user: process.env.SMTP_USER || "", pass: process.env.SMTP_PASS || "" },
-    })
-  : null;
-const EMAIL_FROM = process.env.SMTP_FROM || "Crownforge <noreply@crownforge.game>";
+// ── Email transport (Brevo HTTP API — avoids SMTP port blocking on Railway) ───
+const BREVO_API_KEY = process.env.BREVO_API_KEY || "";
+const SMTP_FROM_RAW = process.env.SMTP_FROM || "Crownforge <noreply@crownforge.game>";
+// Parse "Name <email>" or plain "email"
+const EMAIL_FROM_MATCH = SMTP_FROM_RAW.match(/^(.+?)\s*<(.+?)>$/) ;
+const EMAIL_FROM_NAME = EMAIL_FROM_MATCH ? EMAIL_FROM_MATCH[1].trim() : "Crownforge";
+const EMAIL_FROM_ADDR = EMAIL_FROM_MATCH ? EMAIL_FROM_MATCH[2].trim() : SMTP_FROM_RAW.trim();
+
 async function sendEmail(to: string, subject: string, html: string) {
-  if (!emailTransport) {
-    console.log(`[EMAIL - no SMTP configured]\nTo: ${to}\nSubject: ${subject}\n${html.replace(/<[^>]+>/g, "")}`);
+  if (!BREVO_API_KEY) {
+    console.log(`[EMAIL - no BREVO_API_KEY]\nTo: ${to}\nSubject: ${subject}\n${html.replace(/<[^>]+>/g, "")}`);
     return;
   }
-  console.log(`[EMAIL] Sending "${subject}" to ${to} via ${process.env.SMTP_HOST} as ${EMAIL_FROM}`);
-  const info = await emailTransport.sendMail({ from: EMAIL_FROM, to, subject, html });
-  console.log(`[EMAIL] Sent OK — messageId: ${info.messageId}`);
+  console.log(`[EMAIL] Sending "${subject}" to ${to} via Brevo HTTP API as ${EMAIL_FROM_ADDR}`);
+  const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: { "api-key": BREVO_API_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sender: { name: EMAIL_FROM_NAME, email: EMAIL_FROM_ADDR },
+      to: [{ email: to }],
+      subject,
+      htmlContent: html,
+    }),
+  });
+  const data = await res.json() as any;
+  if (!res.ok) throw new Error(`Brevo API error ${res.status}: ${JSON.stringify(data)}`);
+  console.log(`[EMAIL] Sent OK — messageId: ${data.messageId}`);
 }
 
 function normalizeEmail(input: string) {
