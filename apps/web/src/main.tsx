@@ -5357,20 +5357,28 @@ function GuildhallView() {
   const trainQueue = (data?.training || []).filter((q: any) => String(q.troop_code) === "spies" && String(q.status) === "queued");
   const rankNum = Number(data?.kingdom?.rank || 0);
   const populationHome = Number(data?.kingdom?.populationHome || 0);
+  const spyCapacityTotal = Number(data?.spyCapacity?.total || 0);
+  const spyCapacityUsed = Number(data?.spyCapacity?.used || (Number(spiesTroop?.home || 0) + Number(spiesTroop?.train || 0) + Number(spiesTroop?.away || 0)));
+  const spyCapacityAvailable = Number(data?.spyCapacity?.available ?? Math.max(0, spyCapacityTotal - spyCapacityUsed));
+  const guildhallCount = Number(data?.spyCapacity?.guildhalls || 0);
+  const perGuildhall = Number(data?.spyCapacity?.perGuildhall || 5);
 
   async function trainSpies(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setActionMsg("");
     try {
+      const reqQty = Math.max(1, Math.floor(Number(trainAmt || 1)));
+      if (spyCapacityAvailable <= 0) throw new Error("no guildhall room left for more spies");
+      if (reqQty > spyCapacityAvailable) throw new Error(`only ${spyCapacityAvailable.toLocaleString()} spy slots left`);
       const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/train`, {
         method: "POST",
         headers: authHeaders(),
-        body: JSON.stringify({ troopCode: "spies", quantity: trainAmt }),
+        body: JSON.stringify({ troopCode: "spies", quantity: reqQty }),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setActionMsg(`Training ${trainAmt} spies queued.`);
+      setActionMsg(`Training ${reqQty} spies queued.`);
       await load();
     } catch (e: any) {
       setActionMsg(`Training failed: ${String(e?.message || e)}`);
@@ -5461,6 +5469,13 @@ function GuildhallView() {
           <div style={CARD}>
             <div style={{ fontSize: 14, color: TEXT_MUTED, marginBottom: 6 }}>Rank: <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>#{rankNum || "N/A"}</span></div>
             <div style={{ fontSize: 14, color: TEXT_MUTED }}>Population at Home: <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>{populationHome.toLocaleString()}</span></div>
+            <div style={{ fontSize: 14, color: TEXT_MUTED, marginTop: 2 }}>
+              Spy Capacity: <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>{spyCapacityUsed.toLocaleString()} / {spyCapacityTotal.toLocaleString()}</span>
+              {" "}(<span style={{ color: spyCapacityAvailable > 0 ? "#c8e7b1" : "#ffb0a5", fontWeight: 600 }}>{spyCapacityAvailable.toLocaleString()} left</span>)
+            </div>
+            <div style={{ fontSize: 12, color: TEXT_DIM, marginTop: 2 }}>
+              Guildhalls: {guildhallCount.toLocaleString()} x {perGuildhall.toLocaleString()} slots
+            </div>
             <div style={{ marginTop: 12, fontWeight: 700, marginBottom: 6, fontSize: 15 }}>Spies</div>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
@@ -5500,12 +5515,23 @@ function GuildhallView() {
             </button>
             {trainOpen ? (
               <form onSubmit={trainSpies} style={{ display: "grid", gap: 8 }}>
-                <div style={{ fontSize: 13, color: TEXT_MUTED }}>Train spies at your guildhall.</div>
+                <div style={{ fontSize: 13, color: TEXT_MUTED }}>
+                  Train spies at your guildhall. Available slots: <span style={{ color: spyCapacityAvailable > 0 ? ACCENT : "#ffb0a5", fontWeight: 700 }}>{spyCapacityAvailable.toLocaleString()}</span>
+                </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   <span style={{ fontSize: 14, color: TEXT_MUTED }}>Amount:</span>
-                  <input type="number" min={1} value={trainAmt} onChange={(e) => setTrainAmt(Math.max(1, Number(e.target.value)))} style={{ ...INPUT_STYLE, width: 80, fontSize: 14 }} />
+                  <input
+                    type="number"
+                    min={1}
+                    max={Math.max(1, spyCapacityAvailable)}
+                    value={trainAmt}
+                    onChange={(e) => setTrainAmt(Math.max(1, Number(e.target.value)))}
+                    style={{ ...INPUT_STYLE, width: 80, fontSize: 14 }}
+                  />
                 </div>
-                <button type="submit" disabled={busy} style={{ ...BTN_STYLE, width: "fit-content", fontSize: 13 }}>{busy ? "Training..." : "Train Now"}</button>
+                <button type="submit" disabled={busy || spyCapacityAvailable <= 0} style={{ ...BTN_STYLE, width: "fit-content", fontSize: 13 }}>
+                  {busy ? "Training..." : spyCapacityAvailable <= 0 ? "No Capacity" : "Train Now"}
+                </button>
               </form>
             ) : null}
           </div>

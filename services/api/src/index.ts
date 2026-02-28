@@ -350,6 +350,7 @@ const TROOP_TRAIN_REQUIREMENTS: Record<string, { buildingCode: string; buildingN
   knights: { buildingCode: "castles", buildingName: "Castles", minLevel: 1 },
   spies: { buildingCode: "guildhalls", buildingName: "Guildhall", minLevel: 1 },
 };
+const SPY_CAPACITY_PER_GUILDHALL = 5;
 
 const FOOTMAN_ELITE_PROMOTION_RATE = clamp(Number(process.env.FOOTMAN_ELITE_PROMOTION_RATE || 0.0025), 0, 0.05);
 const AUTH_SESSION_DAYS = 30;
@@ -1977,6 +1978,40 @@ app.post("/api/kingdom/:name/train", requireAuth, async (req, res) => {
           throw new Error(`${def.name} requires ${req.buildingName} level ${req.minLevel} (current ${lvl})`);
         }
       }
+      if (troopCode === "spies") {
+        const guildhallsQ = await c.query(
+          `SELECT COALESCE(level,0) AS lvl FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='guildhalls' LIMIT 1`,
+          [kingdom.id],
+        );
+        const guildhalls = Number(guildhallsQ.rows[0]?.lvl || 0);
+        const capacity = guildhalls * SPY_CAPACITY_PER_GUILDHALL;
+        const [spiesHomeQ, spiesTrainQ, spiesAwayQ] = await Promise.all([
+          c.query(
+            `SELECT COALESCE(amount,0) AS qty
+             FROM kingdom_troops
+             WHERE kingdom_id=$1 AND troop_code='spies'
+             LIMIT 1`,
+            [kingdom.id],
+          ),
+          c.query(
+            `SELECT COALESCE(SUM(quantity),0) AS qty
+             FROM train_queue
+             WHERE kingdom_id=$1 AND troop_code='spies' AND status='queued'`,
+            [kingdom.id],
+          ),
+          c.query(
+            `SELECT COALESCE(SUM(quantity),0) AS qty
+             FROM troop_movements
+             WHERE owner_kingdom_id=$1 AND troop_code='spies' AND status='out' AND returns_at > now()`,
+            [kingdom.id],
+          ),
+        ]);
+        const spiesUsed = Number(spiesHomeQ.rows[0]?.qty || 0) + Number(spiesTrainQ.rows[0]?.qty || 0) + Number(spiesAwayQ.rows[0]?.qty || 0);
+        const spiesAvailable = Math.max(0, capacity - spiesUsed);
+        if (qty > spiesAvailable) {
+          throw new Error(`not enough guildhall spy capacity (available ${spiesAvailable}, requested ${qty})`);
+        }
+      }
 
       const totalGold = Number(def.gold_cost) * qty;
       const totalFood = Number(def.food_cost) * qty;
@@ -3044,6 +3079,13 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
     for (const tr of trainRows.rows) trainMap.set(String(tr.troop_code), Number(tr.qty || 0));
     for (const aw of awayRows.rows) awayMap.set(String(aw.troop_code), Number(aw.qty || 0));
     for (const b of kingdomBuildings.rows) buildingLevelMap.set(String(b.building_code), Number(b.level || 0));
+    const guildhalls = Number(buildingLevelMap.get("guildhalls") || 0);
+    const spiesHome = Number(homeRows.rows.find((t) => String(t.code) === "spies")?.home || 0);
+    const spiesTrain = Number(trainMap.get("spies") || 0);
+    const spiesAway = Number(awayMap.get("spies") || 0);
+    const spiesCapacity = guildhalls * SPY_CAPACITY_PER_GUILDHALL;
+    const spiesUsed = spiesHome + spiesTrain + spiesAway;
+    const spiesAvailable = Math.max(0, spiesCapacity - spiesUsed);
 
     const troops = homeRows.rows.map((t) => {
       const troopCode = String(t.code || "");
@@ -3112,6 +3154,16 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
       troops,
       training: training.rows,
       movements: movements.rows,
+      spyCapacity: {
+        guildhalls,
+        perGuildhall: SPY_CAPACITY_PER_GUILDHALL,
+        total: spiesCapacity,
+        home: spiesHome,
+        train: spiesTrain,
+        away: spiesAway,
+        used: spiesUsed,
+        available: spiesAvailable,
+      },
       season,
       shield: shieldStateFromRow(row),
       explore: {
