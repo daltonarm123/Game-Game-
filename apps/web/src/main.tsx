@@ -2662,6 +2662,7 @@ function WarRoomView() {
   const k = data?.kingdom;
   const troops = (data?.troops || []) as Array<any>;
   const training = (data?.training || []) as Array<any>;
+  const movements = (data?.movements || []) as Array<any>;
   const troopCodeOptions = troops.filter((t) => Boolean(t.isTrainable)).map((t) => String(t.troopCode || ""));
   const trainTroopData = troops.find((t) => String(t.troopCode || "") === String(trainTroop));
   const trainQtySafe = Math.max(1, Number(trainQty || 1));
@@ -3098,6 +3099,20 @@ function WarRoomView() {
                 >
                   {cancelTrainId === Number(q.id) ? "Cancelling..." : "Cancel"}
                 </button>
+              </div>
+            ))}
+          </div>
+
+          <div style={CARD}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Troops Away...</div>
+            {movements.length === 0 ? <div style={{ opacity: 0.8 }}>No troops currently away.</div> : null}
+            {movements.map((m) => (
+              <div key={`mv-${m.id}`} style={{ marginBottom: 6, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr auto", alignItems: "center", gap: 8 }}>
+                <span>
+                  {Number(m.quantity || 0).toLocaleString()} x {String(m.troop_code || "").replace(/_/g, " ")}
+                  {" "}to {String(m.target_kingdom_name || "Wilderness")}
+                </span>
+                <QueueCountdown completesAt={m.returns_at} onComplete={() => void load()} />
               </div>
             ))}
           </div>
