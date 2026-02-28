@@ -5727,7 +5727,7 @@ function GuildhallView() {
               Spy Capacity: <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>{spyCapacityUsed.toLocaleString()} / {spyCapacityTotal.toLocaleString()}</span>
               {" "}(<span style={{ color: spyCapacityAvailable > 0 ? "#c8e7b1" : "#ffb0a5", fontWeight: 600 }}>{spyCapacityAvailable.toLocaleString()} left</span>)
             </div>
-            <div style={{ fontSize: 12, color: TEXT_DIM, marginTop: 2 }}>
+            <div style={{ fontSize: 12, color: TEXT_MUTED, marginTop: 2 }}>
               Guildhalls: {guildhallCount.toLocaleString()} x {perGuildhall.toLocaleString()} slots
             </div>
             <div style={{ marginTop: 12, fontWeight: 700, marginBottom: 6, fontSize: 15 }}>Spies</div>
