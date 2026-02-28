@@ -99,6 +99,20 @@ async function processSeasonTick(): Promise<SeasonState> {
   });
 }
 
+async function sendGameMail(c: any, kingdomId: number, subject: string, body: string) {
+  await c.query(
+    `INSERT INTO kingdom_mail(kingdom_id, mail_kind, subject, body) VALUES ($1,'system',$2,$3)`,
+    [kingdomId, subject, body],
+  );
+}
+
+async function sendGameNotice(c: any, kingdomId: number, type: string, message: string) {
+  await c.query(
+    `INSERT INTO kingdom_notifications(kingdom_id, notice_type, message, payload) VALUES ($1,$2,$3,'{}')`,
+    [kingdomId, type, message],
+  );
+}
+
 async function processBuildQueueTick(): Promise<number> {
   return withTx(async (c) => {
     const due = await c.query(
@@ -458,6 +472,66 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
           `,
           [k.id, peasDelta],
         );
+      }
+
+      // --- Starvation: food/gold deficit → troops desert ---
+      const foodStarving = foodDelta < 0 && newFood === 0;
+      const goldStarving = goldDelta < 0 && newGold === 0;
+      if (foodStarving || goldStarving) {
+        const homeTroops = await c.query(
+          `SELECT troop_code, amount FROM kingdom_troops WHERE kingdom_id=$1 AND amount > 0 AND troop_code != 'peasants'`,
+          [k.id],
+        );
+        const deserted: string[] = [];
+        for (const tr of homeTroops.rows) {
+          const amt = Number(tr.amount || 0);
+          const loss = Math.max(1, Math.floor(amt * 0.01)); // 1% per tick
+          await c.query(
+            `UPDATE kingdom_troops SET amount = GREATEST(0, amount - $2) WHERE kingdom_id=$1 AND troop_code=$3`,
+            [k.id, loss, tr.troop_code],
+          );
+          deserted.push(`${String(tr.troop_code)}: -${loss.toLocaleString()}`);
+        }
+        if (deserted.length > 0) {
+          const reason = foodStarving && goldStarving ? "no food or gold" : foodStarving ? "no food" : "no gold";
+          await sendGameMail(
+            c,
+            Number(k.id),
+            `Troops Deserting — ${reason}`,
+            `Your kingdom has run out of ${reason.replace("no ", "")}!\n\nTroops are deserting:\n${deserted.join("\n")}\n\nThis will continue every tick until you have positive ${foodStarving ? "food" : "gold"} income.`,
+          );
+          await sendGameNotice(c, Number(k.id), "warning", `Troops deserting due to ${reason}`);
+        }
+      }
+
+      // --- Starvation: wood/stone depleted with no production → buildings decay ---
+      const woodStarving = woodIncomePerHour === 0 && newWood === 0;
+      const stoneStarving = stoneIncomePerHour === 0 && newStone === 0;
+      if (woodStarving || stoneStarving) {
+        const decayQ = await c.query(
+          `SELECT kb.building_code, kb.level, bt.name
+           FROM kingdom_buildings kb
+           JOIN building_types bt ON bt.code = kb.building_code
+           WHERE kb.kingdom_id = $1 AND kb.level > 0
+           ORDER BY RANDOM() LIMIT 1`,
+          [k.id],
+        );
+        if (decayQ.rowCount) {
+          const bldg = decayQ.rows[0];
+          const newLevel = Math.max(0, Number(bldg.level) - 1);
+          await c.query(
+            `UPDATE kingdom_buildings SET level=$3 WHERE kingdom_id=$1 AND building_code=$2`,
+            [k.id, bldg.building_code, newLevel],
+          );
+          const reason = woodStarving && stoneStarving ? "wood and stone" : woodStarving ? "wood" : "stone";
+          await sendGameMail(
+            c,
+            Number(k.id),
+            `Building Decaying — no ${reason}`,
+            `Your kingdom has run out of ${reason}!\n\n${String(bldg.name)} has decayed to level ${newLevel}.\n\nBuild lumberyards or quarries to restore production. Buildings will continue to decay each tick until you have ${reason} income.`,
+          );
+          await sendGameNotice(c, Number(k.id), "warning", `${String(bldg.name)} decayed to level ${newLevel} (no ${reason})`);
+        }
       }
 
       const networth = Number(k.land || 0) * 0.04 + newFood * 0.0001 + newGold * 0.0005 + newStone * 0.0002 + newWood * 0.0002 + troopNetworth;

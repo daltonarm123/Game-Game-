@@ -2187,6 +2187,56 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
       await c.query(`UPDATE kingdoms SET land=$2 WHERE id=$1`, [atk.id, attackerLandNew]);
       await c.query(`UPDATE kingdoms SET land=$2 WHERE id=$1`, [def.id, defenderLandNew]);
 
+      // If defender lost land, check if their buildings now exceed available land.
+      // Randomly demolish non-castle buildings until land usage fits.
+      if (landTaken > 0) {
+        const usageQ = await c.query(
+          `SELECT COALESCE(SUM(kb.level * bt.land_cost), 0)::int AS used_land
+           FROM kingdom_buildings kb
+           JOIN building_types bt ON bt.code = kb.building_code
+           WHERE kb.kingdom_id = $1`,
+          [def.id],
+        );
+        const usedLand = Number(usageQ.rows[0]?.used_land || 0);
+        if (usedLand > defenderLandNew) {
+          let overflow = usedLand - defenderLandNew;
+          const bldgsQ = await c.query(
+            `SELECT kb.building_code, kb.level, bt.land_cost, bt.name
+             FROM kingdom_buildings kb
+             JOIN building_types bt ON bt.code = kb.building_code
+             WHERE kb.kingdom_id = $1
+               AND kb.building_code != 'castles'
+               AND kb.level > 0
+               AND bt.land_cost > 0
+             ORDER BY RANDOM()`,
+            [def.id],
+          );
+          const demolished: string[] = [];
+          for (const bldg of bldgsQ.rows) {
+            if (overflow <= 0) break;
+            const landCost = Number(bldg.land_cost);
+            const currentLevel = Number(bldg.level);
+            const levelsToRemove = Math.min(currentLevel, Math.ceil(overflow / landCost));
+            const newLevel = Math.max(0, currentLevel - levelsToRemove);
+            await c.query(
+              `UPDATE kingdom_buildings SET level=$3 WHERE kingdom_id=$1 AND building_code=$2`,
+              [def.id, bldg.building_code, newLevel],
+            );
+            overflow -= levelsToRemove * landCost;
+            demolished.push(`${String(bldg.name)} → level ${newLevel}`);
+          }
+          if (demolished.length > 0) {
+            await sendMailTx(
+              c,
+              Number(def.id),
+              "system",
+              `Buildings Demolished After Attack`,
+              `After ${String(atk.name)}'s attack you lost ${landTaken.toLocaleString()} land. Buildings were randomly demolished to fit your remaining land:\n\n${demolished.join("\n")}\n\nYou now have ${defenderLandNew.toLocaleString()} land.`,
+            );
+          }
+        }
+      }
+
       // Fair settlement capture rules:
       // - max one settlement capture from same defender per 24h
       // - chance scales with land taken but reduced by target wall level
