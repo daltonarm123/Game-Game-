@@ -1514,13 +1514,12 @@ app.post("/api/dev/setup-dev-account", async (req, res) => {
           [devUserId, passwordHash],
         );
       } else {
-        const ins = await c.query(
+        devUserId = randomBytes(16).toString("hex");
+        await c.query(
           `INSERT INTO app_users(id, username, email, password_hash, email_verified, is_admin)
-           VALUES (gen_random_uuid(),'DEV','dev@crownforge.local',$1,true,true)
-           RETURNING id`,
-          [passwordHash],
+           VALUES ($1,'DEV','dev@crownforge.local',$2,true,true)`,
+          [devUserId, passwordHash],
         );
-        devUserId = String(ins.rows[0].id);
       }
 
       // Upsert kingdom by user_id
