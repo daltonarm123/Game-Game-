@@ -148,6 +148,8 @@ const SEASON_LENGTH_SECONDS = Math.max(30, Number(process.env.SEASON_LENGTH_SECO
 const EXPLORE_LAND_CAP = 20_000;
 const EXPLORE_MIN_RETURN_SECONDS = LOCAL_DEMO_FAST ? 12 : 5 * 60;
 const EXPLORE_MAX_RETURN_SECONDS = LOCAL_DEMO_FAST ? 40 : 8 * 3600;
+const EXPLORE_MIN_EFFECTIVE_POWER = Math.max(1, Number(process.env.EXPLORE_MIN_EFFECTIVE_POWER || 25) || 25);
+const EXPLORE_POWER_TO_LAND = Math.max(0.001, Number(process.env.EXPLORE_POWER_TO_LAND || 0.08) || 0.08);
 const SPY_RETURN_SECONDS = LOCAL_DEMO_FAST ? 15 : 25 * 60;
 const DAILY_STREAK_CAP = 365;
 const OBS_TICK_INTERVAL_SECONDS = Math.max(1, Number(process.env.TICK_INTERVAL_SECONDS || (LOCAL_DEMO_FAST ? 5 : 300)));
@@ -2527,11 +2529,17 @@ app.post("/api/war-room/:attacker/explore", requireAuth, async (req, res) => {
         const dRating = Number(troopDef[code] || 0);
         return acc + base * Math.max(0.1, aRating * 0.75 + dRating * 0.25);
       }, 0);
+      if (sentPower < EXPLORE_MIN_EFFECTIVE_POWER) {
+        throw new Error(`explore party too small (need power ${EXPLORE_MIN_EFFECTIVE_POWER.toFixed(0)}, sent ${sentPower.toFixed(1)})`);
+      }
 
       const remainingCap = Math.max(0, EXPLORE_LAND_CAP - Number(atk.land || 0));
-      const randomness = 0.82 + Math.random() * 0.46;
-      const baseLand = Math.max(1, Math.floor(Math.pow(Math.max(1, sentPower), 0.49) * 1.35 * randomness));
-      const landFound = Math.max(1, Math.min(remainingCap, baseLand));
+      const randomness = 0.85 + Math.random() * 0.30;
+      const sizeBonus = 1 + Math.min(0.25, Math.log10(totalSent + 1) * 0.05);
+      const baseLand = Math.floor(sentPower * EXPLORE_POWER_TO_LAND * sizeBonus * randomness);
+      if (baseLand <= 0) throw new Error("explore party was too small to claim land");
+      const landFound = Math.min(remainingCap, baseLand);
+      if (landFound <= 0) throw new Error(`explore unavailable at ${EXPLORE_LAND_CAP.toLocaleString()} land cap`);
 
       const sentPressure = totalSent + sentPower * 0.14;
       const pace = clamp(sentPressure / 40000, 0, 1);
