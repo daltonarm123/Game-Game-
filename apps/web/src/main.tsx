@@ -717,7 +717,7 @@ function BuildingsView() {
             <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
           </div>
         ) : null}
-        {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
+        {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1", overflowWrap: "anywhere", wordBreak: "break-word" }}>{actionMsg}</div> : null}
       </div>
 
       <div style={CARD}>
@@ -2406,6 +2406,14 @@ function WarRoomView() {
   const [sentTroops, setSentTroops] = useState<Record<string, number>>({});
   const [targetHints, setTargetHints] = useState<Array<string>>([]);
   const [reports, setReports] = useState<Array<any>>([]);
+  const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 980);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   async function load() {
     setLoading(true);
@@ -2439,6 +2447,8 @@ function WarRoomView() {
   const troopCodeOptions = troops.filter((t) => Boolean(t.isTrainable)).map((t) => String(t.troopCode || ""));
   const trainTroopData = troops.find((t) => String(t.troopCode || "") === String(trainTroop));
   const trainQtySafe = Math.max(1, Number(trainQty || 1));
+  const pairCols = isMobile ? "1fr" : "170px 1fr";
+  const sendCols = isMobile ? "1fr" : "170px 1fr 120px";
   const reqText = trainTroopData?.requiredBuildingName
     ? `${String(trainTroopData.requiredBuildingName)} ${Number(trainTroopData.requiredBuildingLevel || 1)}`
     : "None";
@@ -2552,11 +2562,13 @@ function WarRoomView() {
     <div style={{ display: "grid", gap: 12 }}>
       <div style={{ ...CARD, background: "linear-gradient(180deg, rgba(52,32,16,0.96), rgba(28,18,10,0.94))" }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <div style={{ fontSize: 42, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>War Room - {k?.name || kingdom}</div>
+          <div style={{ fontSize: isMobile ? 30 : 42, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY, lineHeight: 1.05 }}>
+            War Room - {k?.name || kingdom}
+          </div>
           <input
             value={kingdom}
             onChange={(e) => setKingdom(e.target.value)}
-            style={INPUT_STYLE}
+            style={{ ...INPUT_STYLE, maxWidth: "100%" }}
             placeholder="Kingdom name"
           />
           <button onClick={() => void load()} style={BTN_STYLE}>Load</button>
@@ -2568,25 +2580,25 @@ function WarRoomView() {
             <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
           </div>
         ) : null}
-        {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
+        {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1", overflowWrap: "anywhere", wordBreak: "break-word" }}>{actionMsg}</div> : null}
       </div>
 
       {k ? (
         <>
           <div style={CARD}>
-            <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>Kingdom Status</div>
-            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 20, fontWeight: 700 }}>
+            <div style={{ fontSize: isMobile ? 28 : 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>Kingdom Status</div>
+            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: isMobile ? 17 : 20, fontWeight: 700, overflowWrap: "anywhere" }}>
               Rank: #{k.rank || "N/A"} • Networth: {Math.floor(Number(k.networth || 0)).toLocaleString()}
             </div>
-            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 20, fontWeight: 700 }}>
+            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: isMobile ? 17 : 20, fontWeight: 700, overflowWrap: "anywhere" }}>
               Population: {Number(k.populationHome || 0).toLocaleString()} / {Number((k.populationHome || 0) + (k.populationTrain || 0) + (k.populationAway || 0)).toLocaleString()}
             </div>
-            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 20, fontWeight: 700 }}>
+            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: isMobile ? 17 : 20, fontWeight: 700, overflowWrap: "anywhere" }}>
               Food: {Number(k.food || 0).toLocaleString()} • Gold: {Number(k.gold || 0).toLocaleString()} • Horses: {Number(k.horses || 0).toLocaleString()}
             </div>
           </div>
 
-          <div style={{ ...CARD, display: "grid", gridTemplateColumns: "1.05fr 1fr", gap: 16 }}>
+          <div style={{ ...CARD, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.05fr 1fr", gap: 16 }}>
             <div>
               <div style={{ fontWeight: 800, marginBottom: 10, fontSize: 24, fontFamily: FONT_DISPLAY }}>Kingdom Troops</div>
               <div style={{ overflowX: "auto" }}>
@@ -2649,7 +2661,7 @@ function WarRoomView() {
                 </button>
                 {trainOpen ? (
                   <form onSubmit={submitTrain} style={{ padding: 10, display: "grid", gap: 8 }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "170px 1fr", gap: 8 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: pairCols, gap: 8 }}>
                       <div style={{ ...INPUT_STYLE }}>Population Types</div>
                       <select value={trainTroop} onChange={(e) => setTrainTroop(e.target.value)} style={INPUT_STYLE}>
                         {troopCodeOptions.map((code) => {
@@ -2658,7 +2670,7 @@ function WarRoomView() {
                         })}
                       </select>
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "170px 1fr", gap: 8 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: pairCols, gap: 8 }}>
                       <div style={{ ...INPUT_STYLE }}>Amount To Train</div>
                       <input type="number" min={1} max={50000} value={trainQty} onChange={(e) => setTrainQty(Math.max(1, Number(e.target.value || 1)))} style={INPUT_STYLE} />
                     </div>
@@ -2690,7 +2702,7 @@ function WarRoomView() {
                 </button>
                 {attackOpen ? (
                   <form onSubmit={submitAttack} style={{ padding: 10, display: "grid", gap: 8 }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "170px 1fr", gap: 8 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: pairCols, gap: 8 }}>
                       <div style={{ ...INPUT_STYLE }}>Kingdom Name</div>
                       <KingdomInput
                         value={attackTarget}
@@ -2701,7 +2713,7 @@ function WarRoomView() {
                     <div style={{ fontWeight: 700 }}>Troops To Send...</div>
                     <div style={{ display: "grid", gap: 6 }}>
                       {troops.map((t) => (
-                        <div key={`atk-${t.troopCode}`} style={{ display: "grid", gridTemplateColumns: "170px 1fr 120px", gap: 8, alignItems: "center" }}>
+                        <div key={`atk-${t.troopCode}`} style={{ display: "grid", gridTemplateColumns: sendCols, gap: 8, alignItems: "center" }}>
                           <div>{t.troopName}</div>
                           <input
                             type="number"
@@ -2711,7 +2723,7 @@ function WarRoomView() {
                             onChange={(e) => updateSent(t.troopCode, Math.min(Number(t.home || 0), Number(e.target.value || 0)))}
                             style={INPUT_STYLE}
                           />
-                          <div style={{ textAlign: "right" }}>/ {Number(t.home || 0).toLocaleString()}</div>
+                          <div style={{ textAlign: isMobile ? "left" : "right" }}>/ {Number(t.home || 0).toLocaleString()}</div>
                         </div>
                       ))}
                     </div>
@@ -2737,7 +2749,7 @@ function WarRoomView() {
                         <div style={{ fontWeight: 700 }}>Troops To Send...</div>
                         <div style={{ display: "grid", gap: 6 }}>
                           {troops.filter((t) => Number(t.home || 0) > 0).map((t) => (
-                            <div key={`exp-${t.troopCode}`} style={{ display: "grid", gridTemplateColumns: "170px 1fr 120px", gap: 8, alignItems: "center" }}>
+                            <div key={`exp-${t.troopCode}`} style={{ display: "grid", gridTemplateColumns: sendCols, gap: 8, alignItems: "center" }}>
                               <div>{t.troopName}</div>
                               <input
                                 type="number"
@@ -2747,7 +2759,7 @@ function WarRoomView() {
                                 onChange={(e) => setExploreSentTroops((prev) => ({ ...prev, [t.troopCode]: Math.min(Number(t.home || 0), Math.max(0, Number(e.target.value || 0))) }))}
                                 style={INPUT_STYLE}
                               />
-                              <div style={{ textAlign: "right" }}>/ {Number(t.home || 0).toLocaleString()}</div>
+                              <div style={{ textAlign: isMobile ? "left" : "right" }}>/ {Number(t.home || 0).toLocaleString()}</div>
                             </div>
                           ))}
                         </div>
@@ -5827,7 +5839,7 @@ function App() {
             {topNav.map((item) => (
               <button
                 key={item.id}
-                onClick={() => { setActiveId(item.id); if (isMobile) setNavOpen(false); }}
+                onClick={() => setActiveId(item.id)}
                 style={{
                   textAlign: "left",
                   display: "flex",
@@ -5850,11 +5862,11 @@ function App() {
           </div>
 
           <div style={{ fontWeight: 800, marginBottom: 8, fontSize: isMobile ? 24 : 28, fontFamily: FONT_DISPLAY }}>Kingdom Menu</div>
-          <div style={{ display: "grid", gap: 6, gridTemplateColumns: isMobile ? "repeat(auto-fit,minmax(140px,1fr))" : "1fr" }}>
+          <div style={{ display: "grid", gap: 6, gridTemplateColumns: "1fr" }}>
             {kingdomNav.map((item) => (
               <button
                 key={item.id}
-                onClick={() => { setActiveId(item.id); if (isMobile) setNavOpen(false); }}
+                onClick={() => setActiveId(item.id)}
                 style={{
                   textAlign: "left",
                   display: "flex",
