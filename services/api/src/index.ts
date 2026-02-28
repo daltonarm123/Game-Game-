@@ -2124,7 +2124,8 @@ app.post("/api/kingdom/:name/train", requireAuth, async (req, res) => {
 
       await c.query(`UPDATE kingdoms SET gold = gold - $2, food = food - $3, horses = horses - $4 WHERE id=$1`, [kingdom.id, totalGold, totalFood, totalHorses]);
 
-      const totalSeconds = LOCAL_DEMO_FAST ? FAST_TRAIN_SECONDS : Math.max(1, Number(def.train_seconds) * qty);
+      // Training duration is fixed per queue entry by troop type (not multiplied by quantity).
+      const totalSeconds = LOCAL_DEMO_FAST ? FAST_TRAIN_SECONDS : Math.max(1, Number(def.train_seconds));
       const ins = await c.query(
         `INSERT INTO train_queue(kingdom_id, troop_code, quantity, started_at, completes_at, status)
          VALUES ($1,$2,$3, now(), now() + ($4 * INTERVAL '1 second'), 'queued')
@@ -6067,6 +6068,83 @@ app.post("/api/admin/reconcile-land", requireAdmin, async (req, res) => {
       return { checked, changed };
     });
     return res.json({ ok: true, ...out, dryRun, buffer });
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    return res.status(msg.includes("not found") ? 404 : 500).json({ ok: false, error: msg });
+  }
+});
+
+app.post("/api/admin/reconcile-train-queue-times", requireAdmin, async (req, res) => {
+  const parsed = z.object({
+    kingdom: z.string().min(2).optional(),
+    dryRun: z.boolean().optional(),
+  }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const kingdomFilter = String(parsed.data.kingdom || "").trim();
+  const dryRun = Boolean(parsed.data.dryRun);
+
+  try {
+    const out = await withTx(async (c) => {
+      const q = await c.query(
+        `
+        SELECT
+          tq.id,
+          tq.kingdom_id,
+          k.name AS kingdom_name,
+          tq.troop_code,
+          tq.quantity,
+          tq.started_at,
+          tq.completes_at,
+          tt.train_seconds
+        FROM train_queue tq
+        JOIN kingdoms k ON k.id = tq.kingdom_id
+        JOIN troop_types tt ON tt.code = tq.troop_code
+        WHERE tq.status='queued'
+          AND ($1 = '' OR LOWER(k.name)=LOWER($1))
+        ORDER BY tq.id ASC
+        FOR UPDATE
+        `,
+        [kingdomFilter],
+      );
+
+      const changed: Array<{
+        id: number;
+        kingdom: string;
+        troopCode: string;
+        quantity: number;
+        oldCompletesAt: string;
+        newCompletesAt: string;
+      }> = [];
+
+      for (const row of q.rows) {
+        const startedAt = row.started_at ? new Date(row.started_at) : new Date();
+        const seconds = LOCAL_DEMO_FAST ? FAST_TRAIN_SECONDS : Math.max(1, Number(row.train_seconds || 1));
+        const desired = new Date(startedAt.getTime() + seconds * 1000);
+        const current = row.completes_at ? new Date(row.completes_at) : null;
+        const diff = current ? Math.abs(current.getTime() - desired.getTime()) : Number.POSITIVE_INFINITY;
+        if (diff <= 1000) continue;
+
+        if (!dryRun) {
+          await c.query(
+            `UPDATE train_queue SET completes_at=$2 WHERE id=$1 AND status='queued'`,
+            [Number(row.id), desired.toISOString()],
+          );
+        }
+
+        changed.push({
+          id: Number(row.id),
+          kingdom: String(row.kingdom_name || ""),
+          troopCode: String(row.troop_code || ""),
+          quantity: Number(row.quantity || 0),
+          oldCompletesAt: current ? current.toISOString() : "",
+          newCompletesAt: desired.toISOString(),
+        });
+      }
+
+      return { checked: Number(q.rowCount || 0), changed };
+    });
+
+    return res.json({ ok: true, dryRun, ...out });
   } catch (e: any) {
     const msg = String(e?.message || e);
     return res.status(msg.includes("not found") ? 404 : 500).json({ ok: false, error: msg });

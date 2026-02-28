@@ -3010,7 +3010,7 @@ function WarRoomView() {
                     </div>
                     {trainTroopData ? (
                       <div style={{ color: TEXT_MUTED }}>
-                        {trainTroopData.troopName} • Training Time: {formatDuration(Number(trainTroopData.trainSeconds || 0) * trainQtySafe)}
+                        {trainTroopData.troopName} • Training Time: {formatDuration(Number(trainTroopData.trainSeconds || 0))}
                         <br />
                         Stats: Att {Number(trainTroopData.att || 0)} • Def {Number(trainTroopData.def || 0)} • NW {Number(trainTroopData.nw || 0)}
                         <br />
