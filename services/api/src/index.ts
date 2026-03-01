@@ -2309,9 +2309,9 @@ app.post("/api/kingdom/:name/train", requireAuth, async (req, res) => {
 
       await c.query(`UPDATE kingdoms SET gold = gold - $2, food = food - $3, horses = horses - $4 WHERE id=$1`, [kingdom.id, totalGold, totalFood, totalHorses]);
 
-      // Training duration scales with quantity so each unit trains at its configured rate.
-      const unitSeconds = LOCAL_DEMO_FAST ? FAST_TRAIN_SECONDS : Math.max(1, Number(def.train_seconds));
-      const totalSeconds = Math.max(1, unitSeconds * qty);
+      // Flat training time per request, regardless of quantity.
+      // Use troop type's normal train_seconds so batches do not auto-complete unexpectedly fast.
+      const totalSeconds = Math.max(1, Number(def.train_seconds));
       const existing = await c.query(
         `
         SELECT id, quantity, started_at, completes_at
@@ -2330,7 +2330,7 @@ app.post("/api/kingdom/:name/train", requireAuth, async (req, res) => {
           `
           UPDATE train_queue
           SET quantity=$2,
-              completes_at=(GREATEST(completes_at, now()) + ($3 * INTERVAL '1 second'))
+              completes_at=GREATEST(completes_at, now() + ($3 * INTERVAL '1 second'))
           WHERE id=$1
           RETURNING id, kingdom_id, troop_code, quantity, started_at, completes_at, status
           `,
@@ -6807,9 +6807,7 @@ app.post("/api/admin/reconcile-train-queue-times", requireAdmin, async (req, res
 
       for (const row of q.rows) {
         const startedAt = row.started_at ? new Date(row.started_at) : new Date();
-        const qty = Math.max(1, Number(row.quantity || 1));
-        const unitSeconds = LOCAL_DEMO_FAST ? FAST_TRAIN_SECONDS : Math.max(1, Number(row.train_seconds || 1));
-        const seconds = Math.max(1, unitSeconds * qty);
+        const seconds = Math.max(1, Number(row.train_seconds || 1));
         const desired = new Date(startedAt.getTime() + seconds * 1000);
         const current = row.completes_at ? new Date(row.completes_at) : null;
         const diff = current ? Math.abs(current.getTime() - desired.getTime()) : Number.POSITIVE_INFINITY;
