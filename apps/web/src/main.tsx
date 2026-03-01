@@ -1859,9 +1859,9 @@ function AllianceView() {
 
   // Supply (per building, inline)
   const [supplyCode, setSupplyCode] = useState("");
-  const [supplyGold, setSupplyGold] = useState(0);
-  const [supplyStone, setSupplyStone] = useState(0);
-  const [supplyWood, setSupplyWood] = useState(0);
+  const [supplyGold, setSupplyGold] = useState("");
+  const [supplyStone, setSupplyStone] = useState("");
+  const [supplyWood, setSupplyWood] = useState("");
 
   async function load() {
     if (!kingdom.trim()) return;
@@ -2013,7 +2013,7 @@ function AllianceView() {
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       setActionMsg(j?.project?.leveledUp ? `${buildingCode} leveled up!` : `Supplies sent.`);
-      setSupplyCode(""); setSupplyGold(0); setSupplyStone(0); setSupplyWood(0);
+      setSupplyCode(""); setSupplyGold(""); setSupplyStone(""); setSupplyWood("");
       await load();
     } catch (e: any) { setActionMsg(`Supply failed: ${String(e?.message || e)}`); }
     finally { setBusy(false); }
@@ -2292,9 +2292,9 @@ function AllianceView() {
                   {supplyCode === p.buildingCode ? (
                     <div style={{ marginTop: 10, borderTop: "1px solid rgba(255,255,255,.08)", paddingTop: 10 }}>
                       <div style={{ display: "grid", gap: 6, gridTemplateColumns: "repeat(auto-fit, minmax(72px, 1fr))", marginBottom: 8 }}>
-                        {Number(p.targetGold) > 0 ? <input type="number" min={0} value={supplyGold} onChange={(e) => setSupplyGold(Number(e.target.value) || 0)} style={{ ...INPUT_STYLE, padding: "6px 8px", fontSize: 13 }} placeholder="💰" /> : null}
-                        {Number(p.targetStone) > 0 ? <input type="number" min={0} value={supplyStone} onChange={(e) => setSupplyStone(Number(e.target.value) || 0)} style={{ ...INPUT_STYLE, padding: "6px 8px", fontSize: 13 }} placeholder="🪨" /> : null}
-                        {Number(p.targetWood) > 0 ? <input type="number" min={0} value={supplyWood} onChange={(e) => setSupplyWood(Number(e.target.value) || 0)} style={{ ...INPUT_STYLE, padding: "6px 8px", fontSize: 13 }} placeholder="🪵" /> : null}
+                        {Number(p.targetGold) > 0 ? <input type="number" min={0} value={supplyGold} onChange={(e) => setSupplyGold(String(e.target.value || "").replace(/\D+/g, ""))} style={{ ...INPUT_STYLE, padding: "6px 8px", fontSize: 13 }} placeholder="💰" /> : null}
+                        {Number(p.targetStone) > 0 ? <input type="number" min={0} value={supplyStone} onChange={(e) => setSupplyStone(String(e.target.value || "").replace(/\D+/g, ""))} style={{ ...INPUT_STYLE, padding: "6px 8px", fontSize: 13 }} placeholder="🪨" /> : null}
+                        {Number(p.targetWood) > 0 ? <input type="number" min={0} value={supplyWood} onChange={(e) => setSupplyWood(String(e.target.value || "").replace(/\D+/g, ""))} style={{ ...INPUT_STYLE, padding: "6px 8px", fontSize: 13 }} placeholder="🪵" /> : null}
                       </div>
                       <div style={{ display: "flex", gap: 6 }}>
                         <button onClick={() => void contribute(p.buildingCode)} style={{ ...BTN_STYLE, flex: 1, padding: "7px 8px", fontSize: 13 }} disabled={busy}>
@@ -2305,7 +2305,7 @@ function AllianceView() {
                     </div>
                   ) : (
                     <button
-                      onClick={() => { setSupplyCode(p.buildingCode); setSupplyGold(0); setSupplyStone(0); setSupplyWood(0); }}
+                      onClick={() => { setSupplyCode(p.buildingCode); setSupplyGold(""); setSupplyStone(""); setSupplyWood(""); }}
                       style={{ ...BTN_STYLE, width: "100%", marginTop: 8, padding: "7px 8px", fontSize: 13 }}
                     >
                       Supply
