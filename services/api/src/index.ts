@@ -818,25 +818,25 @@ function landPctForResult(result: string): number {
 }
 
 function attackerLossPct(result: string): number {
-  if (result === "FLEE") return 0.7;
-  if (result === "MAJOR LOSS") return 0.5;
-  if (result === "MINOR LOSS") return 0.35;
-  if (result === "STALEMATE") return 0.25;
-  if (result === "MINOR VICTORY") return 0.18;
-  if (result === "VICTORY") return 0.12;
-  if (result === "MAJOR VICTORY") return 0.08;
-  return 0.04;
+  if (result === "FLEE") return 0.55;
+  if (result === "MAJOR LOSS") return 0.36;
+  if (result === "MINOR LOSS") return 0.26;
+  if (result === "STALEMATE") return 0.18;
+  if (result === "MINOR VICTORY") return 0.12;
+  if (result === "VICTORY") return 0.08;
+  if (result === "MAJOR VICTORY") return 0.055;
+  return 0.03;
 }
 
 function defenderLossPct(result: string): number {
-  if (result === "FLEE") return 0.05;
-  if (result === "MAJOR LOSS") return 0.12;
-  if (result === "MINOR LOSS") return 0.18;
-  if (result === "STALEMATE") return 0.25;
-  if (result === "MINOR VICTORY") return 0.35;
-  if (result === "VICTORY") return 0.45;
-  if (result === "MAJOR VICTORY") return 0.55;
-  return 0.65;
+  if (result === "FLEE") return 0.01;
+  if (result === "MAJOR LOSS") return 0.05;
+  if (result === "MINOR LOSS") return 0.1;
+  if (result === "STALEMATE") return 0.14;
+  if (result === "MINOR VICTORY") return 0.2;
+  if (result === "VICTORY") return 0.28;
+  if (result === "MAJOR VICTORY") return 0.36;
+  return 0.45;
 }
 
 function applyLosses(units: Record<string, number>, pct: number, scope?: Record<string, number>) {
@@ -868,6 +868,8 @@ const TROOP_CLASS: Record<string, "infantry" | "pikemen" | "archer" | "cavalry" 
   priests: "support",
   spies: "support",
 };
+const NON_DEFENSIVE_ATTACK_UNITS = new Set(["peasants", "diplomats", "priests", "spies"]);
+const ILLEGAL_ATTACK_SEND_UNITS = new Set(["diplomats", "priests", "spies"]);
 
 // Correct chain: Pikemen > Cavalry > Archers > Infantry
 const RPS_MULTIPLIER: Record<string, number> = {
@@ -885,6 +887,10 @@ const RPS_MULTIPLIER: Record<string, number> = {
 
 function classForTroop(code: string): "infantry" | "pikemen" | "archer" | "cavalry" | "support" {
   return TROOP_CLASS[String(code || "").toLowerCase()] || "support";
+}
+
+function isCombatTroop(code: string): boolean {
+  return !NON_DEFENSIVE_ATTACK_UNITS.has(String(code || "").toLowerCase());
 }
 
 function matchupMultiplier(attackerCode: string, defenderCode: string): number {
@@ -2666,10 +2672,17 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
       }
 
       const sentOnly = Object.fromEntries(Object.entries(sentTroopsRaw).filter(([, v]) => v > 0));
+      const illegalSupportSends = Object.keys(sentOnly).filter((code) => ILLEGAL_ATTACK_SEND_UNITS.has(String(code || "").toLowerCase()));
+      if (illegalSupportSends.length > 0) {
+        throw new Error(`cannot send support units on attack (${illegalSupportSends.join(", ")})`);
+      }
+      const defenderCombatTroops = Object.fromEntries(
+        Object.entries(defenderTroops).filter(([code, qty]) => isCombatTroop(code) && Number(qty || 0) > 0),
+      );
       const isPeasantOnlyAttack = Object.keys(sentOnly).length > 0
         && Object.entries(sentOnly).every(([code, sent]) => code === "peasants" && Number(sent) > 0);
-      let attackerPower = effectivePowerVsComposition(sentOnly, troopAtt, defenderTroops);
-      const defenderPowerRaw = effectivePowerVsComposition(defenderTroops, troopDef, sentOnly);
+      let attackerPower = effectivePowerVsComposition(sentOnly, troopAtt, defenderCombatTroops);
+      const defenderPowerRaw = effectivePowerVsComposition(defenderCombatTroops, troopDef, sentOnly);
       const castles = Number(defCastle.rows[0]?.lvl || 0);
       const castleBonus = castles > 0 ? Math.sqrt(castles) / 100 : 0;
       const defenderPower = defenderPowerRaw * (1 + castleBonus);
@@ -2716,7 +2729,7 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
         }
       }
 
-      const defenderBattle = applyLosses(defenderTroops, dLossPct);
+      const defenderBattle = applyLosses(defenderCombatTroops, dLossPct);
 
       const landPct = landPctForResult(result);
       const defenderLand = Number(def.land || 0);
