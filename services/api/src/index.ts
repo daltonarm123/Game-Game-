@@ -3350,7 +3350,7 @@ app.post("/api/war-room/:attacker/spy", requireAuth, async (req, res) => {
             [def.id],
           ),
           c.query(`SELECT COALESCE(level,0)::int AS castles FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='castles' LIMIT 1`, [def.id]),
-          c.query(`SELECT a.tag FROM alliances a JOIN alliance_members m ON m.alliance_id=a.id WHERE m.kingdom_id=$1 LIMIT 1`, [def.id]),
+          c.query(`SELECT a.slug FROM alliances a JOIN alliance_members m ON m.alliance_id=a.id WHERE m.kingdom_id=$1 LIMIT 1`, [def.id]),
           c.query(
             `WITH tn AS (SELECT COALESCE(SUM(kt.amount * ty.nw_value),0) AS troop_nw FROM kingdom_troops kt JOIN troop_types ty ON ty.code=kt.troop_code WHERE kt.kingdom_id=$1)
              SELECT ROUND((k.land * 0.04 + k.food * 0.0001 + k.gold * 0.0005 + k.stone * 0.0002 + k.wood * 0.0002 + tn.troop_nw)::numeric, 0)::bigint AS networth,
@@ -3366,7 +3366,7 @@ app.post("/api/war-room/:attacker/spy", requireAuth, async (req, res) => {
 
         const defTroops = defTroopsQ.rows;
         const castles = Number(defCastlesQ.rows[0]?.castles || 0);
-        const allianceTag = String(defAllianceQ.rows[0]?.tag || "None");
+        const allianceTag = String(defAllianceQ.rows[0]?.slug || "None");
         const networth = Number(defNwQ.rows[0]?.networth || 0);
         const rank = Number(defNwQ.rows[0]?.rank || 0);
         const totalTroops = defTroops.reduce((s: number, t: any) => s + Number(t.amount || 0), 0);
