@@ -385,6 +385,8 @@ const holyCircleCastBody = z.object({
 
 
 const TROOP_TRAIN_REQUIREMENTS: Record<string, { buildingCode: string; buildingName: string; minLevel: number }> = {
+  archers: { buildingCode: "archery_ranges", buildingName: "Archery Ranges", minLevel: 1 },
+  crossbowmen: { buildingCode: "archery_ranges", buildingName: "Archery Ranges", minLevel: 1 },
   footmen: { buildingCode: "barracks", buildingName: "Barracks", minLevel: 1 },
   pikemen: { buildingCode: "barracks", buildingName: "Barracks", minLevel: 1 },
   light_cavalry: { buildingCode: "stables", buildingName: "Stables", minLevel: 1 },
@@ -392,6 +394,20 @@ const TROOP_TRAIN_REQUIREMENTS: Record<string, { buildingCode: string; buildingN
   knights: { buildingCode: "castles", buildingName: "Castles", minLevel: 1 },
   spies: { buildingCode: "guildhalls", buildingName: "Guildhall", minLevel: 1 },
 };
+const TROOP_TRAIN_PEASANT_COST: Record<string, number> = {
+  footmen: 1,
+  pikemen: 1,
+  archers: 1,
+  crossbowmen: 1,
+  light_cavalry: 1,
+  heavy_cavalry: 1,
+  knights: 1,
+};
+
+function trainPeasantCostPerUnit(troopCode: string) {
+  return Math.max(0, Number(TROOP_TRAIN_PEASANT_COST[String(troopCode || "").toLowerCase()] || 0));
+}
+
 const SPY_CAPACITY_PER_GUILDHALL = 5;
 
 const FOOTMAN_ELITE_PROMOTION_RATE = clamp(Number(process.env.FOOTMAN_ELITE_PROMOTION_RATE || 0.0025), 0, 0.05);
@@ -1998,6 +2014,7 @@ app.get("/api/kingdom/:name", async (req, res) => {
     const troops = await pool.query(
       `
       SELECT kt.troop_code, tt.name AS troop_name, kt.amount, tt.gold_cost, tt.food_cost, tt.train_seconds,
+             CASE WHEN tt.code IN ('footmen','pikemen','archers','crossbowmen','light_cavalry','heavy_cavalry','knights') THEN 1 ELSE 0 END AS peasant_cost,
              tt.horse_cost, tt.upkeep_food, tt.upkeep_gold, tt.att_rating, tt.def_rating, tt.nw_value, tt.housing, tt.notes, tt.is_trainable
       FROM kingdom_troops kt
       JOIN troop_types tt ON tt.code = kt.troop_code
@@ -2302,12 +2319,35 @@ app.post("/api/kingdom/:name/train", requireAuth, async (req, res) => {
       const totalGold = Number(def.gold_cost) * qty;
       const totalFood = Number(def.food_cost) * qty;
       const totalHorses = Number(def.horse_cost || 0) * qty;
+      const totalPeasants = trainPeasantCostPerUnit(troopCode) * qty;
 
       if (Number(kingdom.gold) < totalGold || Number(kingdom.food) < totalFood || Number(kingdom.horses || 0) < totalHorses) {
         throw new Error(`not enough resources (need gold ${totalGold}, food ${totalFood}, horses ${totalHorses})`);
       }
+      if (totalPeasants > 0) {
+        const pq = await c.query(
+          `SELECT COALESCE(amount,0) AS qty
+           FROM kingdom_troops
+           WHERE kingdom_id=$1 AND troop_code='peasants'
+           LIMIT 1
+           FOR UPDATE`,
+          [kingdom.id],
+        );
+        const havePeasants = Number(pq.rows[0]?.qty || 0);
+        if (havePeasants < totalPeasants) {
+          throw new Error(`not enough peasants (need ${totalPeasants}, have ${havePeasants})`);
+        }
+      }
 
       await c.query(`UPDATE kingdoms SET gold = gold - $2, food = food - $3, horses = horses - $4 WHERE id=$1`, [kingdom.id, totalGold, totalFood, totalHorses]);
+      if (totalPeasants > 0) {
+        await c.query(
+          `UPDATE kingdom_troops
+           SET amount = GREATEST(0, amount - $2)
+           WHERE kingdom_id=$1 AND troop_code='peasants'`,
+          [kingdom.id, totalPeasants],
+        );
+      }
 
       // Flat training time per request, regardless of quantity.
       // Use troop type's normal train_seconds so batches do not auto-complete unexpectedly fast.
@@ -2336,7 +2376,7 @@ app.post("/api/kingdom/:name/train", requireAuth, async (req, res) => {
           `,
           [row.id, mergedQty, totalSeconds],
         );
-        return { queue: up.rows[0], costs: { gold: totalGold, food: totalFood, horses: totalHorses } };
+        return { queue: up.rows[0], costs: { gold: totalGold, food: totalFood, horses: totalHorses, peasants: totalPeasants } };
       }
 
       const ins = await c.query(
@@ -2346,7 +2386,7 @@ app.post("/api/kingdom/:name/train", requireAuth, async (req, res) => {
         [kingdom.id, troopCode, qty, totalSeconds],
       );
 
-      return { queue: ins.rows[0], costs: { gold: totalGold, food: totalFood, horses: totalHorses } };
+      return { queue: ins.rows[0], costs: { gold: totalGold, food: totalFood, horses: totalHorses, peasants: totalPeasants } };
     });
 
     return res.json({ ok: true, ...out });
@@ -2370,7 +2410,8 @@ app.post("/api/kingdom/:name/train/cancel", requireAuth, async (req, res) => {
 
       const q = await c.query(
         `
-        SELECT tq.id, tq.troop_code, tq.quantity, tt.name AS troop_name, tt.gold_cost, tt.food_cost, tt.horse_cost
+        SELECT tq.id, tq.troop_code, tq.quantity, tt.name AS troop_name, tt.gold_cost, tt.food_cost, tt.horse_cost,
+               CASE WHEN tt.code IN ('footmen','pikemen','archers','crossbowmen','light_cavalry','heavy_cavalry','knights') THEN 1 ELSE 0 END AS peasant_cost
         FROM train_queue tq
         JOIN troop_types tt ON tt.code = tq.troop_code
         WHERE tq.id = $1 AND tq.kingdom_id = $2 AND tq.status = 'queued'
@@ -2384,19 +2425,29 @@ app.post("/api/kingdom/:name/train/cancel", requireAuth, async (req, res) => {
       const refundGold = Math.max(0, Math.floor(Number(row.gold_cost || 0) * qty));
       const refundFood = Math.max(0, Math.floor(Number(row.food_cost || 0) * qty));
       const refundHorses = Math.max(0, Math.floor(Number(row.horse_cost || 0) * qty));
+      const refundPeasants = Math.max(0, Math.floor(Number(row.peasant_cost || 0) * qty));
 
       await c.query(`UPDATE train_queue SET status='cancelled', completed_at=now() WHERE id=$1 AND status='queued'`, [queueId]);
       await c.query(
         `UPDATE kingdoms SET gold = gold + $2, food = food + $3, horses = horses + $4 WHERE id=$1`,
         [kingdomId, refundGold, refundFood, refundHorses],
       );
+      if (refundPeasants > 0) {
+        await c.query(
+          `INSERT INTO kingdom_troops(kingdom_id, troop_code, amount)
+           VALUES ($1,'peasants',$2)
+           ON CONFLICT (kingdom_id, troop_code)
+           DO UPDATE SET amount = kingdom_troops.amount + EXCLUDED.amount`,
+          [kingdomId, refundPeasants],
+        );
+      }
 
       return {
         queueId,
         troopCode: String(row.troop_code || ""),
         troopName: String(row.troop_name || row.troop_code || ""),
         quantity: qty,
-        refunds: { gold: refundGold, food: refundFood, horses: refundHorses },
+        refunds: { gold: refundGold, food: refundFood, horses: refundHorses, peasants: refundPeasants },
       };
     });
 
@@ -3499,7 +3550,9 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
     );
 
     const homeRows = await pool.query(
-      `SELECT tt.code, tt.name, tt.gold_cost, tt.food_cost, tt.horse_cost, tt.train_seconds, tt.att_rating, tt.def_rating, tt.upkeep_food, tt.upkeep_gold, tt.nw_value, tt.housing, tt.notes, tt.is_trainable,
+      `SELECT tt.code, tt.name, tt.gold_cost, tt.food_cost, tt.horse_cost, tt.train_seconds,
+              CASE WHEN tt.code IN ('footmen','pikemen','archers','crossbowmen','light_cavalry','heavy_cavalry','knights') THEN 1 ELSE 0 END AS peasant_cost,
+              tt.att_rating, tt.def_rating, tt.upkeep_food, tt.upkeep_gold, tt.nw_value, tt.housing, tt.notes, tt.is_trainable,
               COALESCE(kt.amount,0) AS home
        FROM troop_types tt
        LEFT JOIN kingdom_troops kt ON kt.troop_code = tt.code AND kt.kingdom_id = $1
@@ -3550,6 +3603,7 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
         troopName: t.name,
         goldCost: Number(t.gold_cost || 0),
         foodCost: Number(t.food_cost || 0),
+        peasantCost: Number(t.peasant_cost || 0),
         horseCost: Number(t.horse_cost || 0),
         trainSeconds: Number(t.train_seconds || 0),
         att: Number(t.att_rating || 0),
@@ -4982,6 +5036,79 @@ app.post("/api/settlements/:kingdom/rename", requireAuth, async (req, res) => {
   }
 });
 
+// Public alliance profile — viewable by anyone, no auth required
+app.get("/api/alliance/public/:slug", async (req, res) => {
+  const slug = String(req.params.slug || "").trim();
+  if (!slug) return res.status(400).json({ ok: false, error: "slug required" });
+
+  try {
+    const a = await pool.query(
+      `SELECT id, slug, name, description, image_url, gallery_images, created_at
+       FROM alliances WHERE LOWER(slug)=LOWER($1) OR LOWER(name)=LOWER($1) LIMIT 1`,
+      [slug],
+    );
+    if (!a.rowCount) return res.status(404).json({ ok: false, error: "alliance not found" });
+    const al = a.rows[0];
+    const allianceId = Number(al.id);
+
+    const members = await pool.query(
+      `SELECT am.role, k.name AS kingdom_name, k.land,
+              COALESCE((SELECT nw.networth FROM kingdom_networth_history nw WHERE nw.kingdom_id=k.id ORDER BY nw.recorded_at DESC LIMIT 1),0) AS networth
+       FROM alliance_members am
+       JOIN kingdoms k ON k.id = am.kingdom_id
+       WHERE am.alliance_id=$1
+       ORDER BY CASE am.role WHEN 'owner' THEN 0 WHEN 'officer' THEN 1 ELSE 2 END, k.land DESC`,
+      [allianceId],
+    );
+
+    const projects = await pool.query(
+      `SELECT ab.building_code, bt.name, bt.effect_text, bt.target_gold, bt.target_stone, bt.target_wood,
+              ab.level, ab.progress_gold, ab.progress_stone, ab.progress_wood
+       FROM alliance_buildings ab
+       JOIN alliance_building_types bt ON bt.code = ab.building_code
+       WHERE ab.alliance_id=$1 ORDER BY bt.name ASC`,
+      [allianceId],
+    );
+
+    return res.json({
+      ok: true,
+      alliance: {
+        id: allianceId,
+        slug: al.slug,
+        name: al.name,
+        description: al.description,
+        imageUrl: al.image_url,
+        galleryImages: Array.isArray(al.gallery_images) ? (al.gallery_images as string[]) : [],
+        createdAt: al.created_at,
+        memberCount: members.rowCount,
+      },
+      members: members.rows.map((row) => ({
+        kingdomName: row.kingdom_name,
+        role: row.role,
+        land: Number(row.land || 0),
+        networth: Number(row.networth || 0),
+      })),
+      projects: projects.rows.map((p) => {
+        const level = Number(p.level || 0);
+        return {
+          buildingCode: p.building_code,
+          name: p.name,
+          effectText: p.effect_text,
+          level,
+          targetGold: allianceProjectTarget(Number(p.target_gold || 0), level),
+          targetStone: allianceProjectTarget(Number(p.target_stone || 0), level),
+          targetWood: allianceProjectTarget(Number(p.target_wood || 0), level),
+          progressGold: Number(p.progress_gold || 0),
+          progressStone: Number(p.progress_stone || 0),
+          progressWood: Number(p.progress_wood || 0),
+        };
+      }),
+    });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 app.get("/api/alliance/:kingdom", async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
@@ -4993,7 +5120,7 @@ app.get("/api/alliance/:kingdom", async (req, res) => {
 
     const membership = await pool.query(
       `
-      SELECT am.role, a.id AS alliance_id, a.slug, a.name, a.description, a.image_url, a.created_by_kingdom_id, a.created_at
+      SELECT am.role, a.id AS alliance_id, a.slug, a.name, a.description, a.image_url, a.gallery_images, a.created_by_kingdom_id, a.created_at
       FROM alliance_members am
       JOIN alliances a ON a.id = am.alliance_id
       WHERE am.kingdom_id=$1
@@ -5106,6 +5233,7 @@ app.get("/api/alliance/:kingdom", async (req, res) => {
         name: m.name,
         description: m.description,
         imageUrl: m.image_url,
+        galleryImages: Array.isArray(m.gallery_images) ? (m.gallery_images as string[]) : [],
         createdByKingdomId: m.created_by_kingdom_id,
         createdAt: m.created_at,
         memberCap: allianceMemberCap(hallLevel),
@@ -5262,7 +5390,7 @@ app.post("/api/alliance/:kingdom/leave", requireAuth, async (req, res) => {
 app.patch("/api/alliance/:kingdom/update", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  const { description, imageUrl } = (req.body || {}) as { description?: string; imageUrl?: string };
+  const { description, imageUrl, galleryImages } = (req.body || {}) as { description?: string; imageUrl?: string; galleryImages?: string[] };
 
   try {
     const k = await pool.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
@@ -5276,8 +5404,13 @@ app.patch("/api/alliance/:kingdom/update", requireAuth, async (req, res) => {
 
     const updates: string[] = [];
     const vals: unknown[] = [Number(m.rows[0].alliance_id)];
-    if (description !== undefined) { vals.push(String(description).slice(0, 1000)); updates.push(`description=$${vals.length}`); }
+    if (description !== undefined) { vals.push(String(description).slice(0, 12000)); updates.push(`description=$${vals.length}`); }
     if (imageUrl !== undefined) { vals.push(String(imageUrl).slice(0, 500)); updates.push(`image_url=$${vals.length}`); }
+    if (galleryImages !== undefined) {
+      const imgs = (Array.isArray(galleryImages) ? galleryImages : []).slice(0, 6).map((u) => String(u).slice(0, 500));
+      vals.push(imgs);
+      updates.push(`gallery_images=$${vals.length}`);
+    }
     if (!updates.length) return res.status(400).json({ ok: false, error: "nothing to update" });
 
     await pool.query(`UPDATE alliances SET ${updates.join(", ")} WHERE id=$1`, vals);

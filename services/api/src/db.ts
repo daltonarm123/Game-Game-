@@ -31,14 +31,14 @@ const BUILDINGS = [
 
 const TROOPS = [
   { code: "peasants", name: "Peasants", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 2, upkeepGold: 0, att: 0.1, def: 0.1, nw: 0.0, housing: "Infantry, Barracks", notes: "", isTrainable: false },
-  { code: "footmen", name: "Footmen", trainGoldCost: 30, trainFoodCost: 20, horseCost: 0, trainSeconds: 45, upkeepFood: 10, upkeepGold: 4, att: 2, def: 1, nw: 0.38, housing: "Infantry, Barracks", notes: "", isTrainable: true },
-  { code: "pikemen", name: "Pikemen", trainGoldCost: 45, trainFoodCost: 35, horseCost: 0, trainSeconds: 55, upkeepFood: 25, upkeepGold: 6, att: 2, def: 2, nw: 0.5, housing: "Infantry, Barracks", notes: "", isTrainable: true },
+  { code: "footmen", name: "Footmen", trainGoldCost: 10, trainFoodCost: 5, horseCost: 0, trainSeconds: 2 * 3600, upkeepFood: 10, upkeepGold: 4, att: 2, def: 1, nw: 0.38, housing: "Infantry, Barracks", notes: "", isTrainable: true },
+  { code: "pikemen", name: "Pikemen", trainGoldCost: 20, trainFoodCost: 10, horseCost: 0, trainSeconds: 4 * 3600, upkeepFood: 25, upkeepGold: 6, att: 2, def: 2, nw: 0.5, housing: "Infantry, Barracks", notes: "", isTrainable: true },
   { code: "elites", name: "Elites", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 25, upkeepGold: 13, att: 10, def: 10, nw: 0.8, housing: "Infantry, Barracks", notes: "Only gained in battle.", isTrainable: false },
-  { code: "archers", name: "Archers", trainGoldCost: 50, trainFoodCost: 40, horseCost: 0, trainSeconds: 60, upkeepFood: 38, upkeepGold: 6, att: 1, def: 4, nw: 0.5, housing: "Archers, Archery Ranges", notes: "", isTrainable: true },
-  { code: "crossbowmen", name: "Crossbowmen", trainGoldCost: 70, trainFoodCost: 50, horseCost: 0, trainSeconds: 70, upkeepFood: 30, upkeepGold: 4, att: 3, def: 2, nw: 0.38, housing: "Archers, Archery Ranges", notes: "", isTrainable: false },
-  { code: "light_cavalry", name: "Light Cavalry", trainGoldCost: 80, trainFoodCost: 70, horseCost: 1, trainSeconds: 75, upkeepFood: 50, upkeepGold: 8, att: 5, def: 4, nw: 0.5, housing: "Cavalry, Stables", notes: "", isTrainable: true },
-  { code: "heavy_cavalry", name: "Heavy Cavalry", trainGoldCost: 120, trainFoodCost: 100, horseCost: 2, trainSeconds: 90, upkeepFood: 70, upkeepGold: 14, att: 7, def: 5, nw: 0.63, housing: "Cavalry, Stables", notes: "", isTrainable: true },
-  { code: "knights", name: "Knights", trainGoldCost: 450, trainFoodCost: 260, horseCost: 3, trainSeconds: 160, upkeepFood: 90, upkeepGold: 50, att: 15, def: 10, nw: 1.63, housing: "Cavalry, Castles", notes: "Requires Castles to train.", isTrainable: true },
+  { code: "archers", name: "Archers", trainGoldCost: 20, trainFoodCost: 10, horseCost: 0, trainSeconds: 4 * 3600, upkeepFood: 38, upkeepGold: 6, att: 1, def: 4, nw: 0.5, housing: "Archers, Archery Ranges", notes: "", isTrainable: true },
+  { code: "crossbowmen", name: "Crossbowmen", trainGoldCost: 10, trainFoodCost: 5, horseCost: 0, trainSeconds: 2 * 3600, upkeepFood: 30, upkeepGold: 4, att: 3, def: 2, nw: 0.38, housing: "Archers, Archery Ranges", notes: "", isTrainable: true },
+  { code: "light_cavalry", name: "Light Cavalry", trainGoldCost: 20, trainFoodCost: 10, horseCost: 1, trainSeconds: 4 * 3600, upkeepFood: 50, upkeepGold: 8, att: 5, def: 4, nw: 0.5, housing: "Cavalry, Stables", notes: "", isTrainable: true },
+  { code: "heavy_cavalry", name: "Heavy Cavalry", trainGoldCost: 30, trainFoodCost: 15, horseCost: 1, trainSeconds: 6 * 3600, upkeepFood: 70, upkeepGold: 14, att: 7, def: 5, nw: 0.63, housing: "Cavalry, Stables", notes: "", isTrainable: true },
+  { code: "knights", name: "Knights", trainGoldCost: 110, trainFoodCost: 55, horseCost: 1, trainSeconds: 10 * 3600, upkeepFood: 90, upkeepGold: 50, att: 15, def: 10, nw: 1.63, housing: "Cavalry, Castles", notes: "Requires Castles to train.", isTrainable: true },
   { code: "diplomats", name: "Diplomats", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 15, upkeepGold: 15, att: 0.1, def: 0.1, nw: 0.88, housing: "N/A, Embassies", notes: "", isTrainable: false },
   { code: "priests", name: "Priests", trainGoldCost: 400, trainFoodCost: 150, trainSeconds: 3600, upkeepFood: 30, upkeepGold: 20, att: 0.1, def: 0.1, nw: 0.5, housing: "Faith, Temples", notes: "Max 5 per Temple. Each priest generates 4 mana/hr.", isTrainable: true },
   { code: "spies", name: "Spies", trainGoldCost: 300, trainFoodCost: 100, trainSeconds: 2400, upkeepFood: 18, upkeepGold: 10, att: 0.1, def: 0.1, nw: 0.38, housing: "N/A, Guildhalls", notes: "Requires Guildhall to train.", isTrainable: true },
@@ -905,6 +905,9 @@ export async function ensureSchema(): Promise<void> {
     UPDATE kingdom_buildings SET level = GREATEST(level, 1)
     WHERE building_code = 'castles' AND level < 1
   `);
+
+  // Gallery images for alliances (up to 6 extra image URLs)
+  await pool.query(`ALTER TABLE alliances ADD COLUMN IF NOT EXISTS gallery_images TEXT[] NOT NULL DEFAULT '{}'`);
 
   // Castles cost 40 land. Kingdoms that received the free starter castle via migration
   // never paid that land cost. Give them +40 land once, tracked per-kingdom.

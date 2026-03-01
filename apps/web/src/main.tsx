@@ -1851,6 +1851,8 @@ function AllianceView() {
   const [editMode, setEditMode] = useState(false);
   const [editDesc, setEditDesc] = useState("");
   const [editImageUrl, setEditImageUrl] = useState("");
+  const [editGallery, setEditGallery] = useState<string[]>([]);
+  const [newGalleryUrl, setNewGalleryUrl] = useState("");
 
   // Diplomacy
   const [relationType, setRelationType] = useState("ally");
@@ -1938,7 +1940,7 @@ function AllianceView() {
     try {
       const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/update`, {
         method: "PATCH", headers: authHeaders(),
-        body: JSON.stringify({ description: editDesc, imageUrl: editImageUrl }),
+        body: JSON.stringify({ description: editDesc, imageUrl: editImageUrl, galleryImages: editGallery }),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
@@ -2156,37 +2158,92 @@ function AllianceView() {
             {/* Description */}
             <div style={{ marginTop: 14 }}>
               {editMode ? (
-                <div style={{ display: "grid", gap: 8 }}>
-                  <textarea
-                    value={editDesc}
-                    onChange={(e) => setEditDesc(e.target.value)}
-                    style={{ ...INPUT_STYLE, width: "100%", minHeight: 80, resize: "vertical" }}
-                    placeholder="Alliance description…"
-                  />
-                  <input
-                    value={editImageUrl}
-                    onChange={(e) => setEditImageUrl(e.target.value)}
-                    style={{ ...INPUT_STYLE, width: "100%" }}
-                    placeholder="Banner image URL (optional)"
-                  />
+                <div style={{ display: "grid", gap: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 4 }}>Description (up to ~2,000 words)</div>
+                    <textarea
+                      value={editDesc}
+                      onChange={(e) => setEditDesc(e.target.value)}
+                      style={{ ...INPUT_STYLE, width: "100%", minHeight: 200, resize: "vertical", lineHeight: 1.6 }}
+                      placeholder="Tell the world about your alliance — history, rules, goals…"
+                    />
+                    <div style={{ fontSize: 11, color: TEXT_MUTED, marginTop: 3 }}>{editDesc.length.toLocaleString()} / 12,000 chars</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 4 }}>Banner Image URL</div>
+                    <input
+                      value={editImageUrl}
+                      onChange={(e) => setEditImageUrl(e.target.value)}
+                      style={{ ...INPUT_STYLE, width: "100%" }}
+                      placeholder="https://example.com/banner.jpg"
+                    />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 6 }}>Gallery Images (up to 6)</div>
+                    {editGallery.map((url, i) => (
+                      <div key={i} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+                        <div style={{ width: 48, height: 32, borderRadius: 4, overflow: "hidden", background: "rgba(0,0,0,.4)", flexShrink: 0 }}>
+                          <img src={url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        </div>
+                        <input
+                          value={url}
+                          onChange={(e) => { const g = [...editGallery]; g[i] = e.target.value; setEditGallery(g); }}
+                          style={{ ...INPUT_STYLE, flex: 1, padding: "6px 10px", fontSize: 13 }}
+                        />
+                        <button
+                          onClick={() => setEditGallery(editGallery.filter((_, j) => j !== i))}
+                          style={{ ...BTN_STYLE, padding: "5px 10px", fontSize: 13, borderColor: "rgba(255,80,80,.4)", background: "rgba(200,40,40,.12)" }}
+                        >✕</button>
+                      </div>
+                    ))}
+                    {editGallery.length < 6 ? (
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <input
+                          value={newGalleryUrl}
+                          onChange={(e) => setNewGalleryUrl(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && newGalleryUrl.trim()) {
+                              setEditGallery([...editGallery, newGalleryUrl.trim()]);
+                              setNewGalleryUrl("");
+                            }
+                          }}
+                          style={{ ...INPUT_STYLE, flex: 1, padding: "6px 10px", fontSize: 13 }}
+                          placeholder="Paste image URL and press Enter or click +"
+                        />
+                        <button
+                          onClick={() => { if (newGalleryUrl.trim()) { setEditGallery([...editGallery, newGalleryUrl.trim()]); setNewGalleryUrl(""); } }}
+                          style={{ ...BTN_STYLE, padding: "6px 12px", fontSize: 14 }}
+                          disabled={!newGalleryUrl.trim()}
+                        >+</button>
+                      </div>
+                    ) : (
+                      <div style={{ color: TEXT_MUTED, fontSize: 12 }}>Maximum 6 gallery images reached.</div>
+                    )}
+                  </div>
                   <div style={{ display: "flex", gap: 8 }}>
-                    <button onClick={() => void saveAllianceInfo()} style={BTN_STYLE} disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+                    <button onClick={() => void saveAllianceInfo()} style={BTN_STYLE} disabled={busy}>{busy ? "Saving…" : "Save Changes"}</button>
                     <button onClick={() => setEditMode(false)} style={{ ...BTN_STYLE, opacity: .6 }}>Cancel</button>
                   </div>
                 </div>
               ) : (
                 <div>
                   {alliance.description ? (
-                    <div style={{ color: TEXT_MUTED, fontSize: 15, lineHeight: 1.6 }}>{alliance.description}</div>
+                    <div style={{ color: TEXT_MUTED, fontSize: 15, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{alliance.description}</div>
                   ) : (
                     <div style={{ color: "rgba(255,255,255,.28)", fontSize: 14, fontStyle: "italic" }}>No description set.</div>
                   )}
                   {canManage ? (
                     <button
-                      onClick={() => { setEditDesc(String(alliance.description || "")); setEditImageUrl(String(alliance.imageUrl || "")); setEditMode(true); }}
+                      onClick={() => {
+                        setEditDesc(String(alliance.description || ""));
+                        setEditImageUrl(String(alliance.imageUrl || ""));
+                        setEditGallery(Array.isArray(alliance.galleryImages) ? [...alliance.galleryImages] : []);
+                        setNewGalleryUrl("");
+                        setEditMode(true);
+                      }}
                       style={{ ...BTN_STYLE, marginTop: 10, padding: "5px 12px", fontSize: 12 }}
                     >
-                      ✏️ Edit Description
+                      ✏️ Edit Page
                     </button>
                   ) : null}
                 </div>
@@ -5291,6 +5348,146 @@ function AdminView() {
   );
 }
 
+// ── Public Alliance Profile ───────────────────────────────────────────────────
+
+function AlliancePublicProfile({ slug, onBack }: { slug: string; onBack: () => void }) {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true); setError("");
+      try {
+        const r = await fetch(`${API_BASE}/api/alliance/public/${encodeURIComponent(slug)}`);
+        const j = await r.json();
+        if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+        setData(j);
+      } catch (e: any) { setError(String(e?.message || e)); }
+      finally { setLoading(false); }
+    }
+    void load();
+  }, [slug]);
+
+  const alliance = data?.alliance;
+  const members = (data?.members || []) as Array<any>;
+  const projects = (data?.projects || []) as Array<any>;
+
+  const TH: React.CSSProperties = { textAlign: "left", padding: "8px 10px", color: TEXT_MUTED, fontWeight: 600, fontSize: 13, borderBottom: "1px solid rgba(216,176,117,.18)" };
+  const TD: React.CSSProperties = { padding: "10px 10px", borderBottom: "1px solid rgba(255,255,255,.04)" };
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <button onClick={onBack} style={{ ...BTN_STYLE, padding: "7px 16px", fontSize: 13, justifySelf: "start" }}>← Back to Rankings</button>
+
+      {loading ? <div style={{ ...CARD, color: TEXT_MUTED }}>Loading alliance profile…</div> : null}
+      {error ? <div style={{ ...CARD, color: "#ffae9a" }}>{error}</div> : null}
+
+      {alliance ? (
+        <>
+          {/* Hero banner card */}
+          <div style={CARD}>
+            {alliance.imageUrl ? (
+              <div style={{ position: "relative", borderRadius: 8, overflow: "hidden", marginBottom: 18, height: 220 }}>
+                <img src={String(alliance.imageUrl)} alt="Alliance banner" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, transparent 22%, rgba(0,0,0,.82) 100%)" }} />
+                <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "14px 18px" }}>
+                  <div style={{ fontSize: 30, fontWeight: 800, color: "#fff", fontFamily: FONT_DISPLAY, textShadow: "0 2px 10px rgba(0,0,0,.9)" }}>
+                    [{String(alliance.slug || "").toUpperCase()}] {alliance.name}
+                  </div>
+                </div>
+                <span style={{ position: "absolute", top: 14, right: 16, fontSize: 36 }}>🛡️</span>
+              </div>
+            ) : (
+              <div style={{ position: "relative", borderRadius: 8, overflow: "hidden", marginBottom: 18, height: 110, background: "linear-gradient(135deg, rgba(216,176,117,.18), rgba(120,88,43,.32))", display: "flex", alignItems: "center", padding: "0 18px", gap: 14 }}>
+                <span style={{ fontSize: 44 }}>🛡️</span>
+                <div style={{ fontSize: 26, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>
+                  [{String(alliance.slug || "").toUpperCase()}] {alliance.name}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", marginBottom: alliance.description ? 14 : 0 }}>
+              <span style={{ color: TEXT_MUTED, fontSize: 14 }}>👥 {Number(alliance.memberCount || members.length)} member{Number(alliance.memberCount || members.length) !== 1 ? "s" : ""}</span>
+              {alliance.createdAt ? <span style={{ color: TEXT_MUTED, fontSize: 14 }}>📅 Founded {new Date(String(alliance.createdAt)).toLocaleDateString()}</span> : null}
+            </div>
+
+            {alliance.description ? (
+              <div style={{ color: TEXT_MUTED, fontSize: 15, lineHeight: 1.75, whiteSpace: "pre-wrap", borderTop: "1px solid rgba(216,176,117,.15)", paddingTop: 14 }}>
+                {alliance.description}
+              </div>
+            ) : (
+              <div style={{ color: "rgba(255,255,255,.25)", fontStyle: "italic", fontSize: 14 }}>This alliance hasn't added a description yet.</div>
+            )}
+          </div>
+
+          {/* Gallery */}
+          {Array.isArray(alliance.galleryImages) && alliance.galleryImages.length > 0 ? (
+            <div style={CARD}>
+              <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 12 }}>📸 Gallery</div>
+              <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))" }}>
+                {(alliance.galleryImages as string[]).map((url, i) => (
+                  <div key={i} style={{ borderRadius: 8, overflow: "hidden", background: "rgba(0,0,0,.4)", aspectRatio: "16/9" }}>
+                    <img src={url} alt={`Gallery ${i + 1}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} loading="lazy" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {/* Members */}
+          <div style={CARD}>
+            <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 12 }}>👥 Members ({members.length})</div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Kingdom</th>
+                    <th style={TH}>Role</th>
+                    <th style={{ ...TH, textAlign: "right" }}>Networth</th>
+                    <th style={{ ...TH, textAlign: "right" }}>Land</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {members.map((m, i) => (
+                    <tr key={i}>
+                      <td style={{ ...TD, fontWeight: 600 }}>{m.kingdomName}</td>
+                      <td style={TD}><AllianceRoleBadge role={String(m.role || "member")} /></td>
+                      <td style={{ ...TD, textAlign: "right", color: ACCENT }}>{Number(m.networth || 0).toLocaleString()}</td>
+                      <td style={{ ...TD, textAlign: "right" }}>{Number(m.land || 0).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Alliance Buildings */}
+          {projects.length > 0 ? (
+            <div style={CARD}>
+              <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 12 }}>🏛️ Alliance Buildings</div>
+              <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))" }}>
+                {projects.map((p) => (
+                  <div key={p.buildingCode} style={{ background: "rgba(0,0,0,.32)", borderRadius: 10, border: "1px solid rgba(216,176,117,.14)", padding: 14 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                      <div style={{ fontWeight: 700, fontSize: 15 }}>{p.name}</div>
+                      <div style={{ background: "rgba(216,176,117,.2)", color: ACCENT, padding: "2px 10px", borderRadius: 12, fontSize: 13, fontWeight: 700 }}>Lv {Number(p.level || 0)}</div>
+                    </div>
+                    <div style={{ color: TEXT_MUTED, fontSize: 12, marginBottom: 10 }}>{p.effectText}</div>
+                    {Number(p.targetGold) > 0 ? (<div style={{ marginBottom: 7 }}><div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: TEXT_MUTED, marginBottom: 3 }}><span>💰 Gold</span><span>{Number(p.progressGold).toLocaleString()} / {Number(p.targetGold).toLocaleString()}</span></div><AllianceProgressBar value={Number(p.progressGold)} max={Number(p.targetGold)} color="#d8b075" /></div>) : null}
+                    {Number(p.targetStone) > 0 ? (<div style={{ marginBottom: 7 }}><div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: TEXT_MUTED, marginBottom: 3 }}><span>🪨 Stone</span><span>{Number(p.progressStone).toLocaleString()} / {Number(p.targetStone).toLocaleString()}</span></div><AllianceProgressBar value={Number(p.progressStone)} max={Number(p.targetStone)} color="#9ab3c0" /></div>) : null}
+                    {Number(p.targetWood) > 0 ? (<div style={{ marginBottom: 7 }}><div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: TEXT_MUTED, marginBottom: 3 }}><span>🪵 Wood</span><span>{Number(p.progressWood).toLocaleString()} / {Number(p.targetWood).toLocaleString()}</span></div><AllianceProgressBar value={Number(p.progressWood)} max={Number(p.targetWood)} color="#8bc47a" /></div>) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 // ── Rankings View ────────────────────────────────────────────────────────────
 
 function RankingsView() {
@@ -5303,6 +5500,7 @@ function RankingsView() {
   const [searchInput, setSearchInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [viewAllianceSlug, setViewAllianceSlug] = useState<string | null>(null);
   const [chartKingdom, setChartKingdom] = useState("");
   const [chartWindow, setChartWindow] = useState<"12h" | "1d" | "1w" | "1m">("1d");
   const [chartItems, setChartItems] = useState<Array<{ id: number; networth: number; recordedAt: string }>>([]);
@@ -5399,6 +5597,10 @@ function RankingsView() {
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
+      {viewAllianceSlug ? (
+        <AlliancePublicProfile slug={viewAllianceSlug} onBack={() => setViewAllianceSlug(null)} />
+      ) : null}
+      <div style={{ display: viewAllianceSlug ? "none" : "contents" }}>
       <div style={CARD}>
         <div style={{ fontFamily: FONT_DISPLAY, fontSize: 28, fontWeight: 800, color: "#fff7ec", marginBottom: 12 }}>Rankings</div>
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -5426,17 +5628,26 @@ function RankingsView() {
                     <th style={TH}>Alliance</th>
                     <th style={{ ...TH, textAlign: "right" }}>Members</th>
                     <th style={{ ...TH, textAlign: "right" }}>Total Networth</th>
+                    <th style={{ ...TH, textAlign: "center" }}>Profile</th>
                   </tr>
                 </thead>
                 <tbody>
                   {alliances.map((a: any) => {
                     const rank = Number(a.rank || 0);
                     return (
-                      <tr key={a.id}>
+                      <tr key={a.id} style={{ cursor: "pointer" }} onClick={() => setViewAllianceSlug(String(a.slug || ""))}>
                         <td style={{ ...TD, color: rank === 1 ? "#ffd700" : rank === 2 ? "#c0c0c0" : rank === 3 ? "#cd7f32" : TEXT_MAIN, fontWeight: rank <= 3 ? 700 : 400 }}>{rank}</td>
-                        <td style={TD}>[{String(a.slug || "").toUpperCase()}] {String(a.name || "")}</td>
+                        <td style={{ ...TD, fontWeight: 600 }}>[{String(a.slug || "").toUpperCase()}] {String(a.name || "")}</td>
                         <td style={{ ...TD, textAlign: "right" }}>{Number(a.memberCount || 0).toLocaleString()}</td>
                         <td style={{ ...TD, textAlign: "right" }}>{Number(a.totalNetworth || 0).toLocaleString()}</td>
+                        <td style={{ ...TD, textAlign: "center" }}>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setViewAllianceSlug(String(a.slug || "")); }}
+                            style={{ ...BTN_STYLE, padding: "3px 10px", fontSize: 12 }}
+                          >
+                            View
+                          </button>
+                        </td>
                       </tr>
                     );
                   })}
@@ -5582,6 +5793,7 @@ function RankingsView() {
             </div>
           </>
         )}
+      </div>
       </div>
     </div>
   );
