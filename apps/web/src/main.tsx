@@ -2913,6 +2913,14 @@ function WarRoomView() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [actionMsg, setActionMsg] = useState("");
+  const [attackOutcomePopup, setAttackOutcomePopup] = useState<{
+    tone: "success" | "warning" | "info" | "error";
+    title: string;
+    subtitle: string;
+    detail: string;
+    attackerLosses: number;
+    defenderLosses: number;
+  } | null>(null);
   const [trainOpen, setTrainOpen] = useState(true);
   const [attackOpen, setAttackOpen] = useState(false);
   const [exploreOpen, setExploreOpen] = useState(false);
@@ -2958,6 +2966,11 @@ function WarRoomView() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(() => {
+    if (!attackOutcomePopup) return;
+    const timeout = window.setTimeout(() => setAttackOutcomePopup(null), 10000);
+    return () => window.clearTimeout(timeout);
+  }, [attackOutcomePopup]);
 
   const k = data?.kingdom;
   const troops = (data?.troops || []) as Array<any>;
@@ -3116,10 +3129,46 @@ function WarRoomView() {
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       const eliteMsg = Number(j.elitesPromoted || 0) > 0 ? ` | Elites promoted ${Number(j.elitesPromoted || 0).toLocaleString()}` : "";
       setActionMsg(`Attack result: ${j.result} | Ratio ${Number(j.ratio || 0).toFixed(2)} | Land ${Number(j.landTaken || 0).toLocaleString()}${eliteMsg}`);
+      const upperResult = String(j.result || "").toUpperCase();
+      const winResults = ["MINOR VICTORY", "VICTORY", "MAJOR VICTORY", "OVERWHELMING VICTORY"];
+      const tone: "success" | "warning" | "info" = winResults.includes(upperResult)
+        ? "success"
+        : (upperResult.includes("LOSS") || upperResult.includes("FLEE"))
+          ? "warning"
+          : "info";
+      const lootParts = [
+        Number(j.lootGold || 0) > 0 ? `${Number(j.lootGold || 0).toLocaleString()} gold` : "",
+        Number(j.lootFood || 0) > 0 ? `${Number(j.lootFood || 0).toLocaleString()} food` : "",
+        Number(j.lootWood || 0) > 0 ? `${Number(j.lootWood || 0).toLocaleString()} wood` : "",
+        Number(j.lootStone || 0) > 0 ? `${Number(j.lootStone || 0).toLocaleString()} stone` : "",
+      ].filter(Boolean);
+      const attackerLossesTotal = Object.values(j.attackerLosses || {}).reduce((sum: number, v: any) => sum + Number(v || 0), 0);
+      const defenderLossesTotal = Object.values(j.defenderLosses || {}).reduce((sum: number, v: any) => sum + Number(v || 0), 0);
+      const detailParts = [
+        `Land +${Number(j.landTaken || 0).toLocaleString()}`,
+        lootParts.length ? `Loot: ${lootParts.join(", ")}` : "",
+        Number(j.gemsAwarded || 0) > 0 ? `Gems +${Number(j.gemsAwarded || 0).toLocaleString()}` : "",
+      ].filter(Boolean);
+      setAttackOutcomePopup({
+        tone,
+        title: "Attack Outcome",
+        subtitle: `${upperResult || "RESULT UNKNOWN"} vs ${String(attackTarget || "Unknown")}`,
+        detail: detailParts.join(" | "),
+        attackerLosses: attackerLossesTotal,
+        defenderLosses: defenderLossesTotal,
+      });
       setSentTroops({});
       await load();
     } catch (e: any) {
       setActionMsg(`Attack failed: ${String(e?.message || e)}`);
+      setAttackOutcomePopup({
+        tone: "error",
+        title: "Attack Failed",
+        subtitle: String(attackTarget || "Unknown target"),
+        detail: String(e?.message || e),
+        attackerLosses: 0,
+        defenderLosses: 0,
+      });
     }
   }
 
@@ -3145,6 +3194,51 @@ function WarRoomView() {
 
   return (
     <div style={{ display: "grid", gap: 12, minWidth: 0 }}>
+      {attackOutcomePopup ? (
+        <div
+          style={{
+            position: "fixed",
+            top: isMobile ? 10 : 18,
+            right: isMobile ? 10 : 18,
+            left: isMobile ? 10 : undefined,
+            zIndex: 1500,
+            ...CARD,
+            maxWidth: isMobile ? undefined : 440,
+            padding: 12,
+            borderColor:
+              attackOutcomePopup.tone === "success"
+                ? "rgba(120,200,140,.55)"
+                : attackOutcomePopup.tone === "warning"
+                  ? "rgba(216,176,117,.6)"
+                  : attackOutcomePopup.tone === "error"
+                    ? "rgba(255,120,120,.62)"
+                    : "rgba(200,200,200,.45)",
+          }}
+        >
+          <div style={{ fontSize: 15, fontWeight: 800, color: TEXT_MAIN }}>{attackOutcomePopup.title}</div>
+          <div style={{ marginTop: 2, fontSize: 13, color: ACCENT, fontWeight: 700 }}>{attackOutcomePopup.subtitle}</div>
+          <div style={{ marginTop: 6, fontSize: 13, color: TEXT_MUTED }}>{attackOutcomePopup.detail}</div>
+          <div style={{ marginTop: 8, fontSize: 12, color: TEXT_MUTED }}>
+            Your losses: <span style={{ color: TEXT_MAIN }}>{attackOutcomePopup.attackerLosses.toLocaleString()}</span> | Enemy losses:{" "}
+            <span style={{ color: TEXT_MAIN }}>{attackOutcomePopup.defenderLosses.toLocaleString()}</span>
+          </div>
+          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => {
+                setAttackOutcomePopup(null);
+                window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "pigeons" }));
+              }}
+              style={{ ...BTN_STYLE, padding: "7px 10px", fontSize: 12 }}
+            >
+              Open Pigeons
+            </button>
+            <button type="button" onClick={() => setAttackOutcomePopup(null)} style={{ ...BTN_STYLE, padding: "7px 10px", fontSize: 12 }}>
+              Dismiss
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div style={{ ...CARD, background: "linear-gradient(180deg, rgba(52,32,16,0.96), rgba(28,18,10,0.94))" }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <div style={{ fontSize: isMobile ? 30 : 42, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY, lineHeight: 1.05 }}>
