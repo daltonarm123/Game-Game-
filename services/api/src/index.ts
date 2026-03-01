@@ -174,6 +174,14 @@ const ATTACK_RETURN_SECONDS = Math.max(
   1,
   Number(process.env.ATTACK_RETURN_SECONDS || (LOCAL_DEMO_FAST ? 20 : ATTACK_RETURN_MINUTES * 60)),
 );
+const ATTACK_MIN_EFFECTIVE_POWER_FOR_SPOILS = Math.max(
+  1,
+  Number(process.env.ATTACK_MIN_EFFECTIVE_POWER_FOR_SPOILS || 120),
+);
+const ATTACK_FULL_EFFECTIVE_POWER_FOR_SPOILS = Math.max(
+  ATTACK_MIN_EFFECTIVE_POWER_FOR_SPOILS + 1,
+  Number(process.env.ATTACK_FULL_EFFECTIVE_POWER_FOR_SPOILS || 2200),
+);
 const SEASON_LENGTH_SECONDS = Math.max(30, Number(process.env.SEASON_LENGTH_SECONDS || (LOCAL_DEMO_FAST ? 60 : 7 * 24 * 3600)));
 const EXPLORE_LAND_CAP = 20_000;
 const EXPLORE_MIN_RETURN_SECONDS = LOCAL_DEMO_FAST ? 12 : 5 * 60;
@@ -852,6 +860,29 @@ function applyLosses(units: Record<string, number>, pct: number, scope?: Record<
     result[k] = cur - loss;
   }
   return { losses, remaining: result };
+}
+
+function totalUnitCount(units: Record<string, number>) {
+  return Object.values(units).reduce((acc, n) => acc + Number(n || 0), 0);
+}
+
+function forceSingleCasualty(
+  losses: Record<string, number>,
+  remaining: Record<string, number>,
+  source: Record<string, number>,
+) {
+  const ordered = Object.entries(source)
+    .map(([code, qty]) => [code, Number(qty || 0)] as const)
+    .filter(([, qty]) => qty > 0)
+    .sort((a, b) => b[1] - a[1]);
+  for (const [code] of ordered) {
+    const cur = Number(remaining[code] || 0);
+    if (cur <= 0) continue;
+    remaining[code] = cur - 1;
+    losses[code] = Number(losses[code] || 0) + 1;
+    return true;
+  }
+  return false;
 }
 
 const TROOP_CLASS: Record<string, "infantry" | "pikemen" | "archer" | "cavalry" | "support"> = {
@@ -2278,8 +2309,9 @@ app.post("/api/kingdom/:name/train", requireAuth, async (req, res) => {
 
       await c.query(`UPDATE kingdoms SET gold = gold - $2, food = food - $3, horses = horses - $4 WHERE id=$1`, [kingdom.id, totalGold, totalFood, totalHorses]);
 
-      // Training duration is fixed per queue entry by troop type (not multiplied by quantity).
-      const totalSeconds = LOCAL_DEMO_FAST ? FAST_TRAIN_SECONDS : Math.max(1, Number(def.train_seconds));
+      // Training duration scales with quantity so each unit trains at its configured rate.
+      const unitSeconds = LOCAL_DEMO_FAST ? FAST_TRAIN_SECONDS : Math.max(1, Number(def.train_seconds));
+      const totalSeconds = Math.max(1, unitSeconds * qty);
       const existing = await c.query(
         `
         SELECT id, quantity, started_at, completes_at
@@ -2298,7 +2330,7 @@ app.post("/api/kingdom/:name/train", requireAuth, async (req, res) => {
           `
           UPDATE train_queue
           SET quantity=$2,
-              completes_at=GREATEST(completes_at, now() + ($3 * INTERVAL '1 second'))
+              completes_at=(GREATEST(completes_at, now()) + ($3 * INTERVAL '1 second'))
           WHERE id=$1
           RETURNING id, kingdom_id, troop_code, quantity, started_at, completes_at, status
           `,
@@ -2679,6 +2711,23 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
       const defenderCombatTroops = Object.fromEntries(
         Object.entries(defenderTroops).filter(([code, qty]) => isCombatTroop(code) && Number(qty || 0) > 0),
       );
+      const totalSentCombatUnits = Object.entries(sentOnly).reduce(
+        (acc, [code, qty]) => acc + (isCombatTroop(code) ? Number(qty || 0) : 0),
+        0,
+      );
+      const totalDefCombatUnits = totalUnitCount(defenderCombatTroops);
+      const rawSendPower = Object.entries(sentOnly).reduce(
+        (acc, [code, qty]) => acc + Number(qty || 0) * Math.max(0, Number(troopAtt[code] || 0)),
+        0,
+      );
+      const spoilsScale = rawSendPower < ATTACK_MIN_EFFECTIVE_POWER_FOR_SPOILS
+        ? 0
+        : clamp(
+          (rawSendPower - ATTACK_MIN_EFFECTIVE_POWER_FOR_SPOILS)
+            / (ATTACK_FULL_EFFECTIVE_POWER_FOR_SPOILS - ATTACK_MIN_EFFECTIVE_POWER_FOR_SPOILS),
+          0,
+          1,
+        );
       const isPeasantOnlyAttack = Object.keys(sentOnly).length > 0
         && Object.entries(sentOnly).every(([code, sent]) => code === "peasants" && Number(sent) > 0);
       let attackerPower = effectivePowerVsComposition(sentOnly, troopAtt, defenderCombatTroops);
@@ -2706,6 +2755,32 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
         attackerAfterSend[code] = Number(attackerAfterSend[code] || 0) - Number(sent);
       }
       const attackerBattle = applyLosses(sentOnly, aLossPct, sentOnly);
+      const defenderBattle = applyLosses(defenderCombatTroops, dLossPct);
+
+      // If both sides committed combat units, ensure at least one total casualty.
+      // Tiny skirmishes can still have zero losses when one side had no combat force.
+      if (totalSentCombatUnits > 0 && totalDefCombatUnits > 0) {
+        const aLosses = totalUnitCount(attackerBattle.losses);
+        const dLosses = totalUnitCount(defenderBattle.losses);
+        if (aLosses + dLosses <= 0) {
+          const attackerWon = ["MINOR VICTORY", "VICTORY", "MAJOR VICTORY", "OVERWHELMING VICTORY"].includes(result);
+          const defenderWon = ["FLEE", "MAJOR LOSS", "MINOR LOSS"].includes(result);
+          if (attackerWon) {
+            if (!forceSingleCasualty(defenderBattle.losses, defenderBattle.remaining, defenderCombatTroops)) {
+              void forceSingleCasualty(attackerBattle.losses, attackerBattle.remaining, sentOnly);
+            }
+          } else if (defenderWon) {
+            if (!forceSingleCasualty(attackerBattle.losses, attackerBattle.remaining, sentOnly)) {
+              void forceSingleCasualty(defenderBattle.losses, defenderBattle.remaining, defenderCombatTroops);
+            }
+          } else {
+            if (!forceSingleCasualty(attackerBattle.losses, attackerBattle.remaining, sentOnly)) {
+              void forceSingleCasualty(defenderBattle.losses, defenderBattle.remaining, defenderCombatTroops);
+            }
+          }
+        }
+      }
+
       const attackerLossesSentOnly = Object.fromEntries(
         Object.entries(attackerBattle.losses).filter(([code, n]) => Number(sentOnly[code] || 0) > 0 && Number(n || 0) > 0),
       );
@@ -2729,11 +2804,9 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
         }
       }
 
-      const defenderBattle = applyLosses(defenderCombatTroops, dLossPct);
-
       const landPct = landPctForResult(result);
       const defenderLand = Number(def.land || 0);
-      const landTaken = Math.max(0, Math.floor(defenderLand * landPct));
+      const landTaken = Math.max(0, Math.floor(defenderLand * landPct * spoilsScale));
       const attackerLandNew = Number(atk.land || 0) + landTaken;
       const defenderLandNew = Math.max(0, defenderLand - landTaken);
 
@@ -2801,7 +2874,7 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
       const LOOT_RATE: Record<string, number> = {
         "MINOR VICTORY": 0.05, "VICTORY": 0.10, "MAJOR VICTORY": 0.15, "OVERWHELMING VICTORY": 0.20,
       };
-      const lootRate = LOOT_RATE[result] || 0;
+      const lootRate = (LOOT_RATE[result] || 0) * spoilsScale;
       let lootFood = 0, lootGold = 0, lootWood = 0, lootStone = 0;
       if (lootRate > 0) {
         const defResQ = await c.query(`SELECT food, gold, wood, stone FROM kingdoms WHERE id=$1`, [def.id]);
@@ -2823,7 +2896,7 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
         "MAJOR VICTORY": 2,
         "OVERWHELMING VICTORY": Math.floor(Math.random() * 3) + 2,
       };
-      const baseGemsAwarded = GEM_TABLE[result] ?? 0;
+      const baseGemsAwarded = spoilsScale > 0 ? (GEM_TABLE[result] ?? 0) : 0;
       let gemsAwarded = baseGemsAwarded;
       if (baseGemsAwarded > 0) {
         const premiumQ = await c.query(
@@ -6734,7 +6807,9 @@ app.post("/api/admin/reconcile-train-queue-times", requireAdmin, async (req, res
 
       for (const row of q.rows) {
         const startedAt = row.started_at ? new Date(row.started_at) : new Date();
-        const seconds = LOCAL_DEMO_FAST ? FAST_TRAIN_SECONDS : Math.max(1, Number(row.train_seconds || 1));
+        const qty = Math.max(1, Number(row.quantity || 1));
+        const unitSeconds = LOCAL_DEMO_FAST ? FAST_TRAIN_SECONDS : Math.max(1, Number(row.train_seconds || 1));
+        const seconds = Math.max(1, unitSeconds * qty);
         const desired = new Date(startedAt.getTime() + seconds * 1000);
         const current = row.completes_at ? new Date(row.completes_at) : null;
         const diff = current ? Math.abs(current.getTime() - desired.getTime()) : Number.POSITIVE_INFINITY;
