@@ -169,6 +169,7 @@ const LOCAL_DEMO_FAST = String(process.env.LOCAL_DEMO_FAST || "").trim() === "1"
 const FAST_BUILD_SECONDS = Math.max(1, Number(process.env.FAST_BUILD_SECONDS || 60));
 const FAST_TRAIN_SECONDS = Math.max(1, Number(process.env.FAST_TRAIN_SECONDS || 30));
 const FAST_RESEARCH_SECONDS = Math.max(5, Number(process.env.FAST_RESEARCH_SECONDS || 15));
+const SHIELD_CANCEL_COOLDOWN_SECONDS = Math.max(60, Number(process.env.SHIELD_CANCEL_COOLDOWN_SECONDS || 24 * 3600));
 const ATTACK_RETURN_SECONDS = Math.max(
   1,
   Number(process.env.ATTACK_RETURN_SECONDS || (LOCAL_DEMO_FAST ? 20 : ATTACK_RETURN_MINUTES * 60)),
@@ -179,6 +180,10 @@ const EXPLORE_MIN_RETURN_SECONDS = LOCAL_DEMO_FAST ? 12 : 5 * 60;
 const EXPLORE_MAX_RETURN_SECONDS = LOCAL_DEMO_FAST ? 40 : 8 * 3600;
 const EXPLORE_MIN_EFFECTIVE_POWER = Math.max(1, Number(process.env.EXPLORE_MIN_EFFECTIVE_POWER || 25) || 25);
 const EXPLORE_POWER_TO_LAND = Math.max(0.001, Number(process.env.EXPLORE_POWER_TO_LAND || 0.08) || 0.08);
+const EXPLORE_LAND_PER_MISSION_CAP = Math.max(50, Number(process.env.EXPLORE_LAND_PER_MISSION_CAP || 550) || 550);
+const EXPLORE_SMALL_KINGDOM_MIN_LAND = Math.max(0, Number(process.env.EXPLORE_SMALL_KINGDOM_MIN_LAND || 120) || 120);
+const EXPLORE_KG_BONUS_AT_MIN_LAND = Math.max(0.2, Number(process.env.EXPLORE_KG_BONUS_AT_MIN_LAND || 1.8) || 1.8);
+const EXPLORE_KG_BONUS_AT_CAP_LAND = Math.max(0.1, Number(process.env.EXPLORE_KG_BONUS_AT_CAP_LAND || 0.35) || 0.35);
 const SPY_RETURN_SECONDS = LOCAL_DEMO_FAST ? 15 : 25 * 60;
 const DAILY_STREAK_CAP = 365;
 const OBS_TICK_INTERVAL_SECONDS = Math.max(1, Number(process.env.TICK_INTERVAL_SECONDS || (LOCAL_DEMO_FAST ? 5 : 300)));
@@ -2086,12 +2091,9 @@ app.post("/api/kingdom/:name/build", requireAuth, async (req, res) => {
         [kingdom.id, currentLevel, buildingCode],
       );
       const maxTarget = Number(q.rows[0]?.max_target || currentLevel);
-      const firstLevel = maxTarget + 1;
       const targetLevel = maxTarget + qty;
-      const levelSum = (qty * (firstLevel + targetLevel)) / 2;
-
-      const woodCost = Math.floor(Number(def.wood_cost || 0) * levelSum);
-      const stoneCost = Math.floor(Number(def.stone_cost || 0) * levelSum);
+      const woodCost = Math.floor(Number(def.wood_cost || 0) * qty);
+      const stoneCost = Math.floor(Number(def.stone_cost || 0) * qty);
       const landCost = Math.floor(Number(def.land_cost || 0) * qty);
       if (availableLand < landCost) {
         throw new Error(`not enough land (need ${landCost}, available ${availableLand})`);
@@ -2174,11 +2176,8 @@ app.post("/api/kingdom/:name/build/cancel", requireAuth, async (req, res) => {
       if (!q.rowCount) throw new Error("build queue item not found or already processed");
       const row = q.rows[0];
       const qty = Math.max(1, Number(row.quantity || 1));
-      const targetLevel = Number(row.target_level || 1);
-      const firstLevel = Math.max(1, targetLevel - qty + 1);
-      const levelSum = (qty * (firstLevel + targetLevel)) / 2;
-      const refundWood = Math.max(0, Math.floor(Number(row.wood_cost || 0) * levelSum));
-      const refundStone = Math.max(0, Math.floor(Number(row.stone_cost || 0) * levelSum));
+      const refundWood = Math.max(0, Math.floor(Number(row.wood_cost || 0) * qty));
+      const refundStone = Math.max(0, Math.floor(Number(row.stone_cost || 0) * qty));
 
       await c.query(`UPDATE build_queue SET status='cancelled', completed_at=now() WHERE id=$1 AND status='queued'`, [queueId]);
       await c.query(`UPDATE kingdoms SET wood = wood + $2, stone = stone + $3 WHERE id=$1`, [kingdomId, refundWood, refundStone]);
@@ -2506,6 +2505,48 @@ app.post("/api/kingdom/:name/shield/activate", requireAuth, async (req, res) => 
       return { ...up.rows[0], premiumShieldUsed: usePremiumShield };
     });
     return res.json({ ok: true, shield: shieldStateFromRow(out), premiumShieldUsed: Boolean(out.premiumShieldUsed) });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/kingdom/:name/shield/cancel", requireAuth, async (req, res) => {
+  const name = String(req.params.name || "").trim();
+  if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  const session = (req as any).authSession;
+
+  try {
+    const out = await withTx(async (c) => {
+      const kq = await c.query(
+        `SELECT id, user_id, name, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        [name],
+      );
+      if (!kq.rowCount) throw new Error("kingdom not found");
+      const k = kq.rows[0];
+      if (String(k.user_id) !== String(session.user_id)) throw new Error("cannot modify another kingdom");
+      const normalized = await normalizeShieldStateTx(c, Number(k.id));
+      const current = normalized || k;
+      const status = String(current.shield_status || "none");
+      if (status !== "pending" && status !== "active") {
+        throw new Error(`shield cannot be cancelled while status is ${status}`);
+      }
+
+      const up = await c.query(
+        `
+        UPDATE kingdoms
+        SET shield_status='cooldown',
+            shield_requested_at=COALESCE(shield_requested_at, now()),
+            shield_starts_at=NULL,
+            shield_ends_at=NULL,
+            shield_cooldown_ends_at=now() + ($2 * INTERVAL '1 second')
+        WHERE id=$1
+        RETURNING id, name, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
+        `,
+        [k.id, SHIELD_CANCEL_COOLDOWN_SECONDS],
+      );
+      return up.rows[0];
+    });
+    return res.json({ ok: true, shield: shieldStateFromRow(out), cooldownSeconds: SHIELD_CANCEL_COOLDOWN_SECONDS });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });
   }
@@ -3021,14 +3062,21 @@ app.post("/api/war-room/:attacker/explore", requireAuth, async (req, res) => {
         throw new Error(`explore party too small (need power ${EXPLORE_MIN_EFFECTIVE_POWER.toFixed(0)}, sent ${sentPower.toFixed(1)})`);
       }
 
-      const remainingCap = Math.max(0, EXPLORE_LAND_CAP - Number(atk.land || 0));
+      const kingdomLand = Number(atk.land || 0);
+      const remainingCap = Math.max(0, EXPLORE_LAND_CAP - kingdomLand);
+      const landProgress = clamp(kingdomLand / EXPLORE_LAND_CAP, 0, 1);
       const randomness = 0.85 + Math.random() * 0.30;
-      // Larger coordinated parties get better yield efficiency than many tiny sends.
-      const sizeBonus = 0.9 + Math.min(0.6, Math.log10(totalSent + 10) * 0.18);
-      const coordinationBonus = 1 + Math.min(0.35, Math.sqrt(totalSent) / 1200);
-      const baseLand = Math.floor(sentPower * EXPLORE_POWER_TO_LAND * sizeBonus * coordinationBonus * randomness);
+      // Keep some reward for larger parties, but kingdom size now drives the main explore yield.
+      const sizeBonus = 0.95 + Math.min(0.30, Math.log10(totalSent + 10) * 0.10);
+      const coordinationBonus = 1 + Math.min(0.15, Math.sqrt(totalSent) / 2000);
+      const kgBonusHigh = Math.max(EXPLORE_KG_BONUS_AT_MIN_LAND, EXPLORE_KG_BONUS_AT_CAP_LAND);
+      const kgBonusLow = Math.min(EXPLORE_KG_BONUS_AT_MIN_LAND, EXPLORE_KG_BONUS_AT_CAP_LAND);
+      const kingdomSizeBonus = kgBonusHigh - (kgBonusHigh - kgBonusLow) * landProgress;
+      const scaledLand = Math.floor(sentPower * EXPLORE_POWER_TO_LAND * sizeBonus * coordinationBonus * kingdomSizeBonus * randomness);
+      const smallKingdomFloor = Math.floor((1 - landProgress) * EXPLORE_SMALL_KINGDOM_MIN_LAND);
+      const baseLand = Math.max(scaledLand, smallKingdomFloor);
       if (baseLand <= 0) throw new Error("explore party was too small to claim land");
-      const landFound = Math.min(remainingCap, baseLand);
+      const landFound = Math.min(remainingCap, EXPLORE_LAND_PER_MISSION_CAP, baseLand);
       if (landFound <= 0) throw new Error(`explore unavailable at ${EXPLORE_LAND_CAP.toLocaleString()} land cap`);
 
       const sentPressure = totalSent + sentPower * 0.14;
@@ -4467,9 +4515,9 @@ app.post("/api/settlements/:kingdom/upgrade-cost", requireAuth, async (req, res)
       const effectiveMax = Math.min(Number(def.max_level || 10), Math.max(1, Number(st.level || 1)));
       if (currentLevel >= effectiveMax) throw new Error(`building already maxed for settlement level (max ${effectiveMax})`);
       const nextLevel = currentLevel + 1;
-      const costGold = Math.floor(Number(def.base_gold || 0) * Math.pow(1.3, currentLevel));
-      const costStone = Math.floor(Number(def.base_stone || 0) * Math.pow(1.2, currentLevel));
-      const costWood = Math.floor(Number(def.base_wood || 0) * Math.pow(1.2, currentLevel));
+      const costGold = Math.floor(Number(def.base_gold || 0));
+      const costStone = Math.floor(Number(def.base_stone || 0));
+      const costWood = Math.floor(Number(def.base_wood || 0));
       const secondsBase = Math.max(300, Number(def.base_build_seconds || 10800));
       const seconds = LOCAL_DEMO_FAST ? 20 : Math.floor(secondsBase * Math.pow(1.2, currentLevel));
       return {
@@ -4572,9 +4620,9 @@ app.post("/api/settlements/:kingdom/upgrade-building", requireAuth, async (req, 
       if (inQueue.rowCount) throw new Error("building already queued for upgrade");
 
       const nextLevel = currentLevel + 1;
-      const costGold = Math.floor(Number(def.base_gold || 0) * Math.pow(1.3, currentLevel));
-      const costStone = Math.floor(Number(def.base_stone || 0) * Math.pow(1.2, currentLevel));
-      const costWood = Math.floor(Number(def.base_wood || 0) * Math.pow(1.2, currentLevel));
+      const costGold = Math.floor(Number(def.base_gold || 0));
+      const costStone = Math.floor(Number(def.base_stone || 0));
+      const costWood = Math.floor(Number(def.base_wood || 0));
       if (Number(kr.gold || 0) < costGold || Number(kr.stone || 0) < costStone || Number(kr.wood || 0) < costWood) {
         throw new Error(`not enough resources (need gold ${costGold}, stone ${costStone}, wood ${costWood})`);
       }
@@ -4641,16 +4689,9 @@ app.post("/api/settlements/:kingdom/cancel-build", requireAuth, async (req, res)
       let refundStone = 0;
       let refundWood = 0;
 
-      if (row.settlement_building_id) {
-        const currentLevel = Math.max(0, targetLevel - 1);
-        refundGold = Math.floor(baseGold * Math.pow(1.3, currentLevel));
-        refundStone = Math.floor(baseStone * Math.pow(1.2, currentLevel));
-        refundWood = Math.floor(baseWood * Math.pow(1.2, currentLevel));
-      } else {
-        refundGold = Math.floor(baseGold);
-        refundStone = Math.floor(baseStone);
-        refundWood = Math.floor(baseWood);
-      }
+      refundGold = Math.floor(baseGold);
+      refundStone = Math.floor(baseStone);
+      refundWood = Math.floor(baseWood);
 
       await c.query(`UPDATE settlement_build_queue SET status='cancelled', completed_at=now() WHERE id=$1 AND status='queued'`, [queueId]);
       await c.query(`UPDATE kingdoms SET gold = gold + $2, stone = stone + $3, wood = wood + $4 WHERE id=$1`, [kingdomId, refundGold, refundStone, refundWood]);
@@ -4906,7 +4947,8 @@ app.get("/api/alliance/:kingdom", async (req, res) => {
     const allianceId = Number(m.alliance_id);
     const members = await pool.query(
       `
-      SELECT am.kingdom_id, am.role, am.joined_at, k.name AS kingdom_name, k.land
+      SELECT am.kingdom_id, am.role, am.joined_at, k.name AS kingdom_name, k.land,
+             COALESCE((SELECT nw.networth FROM kingdom_networth_history nw WHERE nw.kingdom_id = k.id ORDER BY nw.recorded_at DESC LIMIT 1), 0) AS networth
       FROM alliance_members am
       JOIN kingdoms k ON k.id = am.kingdom_id
       WHERE am.alliance_id=$1
@@ -4987,6 +5029,7 @@ app.get("/api/alliance/:kingdom", async (req, res) => {
         kingdomName: row.kingdom_name,
         role: row.role,
         land: Number(row.land || 0),
+        networth: Number(row.networth || 0),
         joinedAt: row.joined_at,
       })),
       relations: relations.rows,
@@ -5125,6 +5168,96 @@ app.post("/api/alliance/:kingdom/leave", requireAuth, async (req, res) => {
     });
 
     return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.patch("/api/alliance/:kingdom/update", requireAuth, async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  const { description, imageUrl } = (req.body || {}) as { description?: string; imageUrl?: string };
+
+  try {
+    const k = await pool.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
+    if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    const kingdomId = Number(k.rows[0].id);
+
+    const m = await pool.query(`SELECT alliance_id, role FROM alliance_members WHERE kingdom_id=$1 LIMIT 1`, [kingdomId]);
+    if (!m.rowCount) return res.status(403).json({ ok: false, error: "not in an alliance" });
+    const role = String(m.rows[0].role || "member");
+    if (role !== "owner" && role !== "officer") return res.status(403).json({ ok: false, error: "only owner/officers can update alliance info" });
+
+    const updates: string[] = [];
+    const vals: unknown[] = [Number(m.rows[0].alliance_id)];
+    if (description !== undefined) { vals.push(String(description).slice(0, 1000)); updates.push(`description=$${vals.length}`); }
+    if (imageUrl !== undefined) { vals.push(String(imageUrl).slice(0, 500)); updates.push(`image_url=$${vals.length}`); }
+    if (!updates.length) return res.status(400).json({ ok: false, error: "nothing to update" });
+
+    await pool.query(`UPDATE alliances SET ${updates.join(", ")} WHERE id=$1`, vals);
+    return res.json({ ok: true });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/alliance/:kingdom/kick", requireAuth, async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const targetKingdom = String((req.body as any)?.targetKingdom || "").trim();
+  if (!kingdom || !targetKingdom) return res.status(400).json({ ok: false, error: "kingdom and targetKingdom required" });
+
+  try {
+    await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(k.rows[0].id);
+
+      const m = await c.query(`SELECT alliance_id, role FROM alliance_members WHERE kingdom_id=$1 LIMIT 1`, [kingdomId]);
+      if (!m.rowCount) throw new Error("not in an alliance");
+      const allianceId = Number(m.rows[0].alliance_id);
+      const role = String(m.rows[0].role || "member");
+      if (role !== "owner" && role !== "officer") throw new Error("only owner/officers can kick members");
+
+      const t = await c.query(`SELECT k.id, am.role FROM kingdoms k JOIN alliance_members am ON am.kingdom_id=k.id WHERE LOWER(k.name)=LOWER($1) AND am.alliance_id=$2 LIMIT 1`, [targetKingdom, allianceId]);
+      if (!t.rowCount) throw new Error("target is not a member of your alliance");
+      const targetRole = String(t.rows[0].role || "member");
+      if (targetRole === "owner") throw new Error("cannot kick the owner");
+      if (role === "officer" && targetRole === "officer") throw new Error("officers cannot kick other officers");
+
+      await c.query(`DELETE FROM alliance_members WHERE kingdom_id=$1 AND alliance_id=$2`, [Number(t.rows[0].id), allianceId]);
+    });
+    return res.json({ ok: true });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/alliance/:kingdom/promote", requireAuth, async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const targetKingdom = String((req.body as any)?.targetKingdom || "").trim();
+  if (!kingdom || !targetKingdom) return res.status(400).json({ ok: false, error: "kingdom and targetKingdom required" });
+
+  try {
+    const newRole = await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(k.rows[0].id);
+
+      const m = await c.query(`SELECT alliance_id, role FROM alliance_members WHERE kingdom_id=$1 LIMIT 1`, [kingdomId]);
+      if (!m.rowCount) throw new Error("not in an alliance");
+      const allianceId = Number(m.rows[0].alliance_id);
+      if (String(m.rows[0].role) !== "owner") throw new Error("only the owner can promote/demote members");
+
+      const t = await c.query(`SELECT k.id, am.role FROM kingdoms k JOIN alliance_members am ON am.kingdom_id=k.id WHERE LOWER(k.name)=LOWER($1) AND am.alliance_id=$2 LIMIT 1`, [targetKingdom, allianceId]);
+      if (!t.rowCount) throw new Error("target is not a member of your alliance");
+      const targetRole = String(t.rows[0].role || "member");
+      if (targetRole === "owner") throw new Error("cannot change the owner's role");
+
+      const nextRole = targetRole === "officer" ? "member" : "officer";
+      await c.query(`UPDATE alliance_members SET role=$1 WHERE kingdom_id=$2 AND alliance_id=$3`, [nextRole, Number(t.rows[0].id), allianceId]);
+      return nextRole;
+    });
+    return res.json({ ok: true, newRole });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });
   }

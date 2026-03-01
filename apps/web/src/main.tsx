@@ -407,6 +407,26 @@ function OverviewView() {
     }
   }
 
+  async function cancelShield() {
+    if (!window.confirm("Cancel shield now? This will start a 24-hour shield cooldown.")) return;
+    setShieldBusy(true);
+    setStatusMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/shield/cancel`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setStatusMsg("Shield cancelled. 24-hour cooldown started.");
+      await load();
+    } catch (e: any) {
+      setStatusMsg(`Shield cancel failed: ${String(e?.message || e)}`);
+    } finally {
+      setShieldBusy(false);
+    }
+  }
+
   async function cancelOverviewBuildQueueItem(queueId: number) {
     setStatusMsg("");
     setCancelBuildId(queueId);
@@ -511,13 +531,24 @@ function OverviewView() {
               {shield?.status === "cooldown" ? `Cooldown: ${formatDuration(Number(shield?.remainingSeconds || 0))} (retaliation only)` : null}
               {(shield?.status === "none" || !shield) ? "None — no active shield protection" : null}
             </div>
-            <button
-              style={{ ...BTN_STYLE, fontSize: 13, padding: "7px 14px" }}
-              disabled={shieldBusy || (shield && String(shield.status || "none") !== "none")}
-              onClick={() => void activateShield()}
-            >
-              {shieldBusy ? "..." : "Activate Shield"}
-            </button>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                style={{ ...BTN_STYLE, fontSize: 13, padding: "7px 14px" }}
+                disabled={shieldBusy || (shield && String(shield.status || "none") !== "none")}
+                onClick={() => void activateShield()}
+              >
+                {shieldBusy ? "..." : "Activate Shield"}
+              </button>
+              {shield && (String(shield.status || "") === "pending" || String(shield.status || "") === "active") ? (
+                <button
+                  style={{ ...BTN_STYLE, fontSize: 13, padding: "7px 14px", borderColor: "rgba(255,120,120,.5)", background: "rgba(180,50,50,.25)" }}
+                  disabled={shieldBusy}
+                  onClick={() => void cancelShield()}
+                >
+                  {shieldBusy ? "..." : "Cancel Shield"}
+                </button>
+              ) : null}
+            </div>
           </div>
 
           <div style={CARD}>
@@ -1011,11 +1042,6 @@ function BuildingsView() {
           const bm = buildingMap[buildCode];
           const meta = BUILDING_META[buildCode] || { sigil: "??", summary: "Kingdom structure.", unlocks: "" };
           const prod = BUILDING_PROD[buildCode];
-          const currentBuilt = Number(bm.level || 0);
-          const currentQueued = Number(queueCounts[buildCode] || 0);
-          const firstLevel = currentBuilt + currentQueued + 1;
-          const lastLevel = firstLevel + buildQty - 1;
-          const levelSum = (buildQty * (firstLevel + lastLevel)) / 2;
           const rawSec = Number(bm.base_build_seconds || 0);
           const buildTimeTxt = rawSec >= 604800
             ? `${Math.floor(rawSec / 604800)} week`
@@ -1024,8 +1050,8 @@ function BuildingsView() {
             : rawSec >= 3600
             ? `${Math.floor(rawSec / 3600)} hour${Math.floor(rawSec / 3600) !== 1 ? "s" : ""}`
             : `${Math.floor(rawSec / 60)} min`;
-          const totalWood = Math.floor(Number(bm.wood_cost || 0) * levelSum);
-          const totalStone = Math.floor(Number(bm.stone_cost || 0) * levelSum);
+          const totalWood = Math.floor(Number(bm.wood_cost || 0) * buildQty);
+          const totalStone = Math.floor(Number(bm.stone_cost || 0) * buildQty);
           const totalLand = Number(bm.land_cost || 0) * buildQty;
           const canAffordWood = Number(k?.wood || 0) >= totalWood;
           const canAffordStone = Number(k?.stone || 0) >= totalStone;
@@ -1768,30 +1794,77 @@ function SettlementsView() {
   );
 }
 
+function AllianceRoleBadge({ role }: { role: string }) {
+  const cfg =
+    role === "owner" ? { label: "Leader", bg: "#c8952a", color: "#1a1208" } :
+    role === "officer" ? { label: "Officer", bg: "#4a7fc1", color: "#fff" } :
+    { label: "Member", bg: "rgba(255,255,255,.13)", color: TEXT_MAIN };
+  return (
+    <span style={{ background: cfg.bg, color: cfg.color, padding: "2px 9px", borderRadius: 4, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>
+      {cfg.label}
+    </span>
+  );
+}
+
+function AllianceRelBadge({ type }: { type: string }) {
+  const cfg: Record<string, { color: string; label: string }> = {
+    ally:       { color: "#4caf50", label: "Ally" },
+    nap:        { color: "#29b6f6", label: "NAP" },
+    enemy:      { color: "#ef5350", label: "Enemy" },
+    cease_fire: { color: "#ffa726", label: "Cease Fire" },
+    joint_ops:  { color: "#ab47bc", label: "Joint Ops" },
+  };
+  const c = cfg[type] || { color: "#888", label: type };
+  return (
+    <span style={{ background: c.color, color: "#fff", padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700 }}>
+      {c.label}
+    </span>
+  );
+}
+
+function AllianceProgressBar({ value, max, color }: { value: number; max: number; color: string }) {
+  const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
+  return (
+    <div style={{ background: "rgba(0,0,0,.45)", borderRadius: 4, height: 8, width: "100%", overflow: "hidden" }}>
+      <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 4, transition: "width .3s ease" }} />
+    </div>
+  );
+}
+
 function AllianceView() {
-  const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "Elixer");
+  const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "");
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [actionMsg, setActionMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Create form
   const [createSlug, setCreateSlug] = useState("my-alliance");
   const [createName, setCreateName] = useState("My Alliance");
   const [createDesc, setCreateDesc] = useState("");
 
+  // Join form
   const [joinAllianceId, setJoinAllianceId] = useState<number>(0);
 
+  // Edit alliance info (leader/officer)
+  const [editMode, setEditMode] = useState(false);
+  const [editDesc, setEditDesc] = useState("");
+  const [editImageUrl, setEditImageUrl] = useState("");
+
+  // Diplomacy
   const [relationType, setRelationType] = useState("ally");
   const [relationTarget, setRelationTarget] = useState("");
   const [relationNote, setRelationNote] = useState("");
 
-  const [contribCode, setContribCode] = useState("alliance_hall");
-  const [contribGold, setContribGold] = useState(0);
-  const [contribStone, setContribStone] = useState(0);
-  const [contribWood, setContribWood] = useState(0);
+  // Supply (per building, inline)
+  const [supplyCode, setSupplyCode] = useState("");
+  const [supplyGold, setSupplyGold] = useState(0);
+  const [supplyStone, setSupplyStone] = useState(0);
+  const [supplyWood, setSupplyWood] = useState(0);
 
   async function load() {
+    if (!kingdom.trim()) return;
     setLoading(true);
     setError("");
     try {
@@ -1802,9 +1875,6 @@ function AllianceView() {
       if (!joinAllianceId && Array.isArray(j.alliances) && j.alliances.length > 0) {
         setJoinAllianceId(Number(j.alliances[0].id));
       }
-      if (Array.isArray(j.projects) && j.projects.length > 0 && !j.projects.find((p: any) => String(p.buildingCode || "") === contribCode)) {
-        setContribCode(String(j.projects[0].buildingCode || "alliance_hall"));
-      }
     } catch (e: any) {
       setData(null);
       setError(String(e?.message || e));
@@ -1814,127 +1884,139 @@ function AllianceView() {
   }
 
   useEffect(() => {
-    void load();
+    if (kingdom.trim()) void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function createAlliance() {
-    setBusy(true);
-    setActionMsg("");
+    setBusy(true); setActionMsg("");
     try {
       const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/create`, {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({
-          slug: createSlug,
-          name: createName,
-          description: createDesc,
-          imageUrl: "",
-        }),
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ slug: createSlug, name: createName, description: createDesc, imageUrl: "" }),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setActionMsg(`Alliance created: ${String(j?.alliance?.name || createName)}`);
+      setActionMsg(`Alliance "${String(j?.alliance?.name || createName)}" created!`);
       await load();
-    } catch (e: any) {
-      setActionMsg(`Create failed: ${String(e?.message || e)}`);
-    } finally {
-      setBusy(false);
-    }
+    } catch (e: any) { setActionMsg(`Create failed: ${String(e?.message || e)}`); }
+    finally { setBusy(false); }
   }
 
   async function joinAlliance() {
     if (!joinAllianceId) return;
-    setBusy(true);
-    setActionMsg("");
+    setBusy(true); setActionMsg("");
     try {
       const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/join`, {
-        method: "POST",
-        headers: authHeaders(),
+        method: "POST", headers: authHeaders(),
         body: JSON.stringify({ allianceId: joinAllianceId }),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setActionMsg(`Joined alliance #${joinAllianceId}`);
+      setActionMsg("Joined alliance!");
       await load();
-    } catch (e: any) {
-      setActionMsg(`Join failed: ${String(e?.message || e)}`);
-    } finally {
-      setBusy(false);
-    }
+    } catch (e: any) { setActionMsg(`Join failed: ${String(e?.message || e)}`); }
+    finally { setBusy(false); }
   }
 
   async function leaveAlliance() {
-    setBusy(true);
-    setActionMsg("");
+    setBusy(true); setActionMsg("");
     try {
       const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/leave`, {
-        method: "POST",
-        headers: authHeaders(),
+        method: "POST", headers: authHeaders(),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       setActionMsg(Boolean(j?.disbanded) ? "Alliance disbanded." : "Left alliance.");
       await load();
-    } catch (e: any) {
-      setActionMsg(`Leave failed: ${String(e?.message || e)}`);
-    } finally {
-      setBusy(false);
-    }
+    } catch (e: any) { setActionMsg(`Leave failed: ${String(e?.message || e)}`); }
+    finally { setBusy(false); }
+  }
+
+  async function saveAllianceInfo() {
+    setBusy(true); setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/update`, {
+        method: "PATCH", headers: authHeaders(),
+        body: JSON.stringify({ description: editDesc, imageUrl: editImageUrl }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg("Alliance info updated.");
+      setEditMode(false);
+      await load();
+    } catch (e: any) { setActionMsg(`Update failed: ${String(e?.message || e)}`); }
+    finally { setBusy(false); }
+  }
+
+  async function kickMember(targetKingdom: string) {
+    if (!confirm(`Kick ${targetKingdom} from the alliance?`)) return;
+    setBusy(true); setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/kick`, {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ targetKingdom }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Kicked ${targetKingdom}.`);
+      await load();
+    } catch (e: any) { setActionMsg(`Kick failed: ${String(e?.message || e)}`); }
+    finally { setBusy(false); }
+  }
+
+  async function promoteMember(targetKingdom: string, currentRole: string) {
+    const action = currentRole === "officer" ? "demote to Member" : "promote to Officer";
+    if (!confirm(`${action.charAt(0).toUpperCase() + action.slice(1)}: ${targetKingdom}?`)) return;
+    setBusy(true); setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/promote`, {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ targetKingdom }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`${targetKingdom} is now ${String(j?.newRole || "updated")}.`);
+      await load();
+    } catch (e: any) { setActionMsg(`Failed: ${String(e?.message || e)}`); }
+    finally { setBusy(false); }
   }
 
   async function saveRelation() {
-    setBusy(true);
-    setActionMsg("");
+    setBusy(true); setActionMsg("");
     try {
       const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/relation`, {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({
-          relationType,
-          targetName: relationTarget,
-          note: relationNote,
-        }),
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ relationType, targetName: relationTarget, note: relationNote }),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setActionMsg(`Relation saved: ${relationType} -> ${relationTarget}`);
-      setRelationTarget("");
-      setRelationNote("");
+      setActionMsg(`Relation saved: ${relationType} → ${relationTarget}`);
+      setRelationTarget(""); setRelationNote("");
       await load();
-    } catch (e: any) {
-      setActionMsg(`Relation failed: ${String(e?.message || e)}`);
-    } finally {
-      setBusy(false);
-    }
+    } catch (e: any) { setActionMsg(`Failed: ${String(e?.message || e)}`); }
+    finally { setBusy(false); }
   }
 
-  async function contribute() {
-    setBusy(true);
-    setActionMsg("");
+  async function contribute(buildingCode: string) {
+    setBusy(true); setActionMsg("");
     try {
       const r = await fetch(`${API_BASE}/api/alliance/${encodeURIComponent(kingdom)}/contribute`, {
-        method: "POST",
-        headers: authHeaders(),
+        method: "POST", headers: authHeaders(),
         body: JSON.stringify({
-          buildingCode: contribCode,
-          gold: Math.max(0, Math.floor(Number(contribGold || 0))),
-          stone: Math.max(0, Math.floor(Number(contribStone || 0))),
-          wood: Math.max(0, Math.floor(Number(contribWood || 0))),
+          buildingCode,
+          gold: Math.max(0, Math.floor(Number(supplyGold || 0))),
+          stone: Math.max(0, Math.floor(Number(supplyStone || 0))),
+          wood: Math.max(0, Math.floor(Number(supplyWood || 0))),
         }),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setActionMsg(j?.project?.leveledUp ? `${contribCode} leveled up.` : `Contribution sent to ${contribCode}.`);
-      setContribGold(0);
-      setContribStone(0);
-      setContribWood(0);
+      setActionMsg(j?.project?.leveledUp ? `${buildingCode} leveled up!` : `Supplies sent.`);
+      setSupplyCode(""); setSupplyGold(0); setSupplyStone(0); setSupplyWood(0);
       await load();
-    } catch (e: any) {
-      setActionMsg(`Contribution failed: ${String(e?.message || e)}`);
-    } finally {
-      setBusy(false);
-    }
+    } catch (e: any) { setActionMsg(`Supply failed: ${String(e?.message || e)}`); }
+    finally { setBusy(false); }
   }
 
   const alliance = data?.alliance;
@@ -1943,124 +2025,221 @@ function AllianceView() {
   const projects = (data?.projects || []) as Array<any>;
   const relations = (data?.relations || []) as Array<any>;
   const alliances = (data?.alliances || []) as Array<any>;
+  const isLeader = member?.role === "owner";
+  const canManage = member?.role === "owner" || member?.role === "officer";
+
+  const TH: React.CSSProperties = { textAlign: "left", padding: "8px 10px", color: TEXT_MUTED, fontWeight: 600, fontSize: 13, borderBottom: "1px solid rgba(216,176,117,.18)" };
+  const TD: React.CSSProperties = { padding: "10px 10px", borderBottom: "1px solid rgba(255,255,255,.04)" };
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
+      {/* Kingdom selector */}
       <div style={CARD}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
-          <div>
-            <div style={{ fontSize: 34, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>
-              Alliance - {data?.kingdom?.name || kingdom}
-            </div>
-            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 18, fontWeight: 700 }}>
-              Gold: {Number(data?.kingdom?.gold || 0).toLocaleString()} • Stone: {Number(data?.kingdom?.stone || 0).toLocaleString()} • Wood: {Number(data?.kingdom?.wood || 0).toLocaleString()}
-            </div>
-          </div>
+          <div style={{ fontSize: 26, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>🤝 Alliance</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={INPUT_STYLE} />
+            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={INPUT_STYLE} placeholder="Your kingdom name" />
             <button onClick={() => void load()} style={BTN_STYLE}>Load</button>
           </div>
         </div>
-        {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading alliance...</div> : null}
-        {error ? (
-          <div style={{ marginTop: 8, color: "#ffae9a", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span>{error}</span>
-            <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
-          </div>
-        ) : null}
+        {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading...</div> : null}
+        {error ? <div style={{ marginTop: 8, color: "#ffae9a" }}>{error} <button onClick={() => void load()} style={{ ...BTN_STYLE, padding: "4px 10px", fontSize: 13 }}>Retry</button></div> : null}
         {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
       </div>
 
-      {!alliance ? (
+      {/* Not in an alliance */}
+      {!alliance && !loading ? (
         <>
           <div style={CARD}>
-            <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Create Alliance</div>
-            <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))" }}>
-              <input value={createSlug} onChange={(e) => setCreateSlug(e.target.value)} style={INPUT_STYLE} placeholder="slug" />
-              <input value={createName} onChange={(e) => setCreateName(e.target.value)} style={INPUT_STYLE} placeholder="name" />
-              <input value={createDesc} onChange={(e) => setCreateDesc(e.target.value)} style={INPUT_STYLE} placeholder="description" />
-            </div>
-            <div style={{ marginTop: 8 }}>
-              <button onClick={() => void createAlliance()} style={BTN_STYLE} disabled={busy}>
-                {busy ? "Working..." : "Create"}
-              </button>
-            </div>
-          </div>
-
-          <div style={CARD}>
-            <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Join Existing Alliance</div>
+            <div style={{ fontWeight: 800, marginBottom: 10, fontSize: 20 }}>Found an Alliance to Join?</div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
-              <select value={String(joinAllianceId)} onChange={(e) => setJoinAllianceId(Number(e.target.value) || 0)} style={INPUT_STYLE}>
+              <select value={String(joinAllianceId)} onChange={(e) => setJoinAllianceId(Number(e.target.value) || 0)} style={{ ...INPUT_STYLE, flex: 1 }}>
                 {alliances.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    #{a.id} {a.name} ({Number(a.members || 0)} members)
-                  </option>
+                  <option key={a.id} value={a.id}>#{a.id} {a.name} — {Number(a.members || 0)} members</option>
                 ))}
               </select>
               <button onClick={() => void joinAlliance()} style={BTN_STYLE} disabled={busy || !joinAllianceId}>
-                {busy ? "Working..." : "Join"}
+                {busy ? "Joining..." : "Join"}
               </button>
             </div>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th style={{ textAlign: "left", padding: 8 }}>ID</th>
-                    <th style={{ textAlign: "left", padding: 8 }}>Name</th>
-                    <th style={{ textAlign: "left", padding: 8 }}>Slug</th>
-                    <th style={{ textAlign: "right", padding: 8 }}>Members</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {alliances.map((a) => (
-                    <tr key={a.id} onClick={() => setJoinAllianceId(Number(a.id))} style={{ cursor: "pointer", background: Number(a.id) === Number(joinAllianceId) ? "rgba(216,176,117,.12)" : "transparent" }}>
-                      <td style={{ padding: 8 }}>{a.id}</td>
-                      <td style={{ padding: 8 }}>{a.name}</td>
-                      <td style={{ padding: 8 }}>{a.slug}</td>
-                      <td style={{ padding: 8, textAlign: "right" }}>{Number(a.members || 0)}</td>
+            {alliances.length === 0 ? <div style={{ color: TEXT_MUTED, fontSize: 14 }}>No alliances exist yet. Be the first to create one!</div> : null}
+            {alliances.length > 0 ? (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={TH}>Name</th>
+                      <th style={TH}>Tag</th>
+                      <th style={{ ...TH, textAlign: "right" }}>Members</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {alliances.map((a) => (
+                      <tr key={a.id} onClick={() => setJoinAllianceId(Number(a.id))} style={{ cursor: "pointer", background: Number(a.id) === joinAllianceId ? "rgba(216,176,117,.1)" : "transparent" }}>
+                        <td style={TD}>{a.name}</td>
+                        <td style={TD}>[{String(a.slug || "").toUpperCase()}]</td>
+                        <td style={{ ...TD, textAlign: "right" }}>{Number(a.members || 0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </div>
+
+          <div style={CARD}>
+            <div style={{ fontWeight: 800, marginBottom: 10, fontSize: 20 }}>Create a New Alliance</div>
+            <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))" }}>
+              <div>
+                <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 4 }}>Tag / Slug</div>
+                <input value={createSlug} onChange={(e) => setCreateSlug(e.target.value)} style={INPUT_STYLE} placeholder="e.g. kga" />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 4 }}>Alliance Name</div>
+                <input value={createName} onChange={(e) => setCreateName(e.target.value)} style={INPUT_STYLE} placeholder="e.g. Kingdom Game Addicts" />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 4 }}>Description</div>
+                <input value={createDesc} onChange={(e) => setCreateDesc(e.target.value)} style={INPUT_STYLE} placeholder="Short description" />
+              </div>
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <button onClick={() => void createAlliance()} style={BTN_STYLE} disabled={busy}>
+                {busy ? "Creating..." : "Create Alliance"}
+              </button>
             </div>
           </div>
         </>
       ) : null}
 
+      {/* In an alliance */}
       {alliance ? (
         <>
+          {/* Hero banner card */}
           <div style={CARD}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <div>
-                <div style={{ fontWeight: 800, fontSize: 24 }}>{alliance.name} [{alliance.slug}]</div>
-                <div style={{ color: TEXT_MUTED, marginTop: 4 }}>
-                  Role: {member?.role || "member"} • Members: {members.length}/{Number(alliance.memberCap || 15)}
-                </div>
-                {alliance.description ? <div style={{ color: TEXT_MUTED, marginTop: 4 }}>{alliance.description}</div> : null}
+            {/* Banner image */}
+            {alliance.imageUrl ? (
+              <div style={{ position: "relative", borderRadius: 8, overflow: "hidden", marginBottom: 16, height: 170 }}>
+                <img src={String(alliance.imageUrl)} alt="Alliance banner" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to bottom, transparent 35%, rgba(0,0,0,.72) 100%)" }} />
+                <span style={{ position: "absolute", bottom: 12, left: 14, fontSize: 42 }}>🛡️</span>
               </div>
-              <button onClick={() => void leaveAlliance()} style={BTN_STYLE} disabled={busy}>
-                {busy ? "Working..." : "Leave Alliance"}
+            ) : (
+              <div style={{ position: "relative", borderRadius: 8, overflow: "hidden", marginBottom: 16, height: 90, background: "linear-gradient(135deg, rgba(216,176,117,.18), rgba(120,88,43,.32))", display: "flex", alignItems: "center", paddingLeft: 16 }}>
+                <span style={{ fontSize: 40 }}>🛡️</span>
+              </div>
+            )}
+
+            {/* Title row */}
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "flex-start" }}>
+              <div>
+                <div style={{ fontSize: 28, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>
+                  Alliance – [{String(alliance.slug || "").toUpperCase()}] {alliance.name}
+                </div>
+                <div style={{ marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                  <AllianceRoleBadge role={member?.role || "member"} />
+                  <span style={{ color: TEXT_MUTED, fontSize: 13 }}>
+                    {members.length}/{Number(alliance.memberCap || 15)} Members
+                  </span>
+                  {alliance.createdAt ? (
+                    <span style={{ color: TEXT_MUTED, fontSize: 13 }}>
+                      Founded {new Date(String(alliance.createdAt)).toLocaleDateString()}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <button onClick={() => void leaveAlliance()} style={{ ...BTN_STYLE, padding: "7px 14px", fontSize: 13, borderColor: "rgba(255,100,100,.35)", background: "rgba(200,40,40,.12)" }} disabled={busy}>
+                Leave Alliance
               </button>
+            </div>
+
+            {/* Description */}
+            <div style={{ marginTop: 14 }}>
+              {editMode ? (
+                <div style={{ display: "grid", gap: 8 }}>
+                  <textarea
+                    value={editDesc}
+                    onChange={(e) => setEditDesc(e.target.value)}
+                    style={{ ...INPUT_STYLE, width: "100%", minHeight: 80, resize: "vertical" }}
+                    placeholder="Alliance description…"
+                  />
+                  <input
+                    value={editImageUrl}
+                    onChange={(e) => setEditImageUrl(e.target.value)}
+                    style={{ ...INPUT_STYLE, width: "100%" }}
+                    placeholder="Banner image URL (optional)"
+                  />
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => void saveAllianceInfo()} style={BTN_STYLE} disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+                    <button onClick={() => setEditMode(false)} style={{ ...BTN_STYLE, opacity: .6 }}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  {alliance.description ? (
+                    <div style={{ color: TEXT_MUTED, fontSize: 15, lineHeight: 1.6 }}>{alliance.description}</div>
+                  ) : (
+                    <div style={{ color: "rgba(255,255,255,.28)", fontSize: 14, fontStyle: "italic" }}>No description set.</div>
+                  )}
+                  {canManage ? (
+                    <button
+                      onClick={() => { setEditDesc(String(alliance.description || "")); setEditImageUrl(String(alliance.imageUrl || "")); setEditMode(true); }}
+                      style={{ ...BTN_STYLE, marginTop: 10, padding: "5px 12px", fontSize: 12 }}
+                    >
+                      ✏️ Edit Description
+                    </button>
+                  ) : null}
+                </div>
+              )}
             </div>
           </div>
 
+          {/* Members */}
           <div style={CARD}>
-            <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Alliance Members</div>
+            <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 12 }}>Members ({members.length}/{Number(alliance.memberCap || 15)})</div>
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
-                    <th style={{ textAlign: "left", padding: 8 }}>Kingdom</th>
-                    <th style={{ textAlign: "left", padding: 8 }}>Role</th>
-                    <th style={{ textAlign: "right", padding: 8 }}>Land</th>
+                    <th style={TH}>Kingdom</th>
+                    <th style={TH}>Role</th>
+                    <th style={{ ...TH, textAlign: "right" }}>Networth</th>
+                    <th style={{ ...TH, textAlign: "right" }}>Land</th>
+                    <th style={{ ...TH, textAlign: "center" }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {members.map((m) => (
-                    <tr key={`${m.kingdomId}-${m.kingdomName}`}>
-                      <td style={{ padding: 8 }}>{m.kingdomName}</td>
-                      <td style={{ padding: 8 }}>{m.role}</td>
-                      <td style={{ padding: 8, textAlign: "right" }}>{Number(m.land || 0).toLocaleString()}</td>
+                    <tr key={m.kingdomId}>
+                      <td style={{ ...TD, fontWeight: 600 }}>{m.kingdomName}</td>
+                      <td style={TD}><AllianceRoleBadge role={m.role} /></td>
+                      <td style={{ ...TD, textAlign: "right", color: ACCENT }}>{Number(m.networth || 0).toLocaleString()}</td>
+                      <td style={{ ...TD, textAlign: "right" }}>{Number(m.land || 0).toLocaleString()}</td>
+                      <td style={{ ...TD, textAlign: "center" }}>
+                        <div style={{ display: "flex", gap: 5, justifyContent: "center" }}>
+                          <button title="Send pigeon" style={{ ...BTN_STYLE, padding: "4px 8px", fontSize: 13 }}>🕊️</button>
+                          {isLeader && m.role !== "owner" ? (
+                            <>
+                              <button
+                                title={m.role === "officer" ? "Demote to Member" : "Promote to Officer"}
+                                onClick={() => void promoteMember(String(m.kingdomName), String(m.role))}
+                                style={{ ...BTN_STYLE, padding: "4px 8px", fontSize: 12 }}
+                                disabled={busy}
+                              >
+                                {m.role === "officer" ? "⬇️" : "⬆️"}
+                              </button>
+                              <button
+                                title="Kick"
+                                onClick={() => void kickMember(String(m.kingdomName))}
+                                style={{ ...BTN_STYLE, padding: "4px 8px", fontSize: 13, borderColor: "rgba(255,100,100,.4)", background: "rgba(200,40,40,.12)" }}
+                                disabled={busy}
+                              >
+                                ✕
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -2068,75 +2247,110 @@ function AllianceView() {
             </div>
           </div>
 
+          {/* Alliance Buildings */}
           <div style={CARD}>
-            <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Alliance Projects</div>
-            <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", marginBottom: 10 }}>
-              <select value={contribCode} onChange={(e) => setContribCode(e.target.value)} style={INPUT_STYLE}>
-                {projects.map((p) => (
-                  <option key={p.buildingCode} value={p.buildingCode}>{p.name}</option>
+            <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 12 }}>Alliance Buildings</div>
+            <div style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fill, minmax(270px, 1fr))" }}>
+              {projects.map((p) => (
+                <div key={p.buildingCode} style={{ background: "rgba(0,0,0,.32)", borderRadius: 10, border: "1px solid rgba(216,176,117,.15)", padding: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                    <div style={{ fontWeight: 700, fontSize: 15 }}>{p.name}</div>
+                    <div style={{ background: "rgba(216,176,117,.2)", color: ACCENT, padding: "2px 10px", borderRadius: 12, fontSize: 13, fontWeight: 700 }}>
+                      Lv {Number(p.level || 0)}
+                    </div>
+                  </div>
+                  <div style={{ color: TEXT_MUTED, fontSize: 12, marginBottom: 10 }}>{p.effectText}</div>
+
+                  {Number(p.targetGold) > 0 ? (
+                    <div style={{ marginBottom: 7 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: TEXT_MUTED, marginBottom: 3 }}>
+                        <span>💰 Gold</span>
+                        <span>{Number(p.progressGold).toLocaleString()} / {Number(p.targetGold).toLocaleString()}</span>
+                      </div>
+                      <AllianceProgressBar value={Number(p.progressGold)} max={Number(p.targetGold)} color="#d8b075" />
+                    </div>
+                  ) : null}
+                  {Number(p.targetStone) > 0 ? (
+                    <div style={{ marginBottom: 7 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: TEXT_MUTED, marginBottom: 3 }}>
+                        <span>🪨 Stone</span>
+                        <span>{Number(p.progressStone).toLocaleString()} / {Number(p.targetStone).toLocaleString()}</span>
+                      </div>
+                      <AllianceProgressBar value={Number(p.progressStone)} max={Number(p.targetStone)} color="#9ab3c0" />
+                    </div>
+                  ) : null}
+                  {Number(p.targetWood) > 0 ? (
+                    <div style={{ marginBottom: 7 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: TEXT_MUTED, marginBottom: 3 }}>
+                        <span>🪵 Wood</span>
+                        <span>{Number(p.progressWood).toLocaleString()} / {Number(p.targetWood).toLocaleString()}</span>
+                      </div>
+                      <AllianceProgressBar value={Number(p.progressWood)} max={Number(p.targetWood)} color="#8bc47a" />
+                    </div>
+                  ) : null}
+
+                  {supplyCode === p.buildingCode ? (
+                    <div style={{ marginTop: 10, borderTop: "1px solid rgba(255,255,255,.08)", paddingTop: 10 }}>
+                      <div style={{ display: "grid", gap: 6, gridTemplateColumns: "repeat(auto-fit, minmax(72px, 1fr))", marginBottom: 8 }}>
+                        {Number(p.targetGold) > 0 ? <input type="number" min={0} value={supplyGold} onChange={(e) => setSupplyGold(Number(e.target.value) || 0)} style={{ ...INPUT_STYLE, padding: "6px 8px", fontSize: 13 }} placeholder="💰" /> : null}
+                        {Number(p.targetStone) > 0 ? <input type="number" min={0} value={supplyStone} onChange={(e) => setSupplyStone(Number(e.target.value) || 0)} style={{ ...INPUT_STYLE, padding: "6px 8px", fontSize: 13 }} placeholder="🪨" /> : null}
+                        {Number(p.targetWood) > 0 ? <input type="number" min={0} value={supplyWood} onChange={(e) => setSupplyWood(Number(e.target.value) || 0)} style={{ ...INPUT_STYLE, padding: "6px 8px", fontSize: 13 }} placeholder="🪵" /> : null}
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button onClick={() => void contribute(p.buildingCode)} style={{ ...BTN_STYLE, flex: 1, padding: "7px 8px", fontSize: 13 }} disabled={busy}>
+                          {busy ? "…" : "Supply"}
+                        </button>
+                        <button onClick={() => setSupplyCode("")} style={{ ...BTN_STYLE, padding: "7px 10px", fontSize: 13, opacity: .6 }}>Cancel</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => { setSupplyCode(p.buildingCode); setSupplyGold(0); setSupplyStone(0); setSupplyWood(0); }}
+                      style={{ ...BTN_STYLE, width: "100%", marginTop: 8, padding: "7px 8px", fontSize: 13 }}
+                    >
+                      Supply
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Diplomacy */}
+          <div style={CARD}>
+            <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 12 }}>Diplomacy</div>
+            {relations.length > 0 ? (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+                {relations.map((r) => (
+                  <div key={r.id} style={{ background: "rgba(0,0,0,.3)", border: "1px solid rgba(216,176,117,.14)", borderRadius: 8, padding: "7px 12px", display: "flex", gap: 8, alignItems: "center" }}>
+                    <AllianceRelBadge type={String(r.relation_type)} />
+                    <span style={{ fontWeight: 600, fontSize: 14 }}>{r.target_name}</span>
+                    {r.note ? <span style={{ color: TEXT_MUTED, fontSize: 12 }}>({r.note})</span> : null}
+                  </div>
                 ))}
-              </select>
-              <input type="number" min={0} value={contribGold} onChange={(e) => setContribGold(Number(e.target.value) || 0)} style={INPUT_STYLE} placeholder="gold" />
-              <input type="number" min={0} value={contribStone} onChange={(e) => setContribStone(Number(e.target.value) || 0)} style={INPUT_STYLE} placeholder="stone" />
-              <input type="number" min={0} value={contribWood} onChange={(e) => setContribWood(Number(e.target.value) || 0)} style={INPUT_STYLE} placeholder="wood" />
-            </div>
-            <div style={{ marginBottom: 10 }}>
-              <button onClick={() => void contribute()} style={BTN_STYLE} disabled={busy}>
-                {busy ? "Working..." : "Contribute"}
-              </button>
-            </div>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th style={{ textAlign: "left", padding: 8 }}>Project</th>
-                    <th style={{ textAlign: "left", padding: 8 }}>Effect</th>
-                    <th style={{ textAlign: "right", padding: 8 }}>Level</th>
-                    <th style={{ textAlign: "right", padding: 8 }}>Gold</th>
-                    <th style={{ textAlign: "right", padding: 8 }}>Stone</th>
-                    <th style={{ textAlign: "right", padding: 8 }}>Wood</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {projects.map((p) => (
-                    <tr key={p.buildingCode}>
-                      <td style={{ padding: 8 }}>{p.name}</td>
-                      <td style={{ padding: 8, color: TEXT_MUTED }}>{p.effectText}</td>
-                      <td style={{ padding: 8, textAlign: "right" }}>{Number(p.level || 0)}</td>
-                      <td style={{ padding: 8, textAlign: "right" }}>{Number(p.progressGold || 0).toLocaleString()} / {Number(p.targetGold || 0).toLocaleString()}</td>
-                      <td style={{ padding: 8, textAlign: "right" }}>{Number(p.progressStone || 0).toLocaleString()} / {Number(p.targetStone || 0).toLocaleString()}</td>
-                      <td style={{ padding: 8, textAlign: "right" }}>{Number(p.progressWood || 0).toLocaleString()} / {Number(p.targetWood || 0).toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div style={CARD}>
-            <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Diplomacy Relations</div>
-            <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", marginBottom: 10 }}>
-              <select value={relationType} onChange={(e) => setRelationType(e.target.value)} style={INPUT_STYLE}>
-                <option value="ally">ally</option>
-                <option value="nap">nap</option>
-                <option value="enemy">enemy</option>
-                <option value="cease_fire">cease_fire</option>
-                <option value="joint_ops">joint_ops</option>
-              </select>
-              <input value={relationTarget} onChange={(e) => setRelationTarget(e.target.value)} style={INPUT_STYLE} placeholder="target kingdom/alliance" />
-              <input value={relationNote} onChange={(e) => setRelationNote(e.target.value)} style={INPUT_STYLE} placeholder="note" />
-            </div>
-            <div style={{ marginBottom: 10 }}>
-              <button onClick={() => void saveRelation()} style={BTN_STYLE} disabled={busy || !relationTarget.trim()}>
-                {busy ? "Working..." : "Save Relation"}
-              </button>
-            </div>
-            {relations.length === 0 ? <div style={{ color: TEXT_MUTED }}>No relations set.</div> : null}
-            {relations.map((r) => (
-              <div key={r.id} style={{ marginBottom: 6 }}>
-                {r.relation_type} - {r.target_name}{r.note ? ` (${r.note})` : ""}
               </div>
-            ))}
+            ) : (
+              <div style={{ color: TEXT_MUTED, marginBottom: 16, fontSize: 14 }}>No diplomatic relations declared.</div>
+            )}
+            {canManage ? (
+              <>
+                <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>Declare Relation</div>
+                <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}>
+                  <select value={relationType} onChange={(e) => setRelationType(e.target.value)} style={INPUT_STYLE}>
+                    <option value="ally">🤝 Ally</option>
+                    <option value="nap">🕊️ Non-Aggression Pact</option>
+                    <option value="enemy">⚔️ Enemy</option>
+                    <option value="cease_fire">🏳️ Cease Fire</option>
+                    <option value="joint_ops">🫂 Joint Ops</option>
+                  </select>
+                  <input value={relationTarget} onChange={(e) => setRelationTarget(e.target.value)} style={INPUT_STYLE} placeholder="Target alliance / kingdom" />
+                  <input value={relationNote} onChange={(e) => setRelationNote(e.target.value)} style={INPUT_STYLE} placeholder="Note (optional)" />
+                </div>
+                <button onClick={() => void saveRelation()} style={{ ...BTN_STYLE, marginTop: 8 }} disabled={busy || !relationTarget.trim()}>
+                  {busy ? "Saving…" : "Save Relation"}
+                </button>
+              </>
+            ) : null}
           </div>
         </>
       ) : null}
@@ -3082,7 +3296,7 @@ function WarRoomView() {
                       Send troops to explore unclaimed wilderness and gain land. Land cap: <strong style={{ color: ACCENT }}>{(data?.explore?.landCap || 20000).toLocaleString()}</strong>.
                       You currently have <strong style={{ color: ACCENT }}>{Number(k?.land || 0).toLocaleString()}</strong> land
                       ({Math.max(0, (data?.explore?.landCap || 20000) - Number(k?.land || 0)).toLocaleString()} remaining to explore).
-                      More troops = more land. Troops return in 5 min – 8 hours depending on size.
+                      Smaller kingdoms gain more from explore, larger kingdoms gain less. Land per explore is capped, and troops return in 5 min - 8 hours based on send size.
                     </div>
                     {Number(k?.land || 0) >= (data?.explore?.landCap || 20000) ? (
                       <div style={{ color: "#ffae9a", fontWeight: 700 }}>You've reached the explore land cap. Attack kingdoms for more land.</div>
@@ -6192,6 +6406,26 @@ function AccountView() {
     }
   }
 
+  async function cancelShield() {
+    if (!window.confirm("Cancel shield now? This will start a 24-hour shield cooldown.")) return;
+    setShieldBusy(true);
+    setStatusMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/shield/cancel`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setStatusMsg("Shield cancelled. 24-hour cooldown started.");
+      await load();
+    } catch (e: any) {
+      setStatusMsg(`Shield cancel failed: ${String(e?.message || e)}`);
+    } finally {
+      setShieldBusy(false);
+    }
+  }
+
   function logout() {
     if (!window.confirm("Log out of all web sessions?")) return;
     localStorage.removeItem("gg:auth");
@@ -6223,7 +6457,7 @@ function AccountView() {
         <div style={{ fontSize: 14, color: TEXT_MUTED, marginBottom: 12, lineHeight: 1.6 }}>
           A shield protects your kingdom from attacks. Activating a shield takes 24 hours to come into effect.
           While shielded, your kingdom cannot be attacked. Retaliation attacks are still allowed during cooldown.
-          You can only have one shield active at a time.
+          Cancelling a pending or active shield starts a 24-hour cooldown. You can only have one shield active at a time.
         </div>
         <div style={{ marginBottom: 10, fontSize: 14 }}>
           Status:{" "}
@@ -6234,13 +6468,24 @@ function AccountView() {
              "None"}
           </span>
         </div>
-        <button
-          style={{ ...BTN_STYLE, fontSize: 13 }}
-          disabled={shieldBusy || (shieldData && String(shieldData.status || "none") !== "none")}
-          onClick={() => void activateShield()}
-        >
-          {shieldBusy ? "..." : "Activate Shield"}
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            style={{ ...BTN_STYLE, fontSize: 13 }}
+            disabled={shieldBusy || (shieldData && String(shieldData.status || "none") !== "none")}
+            onClick={() => void activateShield()}
+          >
+            {shieldBusy ? "..." : "Activate Shield"}
+          </button>
+          {shieldData && (String(shieldData.status || "") === "pending" || String(shieldData.status || "") === "active") ? (
+            <button
+              style={{ ...BTN_STYLE, fontSize: 13, borderColor: "rgba(255,120,120,.5)", background: "rgba(180,50,50,.25)" }}
+              disabled={shieldBusy}
+              onClick={() => void cancelShield()}
+            >
+              {shieldBusy ? "..." : "Cancel Shield"}
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div style={CARD}>

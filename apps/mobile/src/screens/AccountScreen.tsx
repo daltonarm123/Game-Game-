@@ -6,6 +6,14 @@ import { Btn } from "../components/Btn";
 import { Card } from "../components/Card";
 import { Colors, Spacing } from "../theme";
 
+function formatShieldCountdown(totalSeconds: number) {
+  const s = Math.max(0, Math.floor(Number(totalSeconds || 0)));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return `${h}h ${m}m ${sec}s`;
+}
+
 export function AccountScreen({ navigation }: any) {
   const { auth, setAuth } = useAuth();
   const [kData, setKData] = useState<any>(null);
@@ -34,6 +42,25 @@ export function AccountScreen({ navigation }: any) {
       void load();
     } catch (e: any) { setMsg(String(e?.message || e)); }
     finally { setShieldBusy(false); }
+  }
+
+  async function cancelShield() {
+    Alert.alert("Cancel Shield", "Cancel shield now? This starts a 24-hour cooldown.", [
+      { text: "Keep", style: "cancel" },
+      {
+        text: "Cancel Shield",
+        style: "destructive",
+        onPress: async () => {
+          setShieldBusy(true); setMsg("");
+          try {
+            await kingdomApi.cancelShield(kName, auth!.token);
+            setMsg("Shield cancelled. 24-hour cooldown started.");
+            void load();
+          } catch (e: any) { setMsg(String(e?.message || e)); }
+          finally { setShieldBusy(false); }
+        },
+      },
+    ]);
   }
 
   async function saveTax() {
@@ -68,6 +95,7 @@ export function AccountScreen({ navigation }: any) {
 
   const shield = kData?.shield;
   const shieldStatus = shield?.status || "none";
+  const shieldSeconds = Number(shield?.remainingSeconds || 0);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -121,10 +149,16 @@ export function AccountScreen({ navigation }: any) {
           <Text style={[styles.shieldStatus, {
             color: shieldStatus === "active" ? Colors.success : shieldStatus === "cooldown" ? Colors.textMuted : Colors.error
           }]}>
-            {shieldStatus === "active" ? "🛡️ Shield Active" : shieldStatus === "cooldown" ? "⏳ Shield Cooldown" : "❌ No Shield"}
+            {shieldStatus === "active" ? "🛡️ Shield Active" : shieldStatus === "pending" ? "⏳ Shield Pending" : shieldStatus === "cooldown" ? "⏳ Shield Cooldown" : "❌ No Shield"}
           </Text>
+          {shieldStatus !== "none" ? (
+            <Text style={[styles.muted, { marginTop: 6 }]}>Timer: {formatShieldCountdown(shieldSeconds)}</Text>
+          ) : null}
           {shieldStatus === "none" && (
             <Btn label="Activate Shield" onPress={activateShield} loading={shieldBusy} style={{ marginTop: 10 }} />
+          )}
+          {(shieldStatus === "pending" || shieldStatus === "active") && (
+            <Btn label="Cancel Shield" onPress={cancelShield} loading={shieldBusy} variant="danger" style={{ marginTop: 10 }} />
           )}
         </Card>
 

@@ -71,6 +71,9 @@ export const kingdomApi = {
   activateShield: (name: string, token: string) =>
     post(`/api/kingdom/${encodeURIComponent(name)}/shield/activate`, {}, token),
 
+  cancelShield: (name: string, token: string) =>
+    post(`/api/kingdom/${encodeURIComponent(name)}/shield/cancel`, {}, token),
+
   claimDailyBonus: (name: string, token: string) =>
     post(`/api/kingdom/${encodeURIComponent(name)}/daily-bonus/claim`, {}, token),
 
