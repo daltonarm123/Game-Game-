@@ -5675,6 +5675,7 @@ function RankingsView() {
   const [chartItems, setChartItems] = useState<Array<{ id: number; networth: number; recordedAt: string }>>([]);
   const [chartLoading, setChartLoading] = useState(false);
   const [chartError, setChartError] = useState("");
+  const [hoveredRow, setHoveredRow] = useState<string | number | null>(null);
   const PAGE_SIZE = 20;
   const pageWindow = paginationWindow(total, page, PAGE_SIZE);
 
@@ -5719,11 +5720,9 @@ function RankingsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, page]);
 
-  // Auto-refresh every 30s so rankings update after ticks without manual reload
+  // Auto-refresh every 30s so rankings stay current between ticks
   useEffect(() => {
-    const t = setInterval(() => {
-      void load(page, search, tab);
-    }, 30_000);
+    const t = setInterval(() => { void load(page, search, tab); }, 30_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, page, search]);
@@ -5761,8 +5760,46 @@ function RankingsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chartWindow]);
 
-  const TH: React.CSSProperties = { padding: "8px 10px", textAlign: "left", color: ACCENT, fontSize: 13, borderBottom: "1px solid rgba(216,176,117,.25)", whiteSpace: "nowrap" };
-  const TD: React.CSSProperties = { padding: "7px 10px", fontSize: 13, borderBottom: "1px solid rgba(255,255,255,.06)" };
+  // Compute SVG chart geometry from raw networth history items
+  const chartGeom = useMemo(() => {
+    if (chartItems.length < 2) return null;
+    const W = 900, H = 240, padL = 64, padR = 24, padT = 20, padB = 30;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const nws = chartItems.map((c) => c.networth);
+    const minNw = Math.min(...nws), maxNw = Math.max(...nws);
+    const range = maxNw - minNw || 1;
+    const plotted = chartItems.map((c, i) => ({
+      px: padL + (i / (chartItems.length - 1)) * plotW,
+      py: padT + (1 - (c.networth - minNw) / range) * plotH,
+    }));
+    const linePath = plotted.map((p, i) => `${i === 0 ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}`).join(" ");
+    const areaPath = `${linePath} L${plotted[plotted.length - 1].px.toFixed(1)},${(H - padB).toFixed(1)} L${padL},${(H - padB).toFixed(1)} Z`;
+    const yTicks = Array.from({ length: 5 }, (_, i) => {
+      const frac = i / 4;
+      return { y: padT + frac * plotH, val: maxNw - frac * range };
+    });
+    return { width: W, height: H, padL, padR, plotted, linePath, areaPath, yTicks };
+  }, [chartItems]);
+
+  const TH: React.CSSProperties = {
+    padding: "9px 12px", textAlign: "left", color: ACCENT, fontSize: 11, fontWeight: 700,
+    letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap",
+    borderBottom: "1px solid rgba(216,176,117,.2)", background: "rgba(0,0,0,.22)",
+  };
+  const TD: React.CSSProperties = { padding: "10px 12px", fontSize: 13, borderBottom: "1px solid rgba(255,255,255,.05)" };
+
+  // Top 3 shown as podium cards on page 0 (not during search)
+  const showPodium = page === 0 && !search;
+  const podiumItems = showPodium
+    ? (tab === "kingdoms" ? kingdoms.slice(0, 3) : alliances.slice(0, 3))
+    : [];
+  // Table body skips top 3 when podium is shown
+  const tableItems = tab === "kingdoms"
+    ? (showPodium ? kingdoms.slice(3) : kingdoms)
+    : (showPodium ? alliances.slice(3) : alliances);
+
+  const rankMedal = (r: number) => r === 1 ? "👑" : r === 2 ? "🥈" : r === 3 ? "🥉" : null;
+  const rankColor = (r: number) => r === 1 ? "#ffd700" : r === 2 ? "#c0c0c0" : r === 3 ? "#cd7f32" : TEXT_MAIN;
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
@@ -5771,95 +5808,277 @@ function RankingsView() {
       ) : null}
       <div style={{ display: viewAllianceSlug ? "none" : "contents" }}>
       <div style={CARD}>
-        <div style={{ fontFamily: FONT_DISPLAY, fontSize: 28, fontWeight: 800, color: "#fff7ec", marginBottom: 12 }}>Rankings</div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+
+        {/* ── Header: title + live stats strip ── */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 28, fontWeight: 800, color: "#fff7ec" }}>🏆 Rankings</div>
+          {total > 0 && !loading && (
+            <div style={{ display: "flex", gap: 18, fontSize: 12, color: TEXT_MUTED, alignItems: "center" }}>
+              <span><span style={{ color: TEXT_MAIN, fontWeight: 600 }}>{total.toLocaleString()}</span> {tab}</span>
+              {tab === "kingdoms" && page === 0 && kingdoms.length > 0 && (
+                <span>Top NW: <span style={{ color: ACCENT, fontWeight: 600 }}>{Number(kingdoms[0].networth || 0).toLocaleString()}</span></span>
+              )}
+              {tab === "alliances" && page === 0 && alliances.length > 0 && (
+                <span>Top NW: <span style={{ color: ACCENT, fontWeight: 600 }}>{Number(alliances[0].totalNetworth || 0).toLocaleString()}</span></span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── Tabs ── */}
+        <div style={{ display: "flex", gap: 0, marginBottom: 18, borderBottom: "1px solid rgba(216,176,117,.15)" }}>
           {(["kingdoms", "alliances"] as const).map((t) => (
-            <button key={t} onClick={() => setTab(t)} style={{ ...BTN_STYLE, background: tab === t ? "rgba(216,176,117,.45)" : "rgba(8,8,10,.62)", fontSize: 14, padding: "8px 16px", textTransform: "capitalize" }}>
-              {t}
+            <button
+              key={t}
+              onClick={() => { if (tab !== t) { setTab(t); setPage(0); setSearch(""); setSearchInput(""); setChartKingdom(""); } }}
+              style={{
+                background: "transparent", border: "none", outline: "none",
+                borderBottom: tab === t ? "2px solid #d8b075" : "2px solid transparent",
+                borderRadius: 0, fontSize: 14, fontWeight: tab === t ? 700 : 400,
+                color: tab === t ? ACCENT : TEXT_MUTED, padding: "8px 20px 11px",
+                cursor: "pointer", transition: "color .15s",
+              }}
+            >
+              {t === "kingdoms" ? "⚔️ Kingdoms" : "🛡️ Alliances"}
             </button>
           ))}
         </div>
 
-        {tab === "alliances" ? (
+        {/* ── Search (kingdoms only) ── */}
+        {tab === "kingdoms" && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            <input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && doSearch()}
+              placeholder="Search kingdoms…"
+              style={{ ...INPUT_STYLE, flex: 1, fontSize: 14 }}
+            />
+            <button onClick={doSearch} style={{ ...BTN_STYLE, fontSize: 13 }}>🔍 Search</button>
+          </div>
+        )}
+
+        {error ? <div style={{ color: "#ffae9a", marginBottom: 10, fontSize: 13 }}>{error}</div> : null}
+
+        {/* ── Skeleton loading ── */}
+        {loading ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "4px 0" }}>
+            {Array.from({ length: 7 }).map((_, i) => (
+              <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", opacity: 1 - i * 0.11 }}>
+                <div style={{ width: 36, height: 16, background: "rgba(255,255,255,.07)", borderRadius: 4 }} />
+                <div style={{ flex: 1, height: 16, background: "rgba(255,255,255,.07)", borderRadius: 4 }} />
+                <div style={{ width: 100, height: 16, background: "rgba(255,255,255,.07)", borderRadius: 4 }} />
+                <div style={{ width: 130, height: 16, background: "rgba(255,255,255,.07)", borderRadius: 4 }} />
+              </div>
+            ))}
+          </div>
+        ) : (
           <>
-            {error ? <div style={{ color: "#ffae9a", marginBottom: 8 }}>{error}</div> : null}
-            {loading ? <div style={{ color: TEXT_MUTED }}>Loading...</div> : null}
+            {/* ── Top 3 Podium ── */}
+            {showPodium && podiumItems.length === 3 && (
+              <div style={{ display: "flex", gap: 10, marginBottom: 24, alignItems: "flex-end", justifyContent: "center", flexWrap: "wrap" }}>
+                {/* 2nd place */}
+                {(() => {
+                  const a = podiumItems[1];
+                  const nw = tab === "kingdoms" ? Number(a.networth || 0) : Number(a.totalNetworth || 0);
+                  const name = tab === "kingdoms" ? String(a.name || "") : `[${String(a.slug || "").toUpperCase()}] ${String(a.name || "")}`;
+                  return (
+                    <div
+                      onClick={tab === "alliances" ? () => setViewAllianceSlug(String(a.slug || "")) : undefined}
+                      style={{ flex: "0 0 27%", minWidth: 130, maxWidth: 200, background: "linear-gradient(160deg,rgba(192,192,192,.16) 0%,rgba(0,0,0,.28) 100%)", border: "1px solid rgba(192,192,192,.3)", borderRadius: 14, padding: "16px 12px 14px", textAlign: "center", cursor: tab === "alliances" ? "pointer" : "default", transform: "translateY(14px)" }}
+                    >
+                      <div style={{ fontSize: 30, marginBottom: 5 }}>🥈</div>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: "#c8c8c8", marginBottom: 4, wordBreak: "break-word", lineHeight: 1.3 }}>{name}</div>
+                      <div style={{ fontSize: 12, color: TEXT_MUTED }}>{nw.toLocaleString()} NW</div>
+                    </div>
+                  );
+                })()}
+                {/* 1st place */}
+                {(() => {
+                  const a = podiumItems[0];
+                  const nw = tab === "kingdoms" ? Number(a.networth || 0) : Number(a.totalNetworth || 0);
+                  const name = tab === "kingdoms" ? String(a.name || "") : `[${String(a.slug || "").toUpperCase()}] ${String(a.name || "")}`;
+                  return (
+                    <div
+                      onClick={tab === "alliances" ? () => setViewAllianceSlug(String(a.slug || "")) : undefined}
+                      style={{ flex: "0 0 32%", minWidth: 150, maxWidth: 220, background: "linear-gradient(160deg,rgba(216,176,117,.25) 0%,rgba(0,0,0,.28) 100%)", border: "1px solid rgba(216,176,117,.48)", borderRadius: 16, padding: "22px 14px 18px", textAlign: "center", cursor: tab === "alliances" ? "pointer" : "default", boxShadow: "0 0 28px rgba(216,176,117,.14)" }}
+                    >
+                      <div style={{ fontSize: 38, marginBottom: 6 }}>👑</div>
+                      <div style={{ fontWeight: 800, fontSize: 15, color: "#ffd700", marginBottom: 5, wordBreak: "break-word", lineHeight: 1.3 }}>{name}</div>
+                      <div style={{ fontSize: 13, color: ACCENT, fontWeight: 600 }}>{nw.toLocaleString()} NW</div>
+                    </div>
+                  );
+                })()}
+                {/* 3rd place */}
+                {(() => {
+                  const a = podiumItems[2];
+                  const nw = tab === "kingdoms" ? Number(a.networth || 0) : Number(a.totalNetworth || 0);
+                  const name = tab === "kingdoms" ? String(a.name || "") : `[${String(a.slug || "").toUpperCase()}] ${String(a.name || "")}`;
+                  return (
+                    <div
+                      onClick={tab === "alliances" ? () => setViewAllianceSlug(String(a.slug || "")) : undefined}
+                      style={{ flex: "0 0 27%", minWidth: 130, maxWidth: 200, background: "linear-gradient(160deg,rgba(205,127,50,.16) 0%,rgba(0,0,0,.28) 100%)", border: "1px solid rgba(205,127,50,.32)", borderRadius: 14, padding: "16px 12px 14px", textAlign: "center", cursor: tab === "alliances" ? "pointer" : "default", transform: "translateY(14px)" }}
+                    >
+                      <div style={{ fontSize: 30, marginBottom: 5 }}>🥉</div>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: "#cd7f32", marginBottom: 4, wordBreak: "break-word", lineHeight: 1.3 }}>{name}</div>
+                      <div style={{ fontSize: 12, color: TEXT_MUTED }}>{nw.toLocaleString()} NW</div>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
 
+            {/* Count strip */}
             <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 8 }}>
-              Showing {pageWindow.start}-{pageWindow.end} of {total.toLocaleString()} alliances
+              Showing {pageWindow.start}–{pageWindow.end} of {total.toLocaleString()} {tab}
+              {showPodium && podiumItems.length === 3 ? <span style={{ marginLeft: 6, opacity: .7 }}>(top 3 shown above)</span> : null}
             </div>
 
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th style={TH}>Rank</th>
-                    <th style={TH}>Alliance</th>
-                    <th style={{ ...TH, textAlign: "right" }}>Members</th>
-                    <th style={{ ...TH, textAlign: "right" }}>Total Networth</th>
-                    <th style={{ ...TH, textAlign: "center" }}>Profile</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {alliances.map((a: any) => {
-                    const rank = Number(a.rank || 0);
-                    return (
-                      <tr key={a.id} style={{ cursor: "pointer" }} onClick={() => setViewAllianceSlug(String(a.slug || ""))}>
-                        <td style={{ ...TD, color: rank === 1 ? "#ffd700" : rank === 2 ? "#c0c0c0" : rank === 3 ? "#cd7f32" : TEXT_MAIN, fontWeight: rank <= 3 ? 700 : 400 }}>{rank}</td>
-                        <td style={{ ...TD, fontWeight: 600 }}>[{String(a.slug || "").toUpperCase()}] {String(a.name || "")}</td>
-                        <td style={{ ...TD, textAlign: "right" }}>{Number(a.memberCount || 0).toLocaleString()}</td>
-                        <td style={{ ...TD, textAlign: "right" }}>{Number(a.totalNetworth || 0).toLocaleString()}</td>
-                        <td style={{ ...TD, textAlign: "center" }}>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setViewAllianceSlug(String(a.slug || "")); }}
-                            style={{ ...BTN_STYLE, padding: "3px 10px", fontSize: 12 }}
-                          >
-                            View
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            {/* ── Kingdoms Table ── */}
+            {tab === "kingdoms" ? (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ ...TH, width: 44 }}>#</th>
+                      <th style={TH}>Kingdom</th>
+                      <th style={{ ...TH, textAlign: "right" }}>Networth</th>
+                      <th style={{ ...TH, textAlign: "center", width: 160 }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tableItems.map((k: any, i: number) => {
+                      const rank = showPodium ? i + 4 : page * PAGE_SIZE + i + 1;
+                      const tag = String(k.allianceTag || k.alliance_tag || "").trim();
+                      const isMe = k.name === myKingdom;
+                      const hovered = hoveredRow === k.id;
+                      return (
+                        <tr
+                          key={k.id}
+                          onMouseEnter={() => setHoveredRow(k.id)}
+                          onMouseLeave={() => setHoveredRow(null)}
+                          style={{ background: isMe ? "rgba(216,176,117,.1)" : hovered ? "rgba(255,255,255,.035)" : "transparent", transition: "background .1s" }}
+                        >
+                          <td style={{ ...TD, width: 44, fontVariantNumeric: "tabular-nums" }}>
+                            {rankMedal(rank)
+                              ? <span style={{ fontSize: 16 }} title={`Rank ${rank}`}>{rankMedal(rank)}</span>
+                              : <span style={{ color: rank <= 10 ? rankColor(rank) : TEXT_MUTED, fontWeight: rank <= 10 ? 600 : 400 }}>{rank}</span>
+                            }
+                          </td>
+                          <td style={{ ...TD }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                              {tag ? (
+                                <span style={{ background: "rgba(216,176,117,.15)", color: ACCENT, padding: "1px 7px", borderRadius: 4, fontSize: 11, fontWeight: 700, letterSpacing: ".02em" }}>[{tag}]</span>
+                              ) : null}
+                              <span style={{ fontWeight: isMe ? 700 : 400, color: isMe ? ACCENT : TEXT_MAIN }}>{k.name}</span>
+                              {isMe ? <span style={{ fontSize: 11, color: ACCENT, opacity: .7 }}>(you)</span> : null}
+                            </div>
+                          </td>
+                          <td style={{ ...TD, textAlign: "right", fontVariantNumeric: "tabular-nums", color: rank <= 3 ? rankColor(rank) : TEXT_MAIN, fontWeight: rank <= 3 ? 700 : 400 }}>
+                            {Number(k.networth || 0).toLocaleString()}
+                          </td>
+                          <td style={{ ...TD, textAlign: "center" }}>
+                            {!isMe ? (
+                              <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+                                <button
+                                  title={premiumActive ? "Networth chart" : "Premium required"}
+                                  disabled={!premiumActive}
+                                  onClick={() => { const t = String(k.name || ""); setChartKingdom(t); void loadChart(t, chartWindow); }}
+                                  style={{ ...BTN_STYLE, padding: "4px 9px", fontSize: 14, opacity: premiumActive ? 1 : 0.45, minWidth: 0 }}
+                                >📊</button>
+                                <button title="Spy" onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "guildhall" })); }} style={{ ...BTN_STYLE, padding: "4px 9px", fontSize: 14, minWidth: 0 }}>🕵️</button>
+                                <button title="Attack" onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "attack-kingdom" })); }} style={{ ...BTN_STYLE, padding: "4px 9px", fontSize: 14, minWidth: 0 }}>⚔️</button>
+                                <button title="Pigeon" onClick={() => { localStorage.setItem("gg:prefill-compose-to", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "pigeons" })); }} style={{ ...BTN_STYLE, padding: "4px 9px", fontSize: 14, minWidth: 0 }}>🕊️</button>
+                              </div>
+                            ) : null}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              /* ── Alliances Table ── */
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ ...TH, width: 44 }}>#</th>
+                      <th style={TH}>Alliance</th>
+                      <th style={{ ...TH, textAlign: "right" }}>Members</th>
+                      <th style={{ ...TH, textAlign: "right" }}>Total NW</th>
+                      <th style={{ ...TH, textAlign: "right" }}>Avg NW</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tableItems.map((a: any) => {
+                      const rank = Number(a.rank || 0);
+                      const hovered = hoveredRow === a.id;
+                      const memberCount = Number(a.memberCount || 0);
+                      const totalNw = Number(a.totalNetworth || 0);
+                      const avgNw = memberCount > 0 ? Math.round(totalNw / memberCount) : 0;
+                      return (
+                        <tr
+                          key={a.id}
+                          onClick={() => setViewAllianceSlug(String(a.slug || ""))}
+                          onMouseEnter={() => setHoveredRow(a.id)}
+                          onMouseLeave={() => setHoveredRow(null)}
+                          style={{ cursor: "pointer", background: hovered ? "rgba(216,176,117,.06)" : "transparent", transition: "background .1s" }}
+                        >
+                          <td style={{ ...TD, width: 44 }}>
+                            {rankMedal(rank)
+                              ? <span style={{ fontSize: 16 }} title={`Rank ${rank}`}>{rankMedal(rank)}</span>
+                              : <span style={{ color: rank <= 10 ? rankColor(rank) : TEXT_MUTED, fontWeight: rank <= 10 ? 600 : 400 }}>{rank}</span>
+                            }
+                          </td>
+                          <td style={{ ...TD }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              {a.imageUrl ? (
+                                <img src={String(a.imageUrl)} alt="" style={{ width: 32, height: 32, borderRadius: 6, objectFit: "cover", border: "1px solid rgba(216,176,117,.28)", flexShrink: 0 }} />
+                              ) : (
+                                <div style={{ width: 32, height: 32, borderRadius: 6, background: "rgba(216,176,117,.1)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, flexShrink: 0 }}>🛡️</div>
+                              )}
+                              <div style={{ fontWeight: 700, fontSize: 14 }}>
+                                <span style={{ color: ACCENT, marginRight: 4 }}>[{String(a.slug || "").toUpperCase()}]</span>
+                                {String(a.name || "")}
+                              </div>
+                            </div>
+                          </td>
+                          <td style={{ ...TD, textAlign: "right" }}>{memberCount.toLocaleString()}</td>
+                          <td style={{ ...TD, textAlign: "right", fontVariantNumeric: "tabular-nums", color: rank <= 3 ? rankColor(rank) : TEXT_MAIN, fontWeight: rank <= 3 ? 700 : 400 }}>{totalNw.toLocaleString()}</td>
+                          <td style={{ ...TD, textAlign: "right", color: TEXT_MUTED, fontSize: 12, fontVariantNumeric: "tabular-nums" }}>{avgNw.toLocaleString()}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
-            {chartKingdom ? (
-              <div style={{ ...CARD, marginTop: 12, background: "rgba(0,0,0,.24)", border: "1px solid rgba(216,176,117,.22)" }}>
-                <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
-                  <div style={{ fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY, fontSize: 20 }}>
-                    Networth Chart — {chartKingdom}
+            {/* ── NW Chart (kingdoms, premium) ── */}
+            {chartKingdom && tab === "kingdoms" ? (
+              <div style={{ ...CARD, marginTop: 14, background: "rgba(0,0,0,.24)", border: "1px solid rgba(216,176,117,.22)" }}>
+                <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY, fontSize: 18 }}>📊 {chartKingdom}</div>
+                    <button onClick={() => { setChartKingdom(""); setChartItems([]); }} style={{ ...BTN_STYLE, padding: "2px 8px", fontSize: 11, background: "rgba(255,80,80,.18)", color: "#ffb5a5" }}>✕</button>
                   </div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     {(["12h", "1d", "1w", "1m"] as const).map((w) => (
-                      <button
-                        key={`chart-window-${w}`}
-                        onClick={() => setChartWindow(w)}
-                        style={{ ...BTN_STYLE, padding: "5px 10px", fontSize: 12, background: chartWindow === w ? "rgba(216,176,117,.5)" : "rgba(8,8,10,.62)" }}
-                      >
-                        {w}
-                      </button>
+                      <button key={`cw-${w}`} onClick={() => setChartWindow(w)} style={{ ...BTN_STYLE, padding: "4px 10px", fontSize: 12, background: chartWindow === w ? "rgba(216,176,117,.5)" : "rgba(8,8,10,.62)" }}>{w}</button>
                     ))}
                   </div>
                 </div>
-                {chartLoading ? <div style={{ color: TEXT_MUTED, fontSize: 13 }}>Loading chart...</div> : null}
+                {chartLoading ? <div style={{ color: TEXT_MUTED, fontSize: 13 }}>Loading chart…</div> : null}
                 {chartError ? <div style={{ color: "#ffb5a5", fontSize: 13 }}>{chartError}</div> : null}
                 {!chartLoading && !chartError && chartGeom ? (
                   <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
                     <svg viewBox={`0 0 ${chartGeom.width} ${chartGeom.height}`} style={{ width: "100%", minWidth: 720, height: 240, display: "block" }}>
                       {chartGeom.yTicks.map((t, i) => (
                         <g key={`ytick-${i}`}>
-                          <line
-                            x1={chartGeom.padL}
-                            y1={t.y}
-                            x2={chartGeom.width - chartGeom.padR}
-                            y2={t.y}
-                            stroke="rgba(255,255,255,.08)"
-                            strokeWidth={1}
-                          />
-                          <text x={chartGeom.padL - 8} y={t.y + 4} textAnchor="end" fontSize="11" fill="#d0be9f">
-                            {Math.round(t.val).toLocaleString()}
-                          </text>
+                          <line x1={chartGeom.padL} y1={t.y} x2={chartGeom.width - chartGeom.padR} y2={t.y} stroke="rgba(255,255,255,.08)" strokeWidth={1} />
+                          <text x={chartGeom.padL - 8} y={t.y + 4} textAnchor="end" fontSize="11" fill="#d0be9f">{Math.round(t.val).toLocaleString()}</text>
                         </g>
                       ))}
                       <path d={chartGeom.areaPath} fill="rgba(216,176,117,.26)" />
@@ -5876,89 +6095,11 @@ function RankingsView() {
               </div>
             ) : null}
 
-            <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12, justifyContent: "flex-end" }}>
-              <button disabled={page === 0} onClick={() => setPage(page - 1)} style={{ ...BTN_STYLE, padding: "6px 14px", fontSize: 13 }}>Prev</button>
+            {/* ── Pagination ── */}
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 14, justifyContent: "flex-end" }}>
+              <button disabled={page === 0} onClick={() => setPage(page - 1)} style={{ ...BTN_STYLE, padding: "6px 14px", fontSize: 13 }}>← Prev</button>
               <span style={{ fontSize: 13, color: TEXT_MUTED }}>Page {page + 1}</span>
-              <button disabled={(page + 1) * PAGE_SIZE >= total} onClick={() => setPage(page + 1)} style={{ ...BTN_STYLE, padding: "6px 14px", fontSize: 13 }}>Next</button>
-            </div>
-          </>
-        ) : (
-          <>
-            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-              <input
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && doSearch()}
-                placeholder="Search kingdoms..."
-                style={{ ...INPUT_STYLE, flex: 1, fontSize: 14 }}
-              />
-              <button onClick={doSearch} style={{ ...BTN_STYLE, fontSize: 13 }}>Search</button>
-            </div>
-
-            {error ? <div style={{ color: "#ffae9a", marginBottom: 8 }}>{error}</div> : null}
-            {loading ? <div style={{ color: TEXT_MUTED }}>Loading...</div> : null}
-
-            <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 8 }}>
-              Showing {pageWindow.start}-{pageWindow.end} of {total.toLocaleString()} kingdoms
-            </div>
-
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th style={TH}>Rank</th>
-                    <th style={TH}>Kingdom</th>
-                    <th style={{ ...TH, textAlign: "right" }}>Networth</th>
-                    <th style={{ ...TH, textAlign: "center" }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {kingdoms.map((k: any, i: number) => {
-                    const rank = page * PAGE_SIZE + i + 1;
-                    const tag = String(k.allianceTag || k.alliance_tag || "").trim();
-                    const displayName = tag ? `[${tag}] ${k.name}` : k.name;
-                    const isMe = k.name === myKingdom;
-                    return (
-                      <tr key={k.id} style={{ background: isMe ? "rgba(216,176,117,.08)" : "transparent" }}>
-                        <td style={{ ...TD, color: rank === 1 ? "#ffd700" : rank === 2 ? "#c0c0c0" : rank === 3 ? "#cd7f32" : TEXT_MAIN, fontWeight: rank <= 3 ? 700 : 400 }}>{rank}</td>
-                        <td style={{ ...TD, fontWeight: isMe ? 700 : 400, color: isMe ? ACCENT : TEXT_MAIN }}>{displayName}</td>
-                        <td style={{ ...TD, textAlign: "right" }}>{Number(k.networth || 0).toLocaleString()}</td>
-                        <td style={{ ...TD, textAlign: "center" }}>
-                          {!isMe && (
-                            <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
-                              <button
-                                title={premiumActive ? "View premium networth chart" : "Premium required"}
-                                disabled={!premiumActive}
-                                onClick={() => {
-                                  if (!premiumActive) {
-                                    setChartError("Premium required for networth history charts.");
-                                    return;
-                                  }
-                                  const target = String(k.name || "");
-                                  setChartKingdom(target);
-                                  void loadChart(target, chartWindow);
-                                }}
-                                style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 12, opacity: premiumActive ? 1 : 0.7 }}
-                              >
-                                Chart
-                              </button>
-                              <button title="Spy on this kingdom" onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "guildhall" })); }} style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 12 }}>Spy</button>
-                              <button title="Attack this kingdom" onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "attack-kingdom" })); }} style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 12 }}>Attack</button>
-                              <button title="Send pigeon to this kingdom" onClick={() => { localStorage.setItem("gg:prefill-compose-to", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "pigeons" })); }} style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 12 }}>Pigeon</button>
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12, justifyContent: "flex-end" }}>
-              <button disabled={page === 0} onClick={() => setPage(page - 1)} style={{ ...BTN_STYLE, padding: "6px 14px", fontSize: 13 }}>Prev</button>
-              <span style={{ fontSize: 13, color: TEXT_MUTED }}>Page {page + 1}</span>
-              <button disabled={(page + 1) * PAGE_SIZE >= total} onClick={() => setPage(page + 1)} style={{ ...BTN_STYLE, padding: "6px 14px", fontSize: 13 }}>Next</button>
+              <button disabled={(page + 1) * PAGE_SIZE >= total} onClick={() => setPage(page + 1)} style={{ ...BTN_STYLE, padding: "6px 14px", fontSize: 13 }}>Next →</button>
             </div>
           </>
         )}
