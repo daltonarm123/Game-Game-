@@ -2965,6 +2965,7 @@ function WarRoomView() {
   const movements = (data?.movements || []) as Array<any>;
   const troopCodeOptions = troops.filter((t) => Boolean(t.isTrainable)).map((t) => String(t.troopCode || ""));
   const trainTroopData = troops.find((t) => String(t.troopCode || "") === String(trainTroop));
+  const peasantHome = Number(troops.find((t) => String(t.troopCode || "") === "peasants")?.home || 0);
   const trainQtyNum = Math.max(0, Math.floor(Number(trainQty || 0)));
   const trainQtySafe = Math.max(1, trainQtyNum || 1);
   const attackApTotal = Object.entries(sentTroops).reduce((acc, [code, qty]) => {
@@ -3297,7 +3298,7 @@ function WarRoomView() {
                         <br />
                         Stats: Att {Number(trainTroopData.att || 0)} • Def {Number(trainTroopData.def || 0)} • NW {Number(trainTroopData.nw || 0)}
                         <br />
-                        Costs: Gold {(Number(trainTroopData.goldCost || 0) * trainQtySafe).toLocaleString()} • Food {(Number(trainTroopData.foodCost || 0) * trainQtySafe).toLocaleString()} • Horses {(Number(trainTroopData.horseCost || 0) * trainQtySafe).toLocaleString()}
+                        Costs: Gold {(Number(trainTroopData.goldCost || 0) * trainQtySafe).toLocaleString()} / {Number(k?.gold || 0).toLocaleString()} • Food {(Number(trainTroopData.foodCost || 0) * trainQtySafe).toLocaleString()} / {Number(k?.food || 0).toLocaleString()} • Horses {(Number(trainTroopData.horseCost || 0) * trainQtySafe).toLocaleString()} / {Number(k?.horses || 0).toLocaleString()} • Peasants {(Number(trainTroopData.peasantCost || 0) * trainQtySafe).toLocaleString()} / {peasantHome.toLocaleString()}
                         <br />
                         Upkeep/h each: Gold {Number(trainTroopData.upkeepGold || 0)} • Food {Number(trainTroopData.upkeepFood || 0)}
                         <br />
