@@ -328,7 +328,9 @@ async function processShieldStateTick(): Promise<number> {
 
 async function processEconomyTick(season: SeasonState): Promise<number> {
   return withTx(async (c) => {
-    const kingdoms = await c.query(`SELECT id, land, gold, food, wood, stone, horses, mana, tax_rate FROM kingdoms ORDER BY id ASC`);
+    const kingdoms = await c.query(
+      `SELECT id, land, gold, food, wood, stone, horses, mana, tax_rate, desertion_alert_active FROM kingdoms ORDER BY id ASC`,
+    );
     if (!kingdoms.rowCount) return 0;
 
     let updated = 0;
@@ -560,6 +562,8 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       // --- Starvation: food/gold deficit → troops desert ---
       const foodStarving = foodDelta < 0 && newFood === 0;
       const goldStarving = goldDelta < 0 && newGold === 0;
+      const desertionAlertActive = Boolean((k as any).desertion_alert_active);
+      let nextDesertionAlertActive = desertionAlertActive;
       if (foodStarving || goldStarving) {
         const homeTroops = await c.query(
           `SELECT troop_code, amount FROM kingdom_troops WHERE kingdom_id=$1 AND amount > 0 AND troop_code != 'peasants'`,
@@ -577,17 +581,38 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
         }
         if (deserted.length > 0) {
           const reason = foodStarving && goldStarving ? "no food or gold" : foodStarving ? "no food" : "no gold";
-          await sendGameMail(
-            c,
-            Number(k.id),
-            `Troops Deserting — ${reason}`,
-            `Your kingdom has run out of ${reason.replace("no ", "")}!\n\nTroops are deserting:\n${deserted.join("\n")}\n\nThis will continue every tick until you have positive ${foodStarving ? "food" : "gold"} income.`,
-          );
-          await sendGameNotice(c, Number(k.id), "warning", `Troops deserting due to ${reason}`);
+          if (!desertionAlertActive) {
+            await sendGameMail(
+              c,
+              Number(k.id),
+              `Troops Deserting - ${reason}`,
+              `Your kingdom has run out of ${reason.replace("no ", "")}.
+
+Troops deserting this tick:
+${deserted.join("\n")}
+
+Desertion will continue while this shortage remains.`,
+            );
+            await sendGameNotice(c, Number(k.id), "warning", `Troops deserting due to ${reason}`);
+          }
+          nextDesertionAlertActive = true;
         }
       }
+      if (!foodStarving && !goldStarving && desertionAlertActive) {
+        await sendGameMail(
+          c,
+          Number(k.id),
+          "Troops Desertion Stopped",
+          "Your kingdom's supplies have stabilized, and troops are no longer deserting.",
+        );
+        await sendGameNotice(c, Number(k.id), "info", "Troop desertion has stopped.");
+        nextDesertionAlertActive = false;
+      }
+      if (nextDesertionAlertActive !== desertionAlertActive) {
+        await c.query(`UPDATE kingdoms SET desertion_alert_active=$2 WHERE id=$1`, [k.id, nextDesertionAlertActive]);
+      }
 
-      // --- Starvation: wood/stone depleted with no production → buildings decay ---
+      // --- Starvation: wood/stone depleted with no production -> buildings decay ---
       const woodStarving = woodIncomePerHour === 0 && newWood === 0;
       const stoneStarving = stoneIncomePerHour === 0 && newStone === 0;
       if (woodStarving || stoneStarving) {

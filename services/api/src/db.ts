@@ -218,6 +218,7 @@ export async function ensureSchema(): Promise<void> {
       shield_starts_at TIMESTAMPTZ,
       shield_ends_at TIMESTAMPTZ,
       shield_cooldown_ends_at TIMESTAMPTZ,
+      desertion_alert_active BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       last_tick_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -720,6 +721,7 @@ export async function ensureSchema(): Promise<void> {
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_starts_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_ends_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_cooldown_ends_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS desertion_alert_active BOOLEAN NOT NULL DEFAULT FALSE`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS daily_login_streak INT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS daily_last_claimed_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS mana BIGINT NOT NULL DEFAULT 0`);

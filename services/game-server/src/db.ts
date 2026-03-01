@@ -45,6 +45,7 @@ export async function ensureSchemaLite(): Promise<void> {
       shield_starts_at TIMESTAMPTZ,
       shield_ends_at TIMESTAMPTZ,
       shield_cooldown_ends_at TIMESTAMPTZ,
+      desertion_alert_active BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       last_tick_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -248,6 +249,7 @@ export async function ensureSchemaLite(): Promise<void> {
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_starts_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_ends_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS shield_cooldown_ends_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS desertion_alert_active BOOLEAN NOT NULL DEFAULT FALSE`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS horses BIGINT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_index INT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE game_state ADD COLUMN IF NOT EXISTS season_code TEXT NOT NULL DEFAULT 'spring'`);
