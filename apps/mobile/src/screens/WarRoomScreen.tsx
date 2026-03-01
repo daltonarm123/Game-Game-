@@ -2,18 +2,21 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Alert, RefreshControl, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { warApi } from "../api";
 import { useAuth } from "../auth";
+import { ActionResultModal } from "../components/ActionResultModal";
 import { Btn } from "../components/Btn";
 import { Card } from "../components/Card";
 import { ErrorView, LoadingView } from "../components/LoadingView";
 import { StatBadge } from "../components/StatBadge";
 import { Colors, Spacing } from "../theme";
 
-function countdown(endsAt: string) {
-  const ms = new Date(endsAt).getTime() - Date.now();
-  if (ms <= 0) return "Done";
-  const m = Math.floor(ms / 60000);
-  if (m > 60) return `${Math.floor(m / 60)}h ${m % 60}m`;
-  return `${m}m ${Math.floor((ms % 60000) / 1000)}s`;
+function formatDuration(seconds: number) {
+  const total = Math.max(0, Math.floor(Number(seconds || 0)));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
 }
 
 const REPORT_TYPES = ["attack", "explore", "spy"] as const;
@@ -27,6 +30,8 @@ export function WarRoomScreen({ navigation }: any) {
   const [exploring, setExploring] = useState(false);
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [resultVisible, setResultVisible] = useState(false);
+  const [resultLines, setResultLines] = useState<string[]>([]);
 
   const kName = auth?.kingdom?.name || "";
 
@@ -53,13 +58,24 @@ export function WarRoomScreen({ navigation }: any) {
     setExploring(true);
     try {
       const j = await warApi.explore(kName, auth!.token);
-      Alert.alert("Exploring!", `Scouts dispatched. Returning with land in ${j.returnsIn || "a few minutes"}.`);
+      const lines = [
+        `Land gained: ${Number(j.landFound || 0).toLocaleString()} acres`,
+        `New land total: ${Number(j.newLand || 0).toLocaleString()} acres`,
+        `Troops return in: ${formatDuration(Number(j.returnSeconds || 0))}`,
+      ];
+      setResultLines(lines);
+      setResultVisible(true);
       void load();
     } catch (e: any) {
       Alert.alert("Explore Failed", String(e?.message || e));
     } finally {
       setExploring(false);
     }
+  }
+
+  function viewPigeons() {
+    setResultVisible(false);
+    navigation?.getParent?.()?.navigate("SocialTab", { screen: "Pigeons" });
   }
 
   if (loading) return <LoadingView message="Loading war room…" />;
@@ -155,6 +171,14 @@ export function WarRoomScreen({ navigation }: any) {
           )}
         </Card>
       </ScrollView>
+      <ActionResultModal
+        visible={resultVisible}
+        title="Explore Report"
+        lines={resultLines}
+        tone="success"
+        onClose={() => setResultVisible(false)}
+        onViewPigeons={viewPigeons}
+      />
     </SafeAreaView>
   );
 }

@@ -2,11 +2,20 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Alert, RefreshControl, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { kingdomApi, warApi } from "../api";
 import { useAuth } from "../auth";
+import { ActionResultModal } from "../components/ActionResultModal";
 import { Btn } from "../components/Btn";
 import { Card } from "../components/Card";
 import { Colors, Spacing } from "../theme";
 
-export function GuildhallScreen() {
+function formatDuration(seconds: number) {
+  const total = Math.max(0, Math.floor(Number(seconds || 0)));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+export function GuildhallScreen({ navigation }: any) {
   const { auth } = useAuth();
   const [tab, setTab] = useState<"spy"|"reports">("spy");
   const [query, setQuery] = useState("");
@@ -17,6 +26,10 @@ export function GuildhallScreen() {
   const [reports, setReports] = useState<any[]>([]);
   const [loadingReports, setLoadingReports] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [resultVisible, setResultVisible] = useState(false);
+  const [resultTitle, setResultTitle] = useState("");
+  const [resultTone, setResultTone] = useState<"success" | "danger" | "info">("info");
+  const [resultLines, setResultLines] = useState<string[]>([]);
 
   const kName = auth?.kingdom?.name || "";
 
@@ -49,19 +62,29 @@ export function GuildhallScreen() {
     setBusy(true);
     try {
       const j = await warApi.spy(kName, target.name, count, auth!.token);
-      const r = j.result || j;
-      if (r.caught) {
-        Alert.alert("Spies Caught!", `${r.spiesCaught || count} spies were captured.`);
-      } else {
-        const lines = [`Spied on ${target.name} successfully!`];
-        if (r.resources) lines.push(`Resources: Gold ${Number(r.resources.gold||0).toLocaleString()}, Food ${Number(r.resources.food||0).toLocaleString()}`);
-        if (r.troops) lines.push(`Troops home: ${Number(r.troops.total||0).toLocaleString()}`);
-        Alert.alert("Spy Report", lines.join("\n"));
-      }
+      const succeeded = Boolean(j.success);
+      const lines = [
+        `Target: ${target.name}`,
+        `Outcome: ${succeeded ? "Success" : "Failed"}${j.resultLevel ? ` (${String(j.resultLevel)})` : ""}`,
+        `Power ratio: ${Number(j.ratio || 0).toFixed(2)}`,
+        `Spies sent: ${Number(j.spiesSent || count).toLocaleString()}`,
+        `Spies lost: ${Number(j.spyLosses || 0).toLocaleString()}`,
+        `Spies returning: ${Number(j.survivorsReturning || 0).toLocaleString()}`,
+        `Return time: ${formatDuration(Number(j.returnSeconds || 0))}`,
+      ];
+      setResultTitle("Spy Report");
+      setResultTone(succeeded ? "success" : "danger");
+      setResultLines(lines);
+      setResultVisible(true);
       setTarget(null); setQuery("");
     } catch (e: any) {
       Alert.alert("Spy Failed", String(e?.message || e));
     } finally { setBusy(false); }
+  }
+
+  function viewPigeons() {
+    setResultVisible(false);
+    navigation?.getParent?.()?.navigate("SocialTab", { screen: "Pigeons" });
   }
 
   return (
@@ -135,6 +158,14 @@ export function GuildhallScreen() {
           </Card>
         )}
       </ScrollView>
+      <ActionResultModal
+        visible={resultVisible}
+        title={resultTitle}
+        lines={resultLines}
+        tone={resultTone}
+        onClose={() => setResultVisible(false)}
+        onViewPigeons={viewPigeons}
+      />
     </SafeAreaView>
   );
 }

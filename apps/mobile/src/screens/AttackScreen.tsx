@@ -2,14 +2,16 @@ import React, { useEffect, useState } from "react";
 import { Alert, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { kingdomApi, warApi } from "../api";
 import { useAuth } from "../auth";
+import { ActionResultModal } from "../components/ActionResultModal";
 import { Btn } from "../components/Btn";
 import { Card } from "../components/Card";
 import { Colors, Spacing } from "../theme";
 
 const TROOPS = ["soldiers","archers","cavalry","pikemen","elite_soldiers"];
 const TROOP_ICONS: Record<string,string> = { soldiers:"⚔️", archers:"🏹", cavalry:"🐴", pikemen:"🗡️", elite_soldiers:"⭐" };
+const VICTORY_RESULTS = ["MINOR VICTORY", "VICTORY", "MAJOR VICTORY", "OVERWHELMING VICTORY"];
 
-export function AttackScreen() {
+export function AttackScreen({ navigation }: any) {
   const { auth } = useAuth();
   const [phase, setPhase] = useState<"search"|"attack">("search");
   const [query, setQuery] = useState("");
@@ -19,6 +21,10 @@ export function AttackScreen() {
   const [qtys, setQtys] = useState<Record<string,string>>({});
   const [busy, setBusy] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [resultVisible, setResultVisible] = useState(false);
+  const [resultTitle, setResultTitle] = useState("");
+  const [resultTone, setResultTone] = useState<"success" | "danger" | "info">("info");
+  const [resultLines, setResultLines] = useState<string[]>([]);
 
   const kName = auth?.kingdom?.name || "";
 
@@ -39,6 +45,23 @@ export function AttackScreen() {
     return () => clearTimeout(t);
   }, [query, auth]);
 
+  function sumTroopMap(v: Record<string, unknown> | null | undefined) {
+    if (!v || typeof v !== "object") return 0;
+    return Object.values(v as Record<string, unknown>).reduce((acc: number, n) => acc + Number(n || 0), 0);
+  }
+
+  function closeResult() {
+    setResultVisible(false);
+    setPhase("search");
+    setTarget(null);
+    setQtys({});
+  }
+
+  function viewPigeons() {
+    closeResult();
+    navigation?.getParent?.()?.navigate("SocialTab", { screen: "Pigeons" });
+  }
+
   async function doAttack() {
     const troops: Record<string,number> = {};
     let hasAny = false;
@@ -50,18 +73,31 @@ export function AttackScreen() {
     setBusy(true);
     try {
       const j = await warApi.attack(kName, target.name, troops, auth!.token);
-      const r = j.result || j;
-      Alert.alert(
-        r.attackerWon ? "⚔️ Victory!" : "💀 Defeat",
-        [
-          r.attackerWon ? "You won the battle!" : "You were defeated.",
-          `Land taken: ${Number(r.landTaken || 0).toLocaleString()} acres`,
-          `Gold taken: ${Number(r.goldTaken || 0).toLocaleString()}`,
-          `Your casualties: ${Number(r.attackerCasualties || 0).toLocaleString()}`,
-          `Their casualties: ${Number(r.defenderCasualties || 0).toLocaleString()}`,
-        ].join("\n"),
-        [{ text: "OK", onPress: () => { setPhase("search"); setTarget(null); setQtys({}); } }]
-      );
+      const resultText = String(j.result || "UNKNOWN");
+      const won = VICTORY_RESULTS.includes(resultText.toUpperCase());
+      const landTaken = Number(j.landTaken || 0);
+      const lootGold = Number(j.lootGold || 0);
+      const lootFood = Number(j.lootFood || 0);
+      const lootWood = Number(j.lootWood || 0);
+      const lootStone = Number(j.lootStone || 0);
+      const attackerLosses = sumTroopMap(j.attackerLosses);
+      const defenderLosses = sumTroopMap(j.defenderLosses);
+      const survivorsReturning = sumTroopMap(j.attackerSurvivorsAway);
+      const gemsAwarded = Number(j.gemsAwarded || 0);
+      const lines = [
+        `Result: ${resultText}`,
+        `Land taken: ${landTaken.toLocaleString()} acres`,
+        `Loot: ${lootGold.toLocaleString()} gold, ${lootFood.toLocaleString()} food, ${lootWood.toLocaleString()} wood, ${lootStone.toLocaleString()} stone`,
+        `Your losses: ${attackerLosses.toLocaleString()}`,
+        `Enemy losses: ${defenderLosses.toLocaleString()}`,
+        `Troops returning: ${survivorsReturning.toLocaleString()}`,
+      ];
+      if (gemsAwarded > 0) lines.push(`Green gems earned: ${gemsAwarded.toLocaleString()}`);
+      if (j.capturedSettlement?.name) lines.push(`Settlement captured: ${String(j.capturedSettlement.name)}`);
+      setResultTitle(won ? "Victory" : "Defeat");
+      setResultTone(won ? "success" : "danger");
+      setResultLines(lines);
+      setResultVisible(true);
     } catch (e: any) {
       Alert.alert("Attack Failed", String(e?.message || e));
     } finally {
@@ -111,6 +147,14 @@ export function AttackScreen() {
             <Btn label="⚔️ Attack!" onPress={doAttack} loading={busy} style={{ flex: 2 }} />
           </View>
         </ScrollView>
+        <ActionResultModal
+          visible={resultVisible}
+          title={resultTitle}
+          lines={resultLines}
+          tone={resultTone}
+          onClose={closeResult}
+          onViewPigeons={viewPigeons}
+        />
       </SafeAreaView>
     );
   }
@@ -145,6 +189,14 @@ export function AttackScreen() {
           </TouchableOpacity>
         ))}
       </ScrollView>
+      <ActionResultModal
+        visible={resultVisible}
+        title={resultTitle}
+        lines={resultLines}
+        tone={resultTone}
+        onClose={closeResult}
+        onViewPigeons={viewPigeons}
+      />
     </SafeAreaView>
   );
 }
