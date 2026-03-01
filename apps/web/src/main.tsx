@@ -697,7 +697,9 @@ function BuildingsView() {
   const [actionMsg, setActionMsg] = useState("");
   const [buildCode, setBuildCode] = useState("farm");
   const [buildQtyInput, setBuildQtyInput] = useState("1");
+  const [demolishQtyInput, setDemolishQtyInput] = useState("1");
   const [buildBusy, setBuildBusy] = useState(false);
+  const [demolishBusy, setDemolishBusy] = useState(false);
   const [cancelBuildId, setCancelBuildId] = useState<number | null>(null);
   const [buildPanelOpen, setBuildPanelOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
@@ -706,6 +708,11 @@ function BuildingsView() {
     if (!Number.isFinite(n)) return 1;
     return Math.max(1, Math.min(50000, n));
   }, [buildQtyInput]);
+  const demolishQty = useMemo(() => {
+    const n = Math.floor(Number(demolishQtyInput || "1"));
+    if (!Number.isFinite(n)) return 1;
+    return Math.max(1, Math.min(50000, n));
+  }, [demolishQtyInput]);
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 980);
@@ -784,6 +791,7 @@ function BuildingsView() {
     if (!Array.isArray(buildings) || buildings.length === 0) return ["farm", "lumberyard", "quarry", "barracks", "stables", "castles"];
     return buildings.map((b) => String(b.building_code));
   }, [buildings]);
+  const selectedBuildingBuilt = Number(buildingMap[buildCode]?.level || 0);
 
   async function submitBuild(e: React.FormEvent) {
     e.preventDefault();
@@ -827,6 +835,31 @@ function BuildingsView() {
       setActionMsg(`Cancel failed: ${String(e?.message || e)}`);
     } finally {
       setCancelBuildId(null);
+    }
+  }
+
+  async function submitDemolish(e: React.FormEvent) {
+    e.preventDefault();
+    if (!k) return;
+    setActionMsg("");
+    setDemolishBusy(true);
+    try {
+      const qty = Math.max(1, Math.floor(Number(demolishQty || 1)));
+      if (selectedBuildingBuilt <= 0) throw new Error(`no ${buildCode} levels built`);
+      if (qty > selectedBuildingBuilt) throw new Error(`cannot demolish ${qty} (built: ${selectedBuildingBuilt})`);
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/build/demolish`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ buildingCode: buildCode, quantity: qty }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Demolished ${Number(j.demolished || qty).toLocaleString()} ${buildCode}. New level: ${Number(j.newLevel || 0).toLocaleString()}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Demolish failed: ${String(e?.message || e)}`);
+    } finally {
+      setDemolishBusy(false);
     }
   }
 
@@ -1035,6 +1068,47 @@ function BuildingsView() {
               />
               <button type="submit" style={{ ...BTN_STYLE, width: isMobile ? "100%" : "auto" }} disabled={buildBusy}>
                 {buildBusy ? "Submitting..." : "Queue Build"}
+              </button>
+            </form>
+            <form
+              onSubmit={submitDemolish}
+              style={{
+                marginTop: 10,
+                display: "grid",
+                gap: 8,
+                gridTemplateColumns: isMobile ? "1fr" : "minmax(180px,1fr) 90px auto",
+                alignItems: "center",
+              }}
+            >
+              <div style={{ color: TEXT_MUTED, fontSize: 13 }}>
+                Demolish selected: <span style={{ color: TEXT_MAIN, fontWeight: 700 }}>{buildCode.replace(/_/g, " ")}</span>{" "}
+                (<span style={{ color: selectedBuildingBuilt > 0 ? "#c8e7b1" : "#ffae9a" }}>{selectedBuildingBuilt.toLocaleString()} built</span>)
+              </div>
+              <input
+                type="number"
+                min={1}
+                max={50000}
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={demolishQtyInput}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  if (/^\d*$/.test(next)) setDemolishQtyInput(next);
+                }}
+                onBlur={() => setDemolishQtyInput(String(demolishQty))}
+                style={{ ...INPUT_STYLE, width: isMobile ? "100%" : 90 }}
+              />
+              <button
+                type="submit"
+                style={{
+                  ...BTN_STYLE,
+                  width: isMobile ? "100%" : "auto",
+                  background: "linear-gradient(180deg, rgba(190,80,70,.4), rgba(120,45,40,.34))",
+                  borderColor: "rgba(220,120,110,.55)",
+                }}
+                disabled={demolishBusy || selectedBuildingBuilt <= 0}
+              >
+                {demolishBusy ? "Demolishing..." : selectedBuildingBuilt <= 0 ? "Nothing To Demolish" : "Demolish"}
               </button>
             </form>
 

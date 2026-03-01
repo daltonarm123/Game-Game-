@@ -219,6 +219,11 @@ const buildBody = z.object({
   quantity: z.number().int().min(1).max(50000).optional().default(1),
 });
 
+const demolishBuildingBody = z.object({
+  buildingCode: z.string().min(1),
+  quantity: z.number().int().min(1).max(50000).optional().default(1),
+});
+
 const trainBody = z.object({
   troopCode: z.string().min(1),
   quantity: z.number().int().min(1).max(50000),
@@ -2245,6 +2250,61 @@ app.post("/api/kingdom/:name/build/cancel", requireAuth, async (req, res) => {
       };
     });
 
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/kingdom/:name/build/demolish", requireAuth, async (req, res) => {
+  const name = String(req.params.name || "").trim();
+  const parsed = demolishBuildingBody.safeParse(req.body || {});
+  if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [name]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(k.rows[0].id);
+      const buildingCode = String(parsed.data.buildingCode || "").toLowerCase().trim();
+      const qty = Math.max(1, Math.floor(Number(parsed.data.quantity || 1)));
+
+      const bt = await c.query(`SELECT code, name FROM building_types WHERE code=$1 LIMIT 1`, [buildingCode]);
+      if (!bt.rowCount) throw new Error("unknown building code");
+
+      const queued = await c.query(
+        `SELECT 1 FROM build_queue WHERE kingdom_id=$1 AND building_code=$2 AND status='queued' LIMIT 1`,
+        [kingdomId, buildingCode],
+      );
+      if (queued.rowCount) throw new Error("cancel queued upgrades for this building before demolishing");
+
+      const kb = await c.query(
+        `SELECT level FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code=$2 LIMIT 1 FOR UPDATE`,
+        [kingdomId, buildingCode],
+      );
+      const currentLevel = Number(kb.rows[0]?.level || 0);
+      if (currentLevel <= 0) throw new Error("no built levels to demolish");
+      if (qty > currentLevel) throw new Error(`cannot demolish ${qty} levels (built: ${currentLevel})`);
+
+      const newLevel = Math.max(0, currentLevel - qty);
+      await c.query(`UPDATE kingdom_buildings SET level=$3 WHERE kingdom_id=$1 AND building_code=$2`, [kingdomId, buildingCode, newLevel]);
+      await sendNoticeTx(
+        c,
+        kingdomId,
+        "info",
+        `${String(bt.rows[0]?.name || buildingCode)} demolished by ${qty.toLocaleString()} level${qty !== 1 ? "s" : ""}.`,
+        { buildingCode, demolished: qty, newLevel },
+      );
+
+      return {
+        buildingCode,
+        buildingName: String(bt.rows[0]?.name || buildingCode),
+        demolished: qty,
+        previousLevel: currentLevel,
+        newLevel,
+      };
+    });
     return res.json({ ok: true, ...out });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });
