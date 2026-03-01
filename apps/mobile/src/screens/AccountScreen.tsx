@@ -165,7 +165,7 @@ export function AccountScreen({ navigation }: any) {
         {/* Tax */}
         <Card>
           <Text style={styles.sectionLabel}>Tax Rate</Text>
-          <Text style={styles.muted}>25–27% maintains population. Below grows, above shrinks.</Text>
+          <Text style={styles.muted}>25-27% maintains population. 23% and below grows, 28%+ shrinks.</Text>
           <View style={[styles.row, { marginTop: 10 }]}>
             <TextInput
               style={[styles.input, { flex: 1 }]}

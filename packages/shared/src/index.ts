@@ -79,7 +79,7 @@ export function clampNumber(v: number, min: number, max: number) {
 }
 
 export function peasantDeltaPerHour(taxRate: number) {
-  if (taxRate < 25) return (25 - taxRate) * 50;
+  if (taxRate < 24) return (24 - taxRate) * 50;
   if (taxRate > 27) return -1 * (taxRate - 27) * 60;
   return 0;
 }

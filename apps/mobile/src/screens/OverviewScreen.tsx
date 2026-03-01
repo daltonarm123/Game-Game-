@@ -149,7 +149,7 @@ export function OverviewScreen({ navigation }: any) {
         {/* Tax & bonus */}
         <Card>
           <Text style={styles.sectionLabel}>Tax Rate ({k?.tax_rate ?? 25}%)</Text>
-          <Text style={styles.muted}>Rate 25–27% = population equilibrium. Below grows pop, above shrinks.</Text>
+          <Text style={styles.muted}>Rate 25-27% = population equilibrium. 23% and below grows pop, 28%+ shrinks.</Text>
           <View style={[styles.row, { marginTop: 10, gap: 8 }]}>
             <TextInput
               style={[styles.input, { flex: 1 }]}
