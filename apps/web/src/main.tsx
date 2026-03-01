@@ -6027,6 +6027,14 @@ function GuildhallView() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [actionMsg, setActionMsg] = useState("");
+  const [spyOutcomePopup, setSpyOutcomePopup] = useState<{
+    tone: "success" | "warning" | "error";
+    title: string;
+    subtitle: string;
+    detail: string;
+    spiesLost: number;
+    spiesReturning: number;
+  } | null>(null);
   const [trainOpen, setTrainOpen] = useState(false);
   const [spyOpen, setSpyOpen] = useState(false);
   const [trainAmt, setTrainAmt] = useState("1");
@@ -6069,6 +6077,11 @@ function GuildhallView() {
 
   useEffect(() => { void load(); }, []);
   useKingdomStream(kingdom, () => { void load(); });
+  useEffect(() => {
+    if (!spyOutcomePopup) return;
+    const timeout = window.setTimeout(() => setSpyOutcomePopup(null), 10000);
+    return () => window.clearTimeout(timeout);
+  }, [spyOutcomePopup]);
 
   const spiesTroop = (data?.troops || []).find((t: any) => String(t.troopCode || t.troop_code || t.code) === "spies");
   const trainQueue = (data?.training || []).filter((q: any) => String(q.troop_code) === "spies" && String(q.status) === "queued");
@@ -6119,10 +6132,36 @@ function GuildhallView() {
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setActionMsg(`Spy mission launched against ${defenderKingdom}.`);
+      const resultLevel = String(j.resultLevel || (j.success ? "Infiltration Succeeded" : "Mission Failed"));
+      const target = defenderKingdom.trim();
+      const intelQuality =
+        resultLevel === "Complete Infiltration"
+          ? "Excellent intel gathered."
+          : resultLevel === "Deep Infiltration"
+            ? "Strong intel gathered."
+            : resultLevel === "Partial Infiltration"
+              ? "Limited intel gathered."
+              : "Intel was blocked.";
+      setActionMsg(`${resultLevel} vs ${target}. Report sent to Pigeons.`);
+      setSpyOutcomePopup({
+        tone: j.success ? "success" : "warning",
+        title: j.success ? "Spy Report Delivered" : "Spy Mission Reported",
+        subtitle: `${resultLevel} vs ${target}`,
+        detail: `${intelQuality} Check Pigeons for full details.`,
+        spiesLost: Number(j.spyLosses || 0),
+        spiesReturning: Number(j.survivorsReturning || 0),
+      });
       await load();
     } catch (e: any) {
       setActionMsg(`Spy failed: ${String(e?.message || e)}`);
+      setSpyOutcomePopup({
+        tone: "error",
+        title: "Spy Mission Failed",
+        subtitle: String(defenderKingdom || "Unknown target"),
+        detail: String(e?.message || e),
+        spiesLost: 0,
+        spiesReturning: 0,
+      });
     } finally {
       setBusy(false);
     }
@@ -6170,6 +6209,49 @@ function GuildhallView() {
 
   return (
     <div style={{ display: "grid", gap: 12, minWidth: 0 }}>
+      {spyOutcomePopup ? (
+        <div
+          style={{
+            position: "fixed",
+            top: isMobile ? 10 : 18,
+            right: isMobile ? 10 : 18,
+            left: isMobile ? 10 : undefined,
+            zIndex: 1500,
+            ...CARD,
+            maxWidth: isMobile ? undefined : 420,
+            padding: 12,
+            borderColor:
+              spyOutcomePopup.tone === "success"
+                ? "rgba(120,200,140,.55)"
+                : spyOutcomePopup.tone === "warning"
+                  ? "rgba(216,176,117,.6)"
+                  : "rgba(255,120,120,.62)",
+          }}
+        >
+          <div style={{ fontSize: 15, fontWeight: 800, color: TEXT_MAIN }}>{spyOutcomePopup.title}</div>
+          <div style={{ marginTop: 2, fontSize: 13, color: ACCENT, fontWeight: 700 }}>{spyOutcomePopup.subtitle}</div>
+          <div style={{ marginTop: 6, fontSize: 13, color: TEXT_MUTED }}>{spyOutcomePopup.detail}</div>
+          <div style={{ marginTop: 8, fontSize: 12, color: TEXT_MUTED }}>
+            Spies lost: <span style={{ color: TEXT_MAIN }}>{spyOutcomePopup.spiesLost.toLocaleString()}</span> | Returning:{" "}
+            <span style={{ color: TEXT_MAIN }}>{spyOutcomePopup.spiesReturning.toLocaleString()}</span>
+          </div>
+          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => {
+                setSpyOutcomePopup(null);
+                window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "pigeons" }));
+              }}
+              style={{ ...BTN_STYLE, padding: "7px 10px", fontSize: 12 }}
+            >
+              Open Pigeons
+            </button>
+            <button type="button" onClick={() => setSpyOutcomePopup(null)} style={{ ...BTN_STYLE, padding: "7px 10px", fontSize: 12 }}>
+              Dismiss
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div style={CARD}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
           <div style={{ fontFamily: FONT_DISPLAY, fontSize: isMobile ? 24 : 28, fontWeight: 800, color: "#fff7ec" }}>
