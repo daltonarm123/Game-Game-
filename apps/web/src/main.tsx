@@ -2861,7 +2861,7 @@ function WarRoomView() {
   const [exploreOpen, setExploreOpen] = useState(false);
   const [exploreSentTroops, setExploreSentTroops] = useState<Record<string, number>>({});
   const [trainTroop, setTrainTroop] = useState("footmen");
-  const [trainQty, setTrainQty] = useState(1);
+  const [trainQty, setTrainQty] = useState("1");
   const [cancelTrainId, setCancelTrainId] = useState<number | null>(null);
   const [attackTarget, setAttackTarget] = useState("");
   const [sentTroops, setSentTroops] = useState<Record<string, number>>({});
@@ -2908,7 +2908,8 @@ function WarRoomView() {
   const movements = (data?.movements || []) as Array<any>;
   const troopCodeOptions = troops.filter((t) => Boolean(t.isTrainable)).map((t) => String(t.troopCode || ""));
   const trainTroopData = troops.find((t) => String(t.troopCode || "") === String(trainTroop));
-  const trainQtySafe = Math.max(1, Number(trainQty || 1));
+  const trainQtyNum = Math.max(0, Math.floor(Number(trainQty || 0)));
+  const trainQtySafe = Math.max(1, trainQtyNum || 1);
   const attackApTotal = Object.entries(sentTroops).reduce((acc, [code, qty]) => {
     const troop = troops.find((t) => String(t.troopCode || "") === code);
     return acc + Number(qty || 0) * Number(troop?.att || 0);
@@ -2922,18 +2923,22 @@ function WarRoomView() {
   async function submitTrain(e: React.FormEvent) {
     e.preventDefault();
     setActionMsg("");
+    if (trainQtyNum < 1) {
+      setActionMsg("Train failed: enter a quantity of at least 1.");
+      return;
+    }
     try {
       const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/train`, {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({
           troopCode: trainTroop,
-          quantity: Math.max(1, Math.floor(Number(trainQty || 0))),
+          quantity: trainQtyNum,
         }),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setActionMsg(`Queued ${Number(trainQty || 0).toLocaleString()} ${trainTroop}.`);
+      setActionMsg(`Queued ${trainQtyNum.toLocaleString()} ${trainTroop}.`);
       void load();
     } catch (e: any) {
       setActionMsg(`Train failed: ${String(e?.message || e)}`);
@@ -3227,7 +3232,7 @@ function WarRoomView() {
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: pairCols, gap: 8 }}>
                       <div style={{ ...INPUT_STYLE }}>Amount To Train</div>
-                      <input type="number" min={1} max={50000} value={trainQty} onChange={(e) => setTrainQty(Math.max(1, Number(e.target.value || 1)))} style={INPUT_STYLE} />
+                      <input type="number" min={1} max={50000} value={trainQty} onChange={(e) => setTrainQty(String(e.target.value || "").replace(/\D+/g, ""))} style={INPUT_STYLE} />
                     </div>
                     {trainTroopData ? (
                       <div style={{ color: TEXT_MUTED }}>
@@ -3382,7 +3387,7 @@ function TrainTroopsView() {
   const [loading, setLoading] = useState(false);
   const [actionMsg, setActionMsg] = useState("");
   const [trainTroop, setTrainTroop] = useState("pikemen");
-  const [trainQty, setTrainQty] = useState(1000);
+  const [trainQty, setTrainQty] = useState("1000");
   const [cancelTrainId, setCancelTrainId] = useState<number | null>(null);
 
   async function load() {
@@ -3416,18 +3421,23 @@ function TrainTroopsView() {
   async function submitTrain(e: React.FormEvent) {
     e.preventDefault();
     setActionMsg("");
+    const trainQtyNum = Math.max(0, Math.floor(Number(trainQty || 0)));
+    if (trainQtyNum < 1) {
+      setActionMsg("Train failed: enter a quantity of at least 1.");
+      return;
+    }
     try {
       const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/train`, {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({
           troopCode: trainTroop,
-          quantity: Math.max(1, Math.floor(Number(trainQty || 0))),
+          quantity: trainQtyNum,
         }),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setActionMsg(`Queued ${Number(trainQty || 0).toLocaleString()} ${trainTroop}.`);
+      setActionMsg(`Queued ${trainQtyNum.toLocaleString()} ${trainTroop}.`);
       void load();
     } catch (e: any) {
       setActionMsg(`Train failed: ${String(e?.message || e)}`);
@@ -3519,7 +3529,7 @@ function TrainTroopsView() {
                 min={1}
                 max={50000}
                 value={trainQty}
-                onChange={(e) => setTrainQty(Math.max(1, Number(e.target.value || 1)))}
+                onChange={(e) => setTrainQty(String(e.target.value || "").replace(/\D+/g, ""))}
                 style={{ ...INPUT_STYLE, width: 130 }}
               />
               <button type="submit" style={BTN_STYLE}>
@@ -4094,7 +4104,7 @@ function PrayView() {
   const [selectedPrayer, setSelectedPrayer] = useState(Object.keys(PRAYER_DEFS)[0]);
   const [selectedSpell, setSelectedSpell] = useState(Object.keys(HOLY_SPELL_DEFS)[0]);
   const [spellTarget, setSpellTarget] = useState("");
-  const [days, setDays] = useState(7);
+  const [days, setDays] = useState("7");
   const [busy, setBusy] = useState(false);
   const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
 
@@ -4126,15 +4136,19 @@ function PrayView() {
     setActionMsg("");
     setBusy(true);
     try {
+      const prayerDays = Math.floor(Number(days || 0));
+      if (prayerDays < 1 || prayerDays > 90) {
+        throw new Error("days must be between 1 and 90");
+      }
       const r = await fetch(`${API_BASE}/api/pray/${encodeURIComponent(kingdom)}/start`, {
         method: "POST",
         headers: authHeaders(),
-        body: JSON.stringify({ prayerCode: selectedPrayer, days }),
+        body: JSON.stringify({ prayerCode: selectedPrayer, days: prayerDays }),
       });
       const j = await r.json();
       if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       const def = PRAYER_DEFS[selectedPrayer];
-      setActionMsg(`${def?.name || selectedPrayer} started for ${days} days.`);
+      setActionMsg(`${def?.name || selectedPrayer} started for ${prayerDays} days.`);
       await load();
     } catch (e: any) { setActionMsg(`Error: ${String(e?.message || e)}`); }
     finally { setBusy(false); }
@@ -4249,7 +4263,9 @@ function PrayView() {
   const recentCasts: any[] = data?.recentCasts ?? [];
   const activeEffects: any[] = data?.activeEffects ?? [];
   const selDef = PRAYER_DEFS[selectedPrayer];
-  const totalManaCost = selDef ? selDef.manaPerDay * days : 0;
+  const daysNum = Math.max(0, Math.floor(Number(days || 0)));
+  const daysSafe = Math.min(90, Math.max(1, daysNum || 1));
+  const totalManaCost = selDef ? selDef.manaPerDay * daysSafe : 0;
   const canAfford = mana >= totalManaCost;
 
   return (
@@ -4351,7 +4367,7 @@ function PrayView() {
                 min={1}
                 max={90}
                 value={days}
-                onChange={(e) => setDays(Math.max(1, Math.min(90, Number(e.target.value || 1))))}
+                onChange={(e) => setDays(String(e.target.value || "").replace(/\D+/g, ""))}
                 style={{ ...INPUT_STYLE, width: 70 }}
               />
             </div>
@@ -4381,7 +4397,7 @@ function PrayView() {
                 <span style={{ color: TEXT_MUTED, fontSize: 13 }}>/ {mana.toLocaleString()} available</span>
               </div>
               <div style={{ fontSize: 12, color: TEXT_MUTED, marginTop: 4 }}>
-                {selDef.manaPerDay.toLocaleString()} mana/day × {days} days = {totalManaCost.toLocaleString()} total
+                {selDef.manaPerDay.toLocaleString()} mana/day × {daysSafe} days = {totalManaCost.toLocaleString()} total
               </div>
             </div>
           )}
@@ -5800,11 +5816,11 @@ function GuildhallView() {
   const [actionMsg, setActionMsg] = useState("");
   const [trainOpen, setTrainOpen] = useState(false);
   const [spyOpen, setSpyOpen] = useState(false);
-  const [trainAmt, setTrainAmt] = useState(1);
+  const [trainAmt, setTrainAmt] = useState("1");
   const [defenderKingdom, setDefenderKingdom] = useState(() => { const t = localStorage.getItem("gg:prefill-target") || ""; if (t) localStorage.removeItem("gg:prefill-target"); return t; });
-  const [spiesToSend, setSpiesToSend] = useState(1);
+  const [spiesToSend, setSpiesToSend] = useState("1");
   const [sabotageTarget, setSabotageTarget] = useState("");
-  const [sabotageSpies, setSabotageSpies] = useState(10);
+  const [sabotageSpies, setSabotageSpies] = useState("10");
   const [sabotageOperation, setSabotageOperation] = useState<"resource_heist" | "priest_assassination">("resource_heist");
   const [sabotageResource, setSabotageResource] = useState<"gold" | "food" | "wood" | "stone">("gold");
   const [busy, setBusy] = useState(false);
@@ -5856,7 +5872,8 @@ function GuildhallView() {
     setBusy(true);
     setActionMsg("");
     try {
-      const reqQty = Math.max(1, Math.floor(Number(trainAmt || 1)));
+      const reqQty = Math.floor(Number(trainAmt || 0));
+      if (reqQty < 1) throw new Error("enter at least 1 spy");
       if (spyCapacityAvailable <= 0) throw new Error("no guildhall room left for more spies");
       if (reqQty > spyCapacityAvailable) throw new Error(`only ${spyCapacityAvailable.toLocaleString()} spy slots left`);
       const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/train`, {
@@ -5880,10 +5897,12 @@ function GuildhallView() {
     setBusy(true);
     setActionMsg("");
     try {
+      const spiesQty = Math.floor(Number(spiesToSend || 0));
+      if (spiesQty < 1) throw new Error("enter at least 1 spy");
       const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}/spy`, {
         method: "POST",
         headers: authHeaders(),
-        body: JSON.stringify({ defenderKingdom, spiesToSend }),
+        body: JSON.stringify({ defenderKingdom, spiesToSend: spiesQty }),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
@@ -5902,12 +5921,14 @@ function GuildhallView() {
     setBusy(true);
     setActionMsg("");
     try {
+      const sabotageQty = Math.floor(Number(sabotageSpies || 0));
+      if (sabotageQty < 1) throw new Error("enter at least 1 spy");
       const r = await fetch(`${API_BASE}/api/guildhall/${encodeURIComponent(kingdom)}/sabotage`, {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({
           defenderKingdom: sabotageTarget.trim(),
-          spiesToSend: sabotageSpies,
+          spiesToSend: sabotageQty,
           resource: sabotageResource,
           operation: sabotageOperation,
         }),
@@ -6018,7 +6039,7 @@ function GuildhallView() {
                     min={1}
                     max={Math.max(1, spyCapacityAvailable)}
                     value={trainAmt}
-                    onChange={(e) => setTrainAmt(Math.max(1, Number(e.target.value)))}
+                    onChange={(e) => setTrainAmt(String(e.target.value || "").replace(/\D+/g, ""))}
                     style={{ ...INPUT_STYLE, width: 80, fontSize: 14 }}
                   />
                 </div>
@@ -6038,7 +6059,7 @@ function GuildhallView() {
                 <KingdomInput value={defenderKingdom} onChange={(v) => setDefenderKingdom(v)} placeholder="Target Kingdom" />
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <span style={{ fontSize: 14, color: TEXT_MUTED }}>Spies to send:</span>
-                  <input type="number" min={1} value={spiesToSend} onChange={(e) => setSpiesToSend(Math.max(1, Number(e.target.value)))} style={{ ...INPUT_STYLE, width: 80, fontSize: 14 }} />
+                  <input type="number" min={1} value={spiesToSend} onChange={(e) => setSpiesToSend(String(e.target.value || "").replace(/\D+/g, ""))} style={{ ...INPUT_STYLE, width: 80, fontSize: 14 }} />
                 </div>
                 <button type="submit" disabled={busy} style={{ ...BTN_STYLE, width: isMobile ? "100%" : "fit-content", fontSize: 13 }}>{busy ? "Sending..." : "Send Spies"}</button>
               </form>
@@ -6070,7 +6091,7 @@ function GuildhallView() {
                   <option value="stone">Stone</option>
                 </select>
                 <span style={{ fontSize: 13, color: TEXT_MUTED }}>Spies</span>
-                <input type="number" min={1} value={sabotageSpies} onChange={(e) => setSabotageSpies(Math.max(1, Number(e.target.value || 1)))} style={{ ...INPUT_STYLE, width: isMobile ? "100%" : 90 }} />
+                <input type="number" min={1} value={sabotageSpies} onChange={(e) => setSabotageSpies(String(e.target.value || "").replace(/\D+/g, ""))} style={{ ...INPUT_STYLE, width: isMobile ? "100%" : 90 }} />
               </div>
               <button type="submit" disabled={busy} style={{ ...BTN_STYLE, width: isMobile ? "100%" : "fit-content", fontSize: 13 }}>
                 {busy ? "Executing..." : "Run Sabotage"}
