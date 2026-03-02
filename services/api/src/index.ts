@@ -1344,6 +1344,8 @@ app.post("/api/auth/register", async (req, res) => {
           farm: 20,        // 20 farms × 120 food/hr = 2,400/hr, covers 1k peasant upkeep (2,000/hr) + surplus
           lumberyard: 5,   // basic wood production so new players can build
           quarry: 5,       // basic stone production so new players can build
+          houses: 5,       // 5 houses × 10 peasants = 50 extra pop cap; shows housing system to new players
+          barracks: 1,     // lets new players train footmen immediately
         },
         troopAmounts: { peasants: 1000 },
       });
