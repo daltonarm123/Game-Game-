@@ -2784,15 +2784,15 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
       const def = d.rows[0];
       if (Number(atk.id) === Number(def.id)) throw new Error("cannot attack self");
 
-      // Anti-cheat: cap attacks on the same kingdom to 3 per 24 hours
+      // Anti-cheat: 24-hour cooldown per attacker-defender pair (1 hit then wait)
       const recentAttackCount = await c.query(
         `SELECT COUNT(*) AS cnt FROM attack_reports
          WHERE attacker_kingdom_id=$1 AND defender_kingdom_id=$2
            AND created_at > now() - interval '24 hours'`,
         [atk.id, def.id],
       );
-      if (Number(recentAttackCount.rows[0]?.cnt || 0) >= 3) {
-        throw new Error("You have attacked this kingdom 3 times in the last 24 hours. Wait before attacking again.");
+      if (Number(recentAttackCount.rows[0]?.cnt || 0) >= 1) {
+        throw new Error("You have already attacked this kingdom in the last 24 hours. You must wait before attacking them again.");
       }
 
       const atkShieldRow = await normalizeShieldStateTx(c, Number(atk.id));
