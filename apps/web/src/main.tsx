@@ -349,6 +349,8 @@ function OverviewView() {
   const populationTrain = Number(war?.kingdom?.populationTrain || 0);
   const populationAway = Number(war?.kingdom?.populationAway || 0);
   const populationTotal = populationHome + populationTrain + populationAway;
+  const populationCap = Number(war?.kingdom?.populationCap || 0);
+  const peasantsHome = Number((war?.troops as any[])?.find((t: any) => t.troopCode === "peasants")?.home || 0);
   const season = details?.season;
   const seasonRemaining = seasonRemainingSec;
   const seasonDays = Math.floor(seasonRemaining / 86400);
@@ -518,7 +520,8 @@ function OverviewView() {
             <div style={STAT_ROW}><span style={STAT_LABEL}>Religion</span><span style={STAT_VALUE}>Nastfuru</span></div>
             <div style={STAT_ROW}><span style={STAT_LABEL}>Networth</span><span style={STAT_VALUE}>{fmtNum(Number(war?.kingdom?.networth || 0))}</span></div>
             <div style={STAT_ROW}><span style={STAT_LABEL}>Land</span><span style={STAT_VALUE}>{fmtNum(Number(k?.land || 0))} / {fmtNum(Number(k?.land || 0))} Acres</span></div>
-            <div style={STAT_ROW}><span style={STAT_LABEL}>Population (home/total)</span><span style={STAT_VALUE}>{fmtNum(populationHome)} / {fmtNum(populationTotal)}</span></div>
+            <div style={STAT_ROW}><span style={STAT_LABEL}>Peasants (home / cap)</span><span style={STAT_VALUE}>{fmtNum(peasantsHome)} / {fmtNum(populationCap)}</span></div>
+            <div style={STAT_ROW}><span style={STAT_LABEL}>Total Forces</span><span style={STAT_VALUE}>{fmtNum(populationHome)} home · {fmtNum(populationTotal)} total</span></div>
             <div style={STAT_ROW}><span style={STAT_LABEL}>Settlement Wellbeing</span><span style={STAT_VALUE}>{fmtNum(Math.floor(Number(k?.land || 0) * 12.5))}</span></div>
             <div style={STAT_ROW}><span style={STAT_LABEL}>Consecutive Days</span><span style={STAT_VALUE}>{fmtNum(daysPlayed)}</span></div>
           </div>

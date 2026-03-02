@@ -3646,6 +3646,9 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
     for (const aw of awayRows.rows) awayMap.set(String(aw.troop_code), Number(aw.qty || 0));
     for (const b of kingdomBuildings.rows) buildingLevelMap.set(String(b.building_code), Number(b.level || 0));
     const guildhalls = Number(buildingLevelMap.get("guildhalls") || 0);
+    const housesBuilt = Number(buildingLevelMap.get("houses") || 0);
+    const castlesBuilt = Number(buildingLevelMap.get("castles") || 0);
+    const popCap = effectivePeasantCap({ houses: housesBuilt, castles: castlesBuilt });
     const spiesHome = Number(homeRows.rows.find((t) => String(t.code) === "spies")?.home || 0);
     const spiesTrain = Number(trainMap.get("spies") || 0);
     const spiesAway = Number(awayMap.get("spies") || 0);
@@ -3713,6 +3716,7 @@ app.get("/api/war-room/:kingdom", async (req, res) => {
         populationHome: troops.reduce((a, b) => a + Number(b.home || 0), 0),
         populationTrain: troops.reduce((a, b) => a + Number(b.train || 0), 0),
         populationAway: troops.reduce((a, b) => a + Number(b.away || 0), 0),
+        populationCap: popCap,
         food: Number(row.food || 0),
         gold: Number(row.gold || 0),
         horses: Number(row.horses || 0),
