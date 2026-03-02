@@ -1338,7 +1338,12 @@ app.post("/api/auth/register", async (req, res) => {
         stone: 5_000,
         land: 1_000,
         horses: 0,
-        buildingLevels: { castles: 1 },
+        buildingLevels: {
+          castles: 1,
+          farm: 20,        // 20 farms × 120 food/hr = 2,400/hr, covers 1k peasant upkeep (2,000/hr) + surplus
+          lumberyard: 5,   // basic wood production so new players can build
+          quarry: 5,       // basic stone production so new players can build
+        },
         troopAmounts: { peasants: 1000 },
       });
       const session = await createAuthSession(c, userId);
