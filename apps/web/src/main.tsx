@@ -1032,6 +1032,7 @@ function BuildingsView() {
           <>
             <form
               onSubmit={submitBuild}
+              noValidate
               style={{
                 display: "grid",
                 gap: 8,
@@ -1065,6 +1066,7 @@ function BuildingsView() {
             </form>
             <form
               onSubmit={submitDemolish}
+              noValidate
               style={{
                 marginTop: 10,
                 display: "grid",
@@ -3421,7 +3423,7 @@ function WarRoomView() {
                   {trainOpen ? "-" : "+"} Train Troops
                 </button>
                 {trainOpen ? (
-                  <form onSubmit={submitTrain} style={{ padding: 10, display: "grid", gap: 8 }}>
+                  <form onSubmit={submitTrain} noValidate style={{ padding: 10, display: "grid", gap: 8 }}>
                     <div style={{ display: "grid", gridTemplateColumns: pairCols, gap: 8 }}>
                       <div style={{ ...INPUT_STYLE }}>Population Types</div>
                       <select value={trainTroop} onChange={(e) => setTrainTroop(e.target.value)} style={INPUT_STYLE}>
@@ -3467,7 +3469,7 @@ function WarRoomView() {
                   {attackOpen ? "-" : "+"} Attack Kingdom
                 </button>
                 {attackOpen ? (
-                  <form onSubmit={submitAttack} style={{ padding: 10, display: "grid", gap: 8 }}>
+                  <form onSubmit={submitAttack} noValidate style={{ padding: 10, display: "grid", gap: 8 }}>
                     <div style={{ display: "grid", gridTemplateColumns: pairCols, gap: 8 }}>
                       <div style={{ ...INPUT_STYLE }}>Kingdom Name</div>
                       <KingdomInput
@@ -3502,7 +3504,7 @@ function WarRoomView() {
                   {exploreOpen ? "-" : "+"} Explore Land
                 </button>
                 {exploreOpen ? (
-                  <form onSubmit={submitExplore} style={{ padding: 10, display: "grid", gap: 8 }}>
+                  <form onSubmit={submitExplore} noValidate style={{ padding: 10, display: "grid", gap: 8 }}>
                     <div style={{ color: TEXT_MUTED, fontSize: 13 }}>
                       Send troops to explore unclaimed wilderness and gain land. Land cap: <strong style={{ color: ACCENT }}>{(data?.explore?.landCap || 20000).toLocaleString()}</strong>.
                       You currently have <strong style={{ color: ACCENT }}>{Number(k?.land || 0).toLocaleString()}</strong> land
@@ -3719,7 +3721,7 @@ function TrainTroopsView() {
           </div>
 
           <div style={CARD}>
-            <form onSubmit={submitTrain} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <form onSubmit={submitTrain} noValidate style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               <select value={trainTroop} onChange={(e) => setTrainTroop(e.target.value)} style={INPUT_STYLE} disabled={troopCodeOptions.length === 0}>
                 {troopCodeOptions.map((t) => (
                   <option key={t.troopCode} value={t.troopCode}>
@@ -3874,7 +3876,7 @@ function AttackKingdomView() {
       </div>
 
       <div style={CARD}>
-        <form onSubmit={submitAttack} style={{ display: "grid", gap: 8 }}>
+        <form onSubmit={submitAttack} noValidate style={{ display: "grid", gap: 8 }}>
           <KingdomInput value={attackTarget} onChange={(v) => setAttackTarget(v)} placeholder="Defender kingdom" style={{ minWidth: 220 }} />
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 8 }}>
             {troops.map((t) => (

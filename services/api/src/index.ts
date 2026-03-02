@@ -33,6 +33,13 @@ import { evaluateOpsAlerts } from "./ops.js";
 
 dotenv.config();
 
+/** Convert a ZodError into a readable string for API responses. */
+function zodMsg(e: z.ZodError): string {
+  const flat = e.flatten();
+  const msgs = [...flat.formErrors, ...Object.values(flat.fieldErrors as Record<string, string[]>).flat()];
+  return msgs.join("; ") || "Validation error";
+}
+
 const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGIN || "*")
   .split(",")
   .map((v) => v.trim())
@@ -1334,7 +1341,7 @@ app.get("/readyz", async (_req, res) => {
 
 app.post("/api/auth/register", async (req, res) => {
   const parsed = authRegisterBody.safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const email = normalizeEmail(parsed.data.email);
   const username = normalizeUsername(parsed.data.username);
   const password = String(parsed.data.password || "");
@@ -1408,7 +1415,7 @@ app.post("/api/auth/register", async (req, res) => {
 
 app.post("/api/auth/login", async (req, res) => {
   const parsed = authLoginBody.safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const emailOrUsername = String(parsed.data.emailOrUsername || "").trim();
   const password = String(parsed.data.password || "");
   if (!emailOrUsername || !password) return res.status(400).json({ ok: false, error: "credentials required" });
@@ -1671,7 +1678,7 @@ app.use("/api/dev", (req, res, next) => {
 
 app.post("/api/dev/demo-reset", async (req, res) => {
   const parsed = demoResetBody.safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const body = parsed.data;
 
   try {
@@ -1788,7 +1795,7 @@ app.post("/api/dev/demo-reset", async (req, res) => {
 app.post("/api/dev/register", async (req, res) => {
   const parsed = registerBody.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+    return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   }
 
   const body = parsed.data;
@@ -2173,7 +2180,7 @@ app.post("/api/kingdom/:name/build", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
   const parsed = buildBody.safeParse(req.body);
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
 
   const buildingCode = parsed.data.buildingCode.toLowerCase();
   const qty = Math.max(1, Number(parsed.data.quantity || 1));
@@ -2286,7 +2293,7 @@ app.post("/api/kingdom/:name/build/cancel", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
   const parsed = queueCancelBody.safeParse(req.body || {});
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
 
   try {
     const out = await withTx(async (c) => {
@@ -2333,7 +2340,7 @@ app.post("/api/kingdom/:name/build/demolish", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
   const parsed = demolishBuildingBody.safeParse(req.body || {});
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
 
   try {
     const out = await withTx(async (c) => {
@@ -2388,7 +2395,7 @@ app.post("/api/kingdom/:name/train", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
   const parsed = trainBody.safeParse(req.body);
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
 
   const troopCode = parsed.data.troopCode.toLowerCase();
   const qty = parsed.data.quantity;
@@ -2562,7 +2569,7 @@ app.post("/api/kingdom/:name/train/cancel", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
   const parsed = queueCancelBody.safeParse(req.body || {});
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
 
   try {
     const out = await withTx(async (c) => {
@@ -2624,7 +2631,7 @@ app.post("/api/kingdom/:name/disband", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
   const parsed = disbandBody.safeParse(req.body);
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const troopCode = String(parsed.data.troopCode || "").toLowerCase().trim();
   const qty = Math.max(1, Math.floor(Number(parsed.data.quantity || 0)));
 
@@ -2689,7 +2696,7 @@ app.post("/api/kingdom/:name/tax", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
   const parsed = taxUpdateBody.safeParse(req.body);
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
 
   try {
     const out = await withTx(async (c) => {
@@ -2808,7 +2815,7 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
   const attackerName = String(req.params.attacker || "").trim();
   const parsed = attackBody.safeParse(req.body);
   if (!attackerName) return res.status(400).json({ ok: false, error: "attacker kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
 
   const defenderName = parsed.data.defenderKingdom.trim();
   const sentTroopsRaw = Object.fromEntries(
@@ -3316,7 +3323,7 @@ app.post("/api/war-room/:attacker/explore", requireAuth, async (req, res) => {
   const attackerName = String(req.params.attacker || "").trim();
   const parsed = exploreBody.safeParse(req.body);
   if (!attackerName) return res.status(400).json({ ok: false, error: "attacker kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
 
   const sentTroopsRaw = Object.fromEntries(
     Object.entries(parsed.data.sentTroops).map(([k, v]) => [String(k).toLowerCase(), Number(v || 0)]),
@@ -3456,7 +3463,7 @@ app.post("/api/war-room/:attacker/spy", requireAuth, async (req, res) => {
   const attackerName = String(req.params.attacker || "").trim();
   const parsed = spyBody.safeParse(req.body);
   if (!attackerName) return res.status(400).json({ ok: false, error: "attacker kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const defenderName = parsed.data.defenderKingdom.trim();
   const spiesToSend = Math.max(1, Number(parsed.data.spiesToSend || 0));
 
@@ -4174,7 +4181,7 @@ app.post("/api/pigeons/:kingdom/delete-many", requireAuth, async (req, res) => {
     tab: z.enum(["inbox", "outbox", "any"]).optional().default("any"),
   }).safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const session = (req as any).authSession;
   try {
     const out = await withTx(async (c) => {
@@ -4221,7 +4228,7 @@ app.post("/api/pigeons/:kingdom/send", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = sendPigeonBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   try {
     const out = await withTx(async (c) => {
       const fromQ = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
@@ -4450,7 +4457,7 @@ app.post("/api/research/:kingdom/start", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = researchStartBody.safeParse(req.body);
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
 
   const researchCode = String(parsed.data.researchCode || "").toLowerCase().trim();
   if (!researchCode) return res.status(400).json({ ok: false, error: "researchCode required" });
@@ -4717,7 +4724,7 @@ app.post("/api/settlements/:kingdom/found", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementFoundBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const name = String(parsed.data.name || "").trim();
 
   try {
@@ -4757,7 +4764,7 @@ app.post("/api/settlements/:kingdom/build-building", requireAuth, async (req, re
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementBuildBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const settlementId = Number(parsed.data.settlementId);
   const buildingCode = String(parsed.data.buildingCode || "").toLowerCase();
 
@@ -4829,7 +4836,7 @@ app.post("/api/settlements/:kingdom/upgrade-cost", requireAuth, async (req, res)
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementUpgradeCostBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const settlementId = Number(parsed.data.settlementId);
   const buildingCode = String(parsed.data.buildingCode || "").toLowerCase();
 
@@ -4891,7 +4898,7 @@ app.post("/api/settlements/:kingdom/destroy-building", requireAuth, async (req, 
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementDestroyBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const settlementId = Number(parsed.data.settlementId);
   const buildingId = Number(parsed.data.buildingId);
 
@@ -4920,7 +4927,7 @@ app.post("/api/settlements/:kingdom/upgrade-building", requireAuth, async (req, 
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementUpgradeBody.safeParse(req.body);
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const { settlementId, buildingId } = parsed.data;
 
   try {
@@ -5002,7 +5009,7 @@ app.post("/api/settlements/:kingdom/cancel-build", requireAuth, async (req, res)
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = queueCancelBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const queueId = Number(parsed.data.queueId);
 
   try {
@@ -5071,7 +5078,7 @@ app.post("/api/settlements/:kingdom/history", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementHistoryBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const settlementId = Number(parsed.data.settlementId);
   try {
     const k = await pool.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
@@ -5117,7 +5124,7 @@ app.post("/api/settlements/:kingdom/garrison/add", requireAuth, async (req, res)
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementGarrisonBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
 
   try {
     const out = await withTx(async (c) => {
@@ -5166,7 +5173,7 @@ app.post("/api/settlements/:kingdom/garrison/remove", requireAuth, async (req, r
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementGarrisonBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
 
   try {
     const out = await withTx(async (c) => {
@@ -5209,7 +5216,7 @@ app.post("/api/settlements/:kingdom/rename", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = settlementRenameBody.safeParse(req.body);
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const settlementId = Number(parsed.data.settlementId);
   const name = String(parsed.data.name || "").trim();
   if (!name) return res.status(400).json({ ok: false, error: "name required" });
@@ -5464,7 +5471,7 @@ app.post("/api/alliance/:kingdom/create", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = allianceCreateBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
 
   try {
     const out = await withTx(async (c) => {
@@ -5518,7 +5525,7 @@ app.post("/api/alliance/:kingdom/join", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = allianceJoinBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
 
   try {
     const out = await withTx(async (c) => {
@@ -5692,7 +5699,7 @@ app.post("/api/alliance/:kingdom/relation", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = allianceRelationBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
 
   try {
     const out = await withTx(async (c) => {
@@ -5736,7 +5743,7 @@ app.post("/api/alliance/:kingdom/contribute", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = allianceContribBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
 
   try {
     const out = await withTx(async (c) => {
@@ -6063,7 +6070,7 @@ app.post("/api/alliance-forums/:kingdom/threads", requireAuth, async (req, res) 
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = allianceForumCreateThreadBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   try {
     const out = await withTx(async (c) => {
       const m = await getAllianceMembershipByKingdom(c, kingdom);
@@ -6143,7 +6150,7 @@ app.post("/api/alliance-forums/:kingdom/threads/:threadId/posts", requireAuth, a
   const threadId = Number(req.params.threadId || 0);
   const parsed = allianceForumCreatePostBody.safeParse(req.body || {});
   if (!kingdom || !threadId) return res.status(400).json({ ok: false, error: "kingdom and threadId required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   try {
     const out = await withTx(async (c) => {
       const m = await getAllianceMembershipByKingdom(c, kingdom);
@@ -6173,7 +6180,7 @@ app.post("/api/alliance-forums/:kingdom/threads/:threadId/moderate", requireAuth
   const threadId = Number(req.params.threadId || 0);
   const parsed = allianceForumModerateThreadBody.safeParse(req.body || {});
   if (!kingdom || !threadId) return res.status(400).json({ ok: false, error: "kingdom and threadId required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   try {
     const out = await withTx(async (c) => {
       const m = await getAllianceMembershipByKingdom(c, kingdom);
@@ -6212,7 +6219,7 @@ app.post("/api/alliance-forums/:kingdom/posts/:postId/moderate", requireAuth, as
   const postId = Number(req.params.postId || 0);
   const parsed = allianceForumModeratePostBody.safeParse(req.body || {});
   if (!kingdom || !postId) return res.status(400).json({ ok: false, error: "kingdom and postId required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   try {
     const out = await withTx(async (c) => {
       const m = await getAllianceMembershipByKingdom(c, kingdom);
@@ -6304,7 +6311,7 @@ app.post("/api/embassy/:kingdom/send", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = embassySendMissionBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   try {
     const out = await withTx(async (c) => {
       const fromK = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
@@ -6358,7 +6365,7 @@ app.post("/api/embassy/:kingdom/respond", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = embassyRespondMissionBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   try {
     const out = await withTx(async (c) => {
       const k = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
@@ -6460,7 +6467,7 @@ app.post("/api/guildhall/:kingdom/sabotage", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const parsed = guildSabotageBody.safeParse(req.body || {});
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   try {
     const out = await withTx(async (c) => {
       const atk = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
@@ -6609,7 +6616,7 @@ app.get("/api/admin/audit-log", requireAdmin, async (req, res) => {
 
 app.post("/api/admin/ban", requireAdmin, async (req, res) => {
   const parsed = z.object({ userId: z.string().min(1), reason: z.string().max(500).optional() }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const admin = (req as any).adminSession;
   try {
     const out = await withTx(async (c) => {
@@ -6629,7 +6636,7 @@ app.post("/api/admin/ban", requireAdmin, async (req, res) => {
 
 app.post("/api/admin/unban", requireAdmin, async (req, res) => {
   const parsed = z.object({ userId: z.string().min(1) }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const admin = (req as any).adminSession;
   try {
     const out = await withTx(async (c) => {
@@ -6648,7 +6655,7 @@ app.post("/api/admin/unban", requireAdmin, async (req, res) => {
 
 app.post("/api/admin/set-admin", requireAdmin, async (req, res) => {
   const parsed = z.object({ userId: z.string().min(1), grant: z.boolean() }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const self = (req as any).adminSession;
   if (String(self.user_id) === parsed.data.userId && !parsed.data.grant) return res.status(400).json({ ok: false, error: "cannot revoke your own admin" });
   try {
@@ -6671,7 +6678,7 @@ app.post("/api/admin/set-premium", requireAdmin, async (req, res) => {
     userId: z.string().min(1),
     days: z.number().int().min(0).max(3650),
   }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const admin = (req as any).adminSession;
   try {
     const out = await withTx(async (c) => {
@@ -6724,7 +6731,7 @@ app.post("/api/admin/set-premium", requireAdmin, async (req, res) => {
 
 app.post("/api/admin/resend-verification", requireAdmin, async (req, res) => {
   const parsed = z.object({ userId: z.string().min(1) }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const admin = (req as any).adminSession;
   try {
     const out = await withTx(async (c) => {
@@ -6760,7 +6767,7 @@ app.post("/api/admin/update-user", requireAdmin, async (req, res) => {
     email: z.string().email().optional(),
     password: z.string().min(8).max(128).optional(),
   }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
 
   const hasUpdate = parsed.data.username !== undefined || parsed.data.email !== undefined || parsed.data.password !== undefined;
   if (!hasUpdate) return res.status(400).json({ ok: false, error: "no fields provided to update" });
@@ -6849,7 +6856,7 @@ app.post("/api/admin/set-land", requireAdmin, async (req, res) => {
     kingdom: z.string().min(2),
     land: z.number().int().min(0).max(2_000_000_000),
   }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const admin = (req as any).adminSession;
   try {
     const out = await withTx(async (c) => {
@@ -6879,7 +6886,7 @@ app.post("/api/admin/grant-building", requireAdmin, async (req, res) => {
     buildingCode: z.string().min(1),
     amount: z.number().int().min(1).max(10_000),
   }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const admin = (req as any).adminSession;
   try {
     const out = await withTx(async (c) => {
@@ -6916,7 +6923,7 @@ app.post("/api/admin/grant-resource", requireAdmin, async (req, res) => {
     resource: z.enum(["gold", "food", "wood", "stone"]),
     amount: z.number().int().min(-9_999_999).max(9_999_999),
   }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const admin = (req as any).adminSession;
   const col = parsed.data.resource;
   try {
@@ -6946,7 +6953,7 @@ app.post("/api/admin/reconcile-land", requireAdmin, async (req, res) => {
     buffer: z.number().int().min(0).max(100000).optional(),
     dryRun: z.boolean().optional(),
   }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const admin = (req as any).adminSession;
   const kingdomFilter = String(parsed.data.kingdom || "").trim();
   const buffer = Number(parsed.data.buffer ?? 0);
@@ -7009,7 +7016,7 @@ app.post("/api/admin/reconcile-population", requireAdmin, async (req, res) => {
     kingdom: z.string().min(2).optional(),
     dryRun: z.boolean().optional(),
   }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const admin = (req as any).adminSession;
   const kingdomFilter = String(parsed.data.kingdom || "").trim();
   const dryRun = Boolean(parsed.data.dryRun);
@@ -7081,7 +7088,7 @@ app.post("/api/admin/reconcile-spy-capacity", requireAdmin, async (req, res) => 
     kingdom: z.string().min(2).optional(),
     dryRun: z.boolean().optional(),
   }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const admin = (req as any).adminSession;
   const kingdomFilter = String(parsed.data.kingdom || "").trim();
   const dryRun = Boolean(parsed.data.dryRun);
@@ -7180,7 +7187,7 @@ app.post("/api/admin/reconcile-train-queue-times", requireAdmin, async (req, res
     kingdom: z.string().min(2).optional(),
     dryRun: z.boolean().optional(),
   }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const admin = (req as any).adminSession;
   const kingdomFilter = String(parsed.data.kingdom || "").trim();
   const dryRun = Boolean(parsed.data.dryRun);
@@ -7313,7 +7320,7 @@ app.get("/api/pray/:kingdom", async (req, res) => {
 
 app.post("/api/pray/:kingdom/start", requireAuth, async (req, res) => {
   const parsed = z.object({ prayerCode: z.string().min(1), days: z.number().int().min(1).max(90) }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const { prayerCode, days } = parsed.data;
   if (!PRAYERS[prayerCode]) return res.status(400).json({ ok: false, error: "unknown prayer" });
   try {
@@ -7338,7 +7345,7 @@ app.post("/api/pray/:kingdom/start", requireAuth, async (req, res) => {
 
 app.post("/api/pray/:kingdom/stop", requireAuth, async (req, res) => {
   const parsed = z.object({ prayerId: z.number().int().positive() }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   try {
     const k = await pool.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1)`, [req.params.kingdom]);
     if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
@@ -7353,7 +7360,7 @@ app.post("/api/pray/:kingdom/stop", requireAuth, async (req, res) => {
 
 app.post("/api/pray/:kingdom/cast", requireAuth, async (req, res) => {
   const parsed = holyCircleCastBody.safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const spellCode = parsed.data.spellCode;
   const targetKingdom = String(parsed.data.targetKingdom || "").trim();
   if ((spellCode === "blight" || spellCode === "mana_leech") && !targetKingdom) {
@@ -7532,7 +7539,7 @@ app.post("/api/market/:kingdom/list", requireAuth, async (req, res) => {
     quantity: z.number().int().min(100).max(1_000_000),
     pricePerUnit: z.number().int().min(1).max(100_000),
   }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const { resource, quantity, pricePerUnit } = parsed.data;
   try {
     const out = await withTx(async (c) => {
@@ -7555,7 +7562,7 @@ app.post("/api/market/:kingdom/list", requireAuth, async (req, res) => {
 
 app.post("/api/market/:kingdom/buy", requireAuth, async (req, res) => {
   const parsed = z.object({ listingId: z.number().int().positive(), quantity: z.number().int().min(1) }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const { listingId, quantity } = parsed.data;
   try {
     const out = await withTx(async (c) => {
@@ -7611,7 +7618,7 @@ app.post("/api/market/:kingdom/buy", requireAuth, async (req, res) => {
 
 app.post("/api/market/:kingdom/cancel", requireAuth, async (req, res) => {
   const parsed = z.object({ listingId: z.number().int().positive() }).safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   try {
     const out = await withTx(async (c) => {
       const k = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1)`, [req.params.kingdom]);
