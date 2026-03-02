@@ -3426,7 +3426,11 @@ app.post("/api/war-room/:attacker/spy", requireAuth, async (req, res) => {
       }
 
       // Gather rich intel for the report
-      const resultLevel = ratio >= 2 ? "Complete Infiltration" : ratio >= 1.5 ? "Deep Infiltration" : ratio >= 0.95 ? "Partial Infiltration" : "Mission Failed";
+      // resultLevel must be anchored to success — a lucky low-ratio success should not
+      // display "Mission Failed" while also showing full intel.
+      const resultLevel = !success
+        ? "Mission Failed"
+        : ratio >= 2 ? "Complete Infiltration" : ratio >= 1.5 ? "Deep Infiltration" : "Partial Infiltration";
 
       let reportBody: string;
       if (success) {
