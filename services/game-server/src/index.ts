@@ -450,12 +450,19 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       let foodUpkeepPerHour = 0;
       let goldUpkeepPerHour = 0;
       let troopNetworth = 0;
+      let diplomatCount = 0;
       for (const row of t.rows) {
         const amount = Number(row.amount || 0);
         foodUpkeepPerHour += amount * Number(row.upkeep_food || 0);
         goldUpkeepPerHour += amount * Number(row.upkeep_gold || 0);
         troopNetworth += amount * Number(row.nw_value || 0);
+        if (String(row.troop_code) === "diplomats") diplomatCount += amount;
       }
+      // Priests bless the army — each priest reduces total food upkeep by 2/hr
+      const priestFoodReduction = Math.min(priestCount * 2, foodUpkeepPerHour);
+      const effectiveFoodUpkeepPerHour = foodUpkeepPerHour - priestFoodReduction;
+      // Diplomats generate 200 gold/hr through trade relations
+      const diplomatGoldPerHour = diplomatCount * 200;
 
       const seasonFoodIncome = foodIncomePerHour * Number(season.modifiers.food || 1);
       const taxRate = clampNumber(Math.floor(Number(k.tax_rate || 25)), TAX_MIN, TAX_MAX);
@@ -463,8 +470,8 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       const seasonWoodIncome = woodIncomePerHour * Number(season.modifiers.wood || 1);
       const seasonStoneIncome = stoneIncomePerHour * Number(season.modifiers.stone || 1);
 
-      const foodDelta = Math.floor((seasonFoodIncome - foodUpkeepPerHour) * TICK_HOURS);
-      const goldDelta = Math.floor((seasonGoldIncome - goldUpkeepPerHour) * TICK_HOURS);
+      const foodDelta = Math.floor((seasonFoodIncome - effectiveFoodUpkeepPerHour) * TICK_HOURS);
+      const goldDelta = Math.floor((seasonGoldIncome - goldUpkeepPerHour + diplomatGoldPerHour) * TICK_HOURS);
       const woodDelta = Math.floor(seasonWoodIncome * TICK_HOURS);
       const stoneDelta = Math.floor(seasonStoneIncome * TICK_HOURS);
       const horsesDelta = Math.floor(horseIncomePerHour * TICK_HOURS);

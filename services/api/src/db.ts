@@ -33,7 +33,7 @@ const TROOPS = [
   { code: "peasants", name: "Peasants", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 2, upkeepGold: 0, att: 0.1, def: 0.1, nw: 0.0, housing: "Infantry, Barracks", notes: "", isTrainable: false },
   { code: "footmen", name: "Footmen", trainGoldCost: 10, trainFoodCost: 5, horseCost: 0, trainSeconds: 2 * 3600, upkeepFood: 10, upkeepGold: 4, att: 2, def: 1, nw: 0.38, housing: "Infantry, Barracks", notes: "", isTrainable: true },
   { code: "pikemen", name: "Pikemen", trainGoldCost: 20, trainFoodCost: 10, horseCost: 0, trainSeconds: 4 * 3600, upkeepFood: 25, upkeepGold: 6, att: 2, def: 2, nw: 0.5, housing: "Infantry, Barracks", notes: "", isTrainable: true },
-  { code: "elites", name: "Elites", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 25, upkeepGold: 13, att: 10, def: 10, nw: 0.8, housing: "Infantry, Barracks", notes: "Only gained in battle.", isTrainable: false },
+  { code: "elites", name: "Elites", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 18, upkeepGold: 7, att: 10, def: 10, nw: 0.8, housing: "Infantry, Barracks", notes: "Only gained in battle.", isTrainable: false },
   { code: "archers", name: "Archers", trainGoldCost: 20, trainFoodCost: 10, horseCost: 0, trainSeconds: 4 * 3600, upkeepFood: 38, upkeepGold: 6, att: 1, def: 4, nw: 0.5, housing: "Archers, Archery Ranges", notes: "", isTrainable: true },
   { code: "crossbowmen", name: "Crossbowmen", trainGoldCost: 10, trainFoodCost: 5, horseCost: 0, trainSeconds: 2 * 3600, upkeepFood: 30, upkeepGold: 4, att: 3, def: 2, nw: 0.38, housing: "Archers, Archery Ranges", notes: "", isTrainable: true },
   { code: "light_cavalry", name: "Light Cavalry", trainGoldCost: 20, trainFoodCost: 10, horseCost: 1, trainSeconds: 4 * 3600, upkeepFood: 50, upkeepGold: 8, att: 5, def: 4, nw: 0.5, housing: "Cavalry, Stables", notes: "", isTrainable: true },
@@ -928,4 +928,8 @@ export async function ensureSchema(): Promise<void> {
       )
   `);
   await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS registration_ip TEXT`);
+  // Reduce elite upkeep — they're hard to earn, shouldn't punish players who farm them
+  await pool.query(`UPDATE troop_types SET upkeep_food=18, upkeep_gold=7 WHERE code='elites'`);
+  // Diplomats: make trainable, cap per Embassy, passive gold generation
+  await pool.query(`UPDATE troop_types SET is_trainable=TRUE, gold_cost=500, food_cost=100, train_seconds=7200, notes='Max 3 per Embassy. Each diplomat earns 200 gold/hr through trade.' WHERE code='diplomats'`);
 }

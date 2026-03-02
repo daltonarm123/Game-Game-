@@ -9,6 +9,7 @@ import {
   MANA_PER_PRIEST_PER_HOUR,
   PRAYERS,
   PRIESTS_PER_TEMPLE,
+  DIPLOMATS_PER_EMBASSY,
   SEASONS,
   SETTLEMENT_TYPE_DEF,
   clampNumber,
@@ -1036,16 +1037,18 @@ function computeEconomyHourly(
   buildingLevels: Record<string, number>,
   troopRows: any[],
   taxRate?: number,
-  modifiers?: { food?: number; gold?: number; wood?: number; stone?: number },
+  modifiers?: { food?: number; gold?: number; wood?: number; stone?: number; horse?: number },
 ) {
   const farm = Number(buildingLevels.farm || 0);
   const lumber = Number(buildingLevels.lumberyard || 0);
   const quarry = Number(buildingLevels.quarry || 0);
+  const horseFarms = Number(buildingLevels.horse_farms || 0);
 
   const foodIncomeRaw = farm * ECON_BUILDING_HOURLY.farmFood;
   const goldIncomeRaw = land * ECON_BUILDING_HOURLY.baseGoldPerLand;
   const woodIncomeRaw = lumber * ECON_BUILDING_HOURLY.lumberWood;
   const stoneIncomeRaw = quarry * ECON_BUILDING_HOURLY.quarryStone;
+  const horseIncomeRaw = horseFarms * ECON_BUILDING_HOURLY.horseFarmHorses;
 
   const foodIncome = foodIncomeRaw * Number(modifiers?.food ?? 1);
   const tax = clamp(Math.floor(Number(taxRate ?? 25)), 0, 40);
@@ -1053,23 +1056,35 @@ function computeEconomyHourly(
   const goldIncome = goldIncomeRaw * Number(modifiers?.gold ?? 1) * taxGoldMult;
   const woodIncome = woodIncomeRaw * Number(modifiers?.wood ?? 1);
   const stoneIncome = stoneIncomeRaw * Number(modifiers?.stone ?? 1);
+  const horseIncome = horseIncomeRaw * Number(modifiers?.horse ?? 1);
 
   let foodUpkeep = 0;
   let goldUpkeep = 0;
+  let priestCount = 0;
+  let diplomatCount = 0;
   for (const row of troopRows) {
     const amount = Number(row.amount || 0);
     foodUpkeep += amount * Number(row.upkeep_food || 0);
     goldUpkeep += amount * Number(row.upkeep_gold || 0);
+    if (String(row.troop_code) === "priests") priestCount += amount;
+    if (String(row.troop_code) === "diplomats") diplomatCount += amount;
   }
+  // Priests passively bless your army — each priest reduces total food upkeep by 2/hr
+  // (they consecrate rations, boosting morale and stretching supplies)
+  const priestFoodReduction = priestCount * 2;
+  const effectiveFoodUpkeep = Math.max(0, foodUpkeep - priestFoodReduction);
+  // Diplomats generate 200 gold/hr each from ongoing trade relations
+  const diplomatGoldIncome = diplomatCount * 200;
 
   const storageCaps = computeStorageCaps(buildingLevels);
 
   return {
     perHour: {
-      food: foodIncome - foodUpkeep,
-      gold: goldIncome - goldUpkeep,
+      food: foodIncome - effectiveFoodUpkeep,
+      gold: goldIncome - goldUpkeep + diplomatGoldIncome,
       wood: woodIncome,
       stone: stoneIncome,
+      horses: horseIncome,
     },
     storageCaps,
     raw: {
@@ -1079,12 +1094,16 @@ function computeEconomyHourly(
       taxGoldMult,
       woodIncomeRaw,
       stoneIncomeRaw,
+      horseIncomeRaw,
       foodIncome,
       foodUpkeep,
+      priestFoodReduction,
       goldIncome,
       goldUpkeep,
+      diplomatGoldIncome,
       woodIncome,
       stoneIncome,
+      horseIncome,
     },
   };
 }
@@ -2444,6 +2463,22 @@ app.post("/api/kingdom/:name/train", requireAuth, async (req, res) => {
         }
       }
 
+      if (troopCode === "diplomats") {
+        const [embassyQ, diplomatsHomeQ, diplomatsTrainQ] = await Promise.all([
+          c.query(`SELECT COALESCE(MAX(level),0) AS lvl FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='embassies'`, [kingdom.id]),
+          c.query(`SELECT COALESCE(amount,0) AS qty FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='diplomats'`, [kingdom.id]),
+          c.query(`SELECT COALESCE(SUM(quantity),0) AS qty FROM train_queue WHERE kingdom_id=$1 AND troop_code='diplomats' AND status='queued'`, [kingdom.id]),
+        ]);
+        const embassyLvl = Number(embassyQ.rows[0]?.lvl || 0);
+        if (embassyLvl < 1) throw new Error("requires an Embassy to train Diplomats");
+        const diplomatCap = embassyLvl * DIPLOMATS_PER_EMBASSY;
+        const diplomatsUsed = Number(diplomatsHomeQ.rows[0]?.qty || 0) + Number(diplomatsTrainQ.rows[0]?.qty || 0);
+        const diplomatsAvailable = Math.max(0, diplomatCap - diplomatsUsed);
+        if (qty > diplomatsAvailable) {
+          throw new Error(`not enough embassy capacity (cap ${diplomatCap}, used ${diplomatsUsed}, available ${diplomatsAvailable})`);
+        }
+      }
+
       const totalGold = Number(def.gold_cost) * qty;
       const totalFood = Number(def.food_cost) * qty;
       const totalHorses = Number(def.horse_cost || 0) * qty;
@@ -2920,7 +2955,14 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
         );
       const isPeasantOnlyAttack = Object.keys(sentOnly).length > 0
         && Object.entries(sentOnly).every(([code, sent]) => code === "peasants" && Number(sent) > 0);
-      let attackerPower = effectivePowerVsComposition(sentOnly, troopAtt, defenderCombatTroops);
+      // Check attacker's active army_blessing effect
+      const blessingQ = await c.query(
+        `SELECT magnitude FROM kingdom_status_effects WHERE kingdom_id=$1 AND effect_code='army_blessing' AND ends_at > now() LIMIT 1`,
+        [atk.id],
+      );
+      const armyBlessingBonus = blessingQ.rowCount ? Number(blessingQ.rows[0]?.magnitude || 0) : 0;
+
+      let attackerPower = effectivePowerVsComposition(sentOnly, troopAtt, defenderCombatTroops) * (1 + armyBlessingBonus);
       const defenderPowerRaw = effectivePowerVsComposition(defenderCombatTroops, troopDef, sentOnly);
       const castles = Number(defCastle.rows[0]?.lvl || 0);
       const castleBonus = castles > 0 ? Math.sqrt(castles) / 100 : 0;
@@ -6270,6 +6312,14 @@ app.post("/api/embassy/:kingdom/send", requireAuth, async (req, res) => {
       const toK = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [parsed.data.targetKingdom]);
       if (!toK.rowCount) throw new Error("target kingdom not found");
       if (Number(fromK.rows[0].id) === Number(toK.rows[0].id)) throw new Error("cannot send diplomats to yourself");
+      // Require at least 1 diplomat in your army to conduct missions
+      const diplomatQ = await c.query(
+        `SELECT COALESCE(amount,0) AS qty FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='diplomats'`,
+        [Number(fromK.rows[0].id)],
+      );
+      if (Number(diplomatQ.rows[0]?.qty || 0) < 1) {
+        throw new Error("you need at least 1 Diplomat in your army to send diplomatic missions");
+      }
       const dup = await c.query(
         `
         SELECT id
@@ -7384,6 +7434,47 @@ app.post("/api/pray/:kingdom/cast", requireAuth, async (req, res) => {
     publishKingdomEvent(req.params.kingdom, "spell_cast", { spellCode: out.spellCode, delta: out.delta });
     if (out.targetKingdom) publishKingdomEvent(out.targetKingdom, "spell_hit", { spellCode: out.spellCode, delta: out.delta });
     return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+// ── Priest: Bless Army ───────────────────────────────────────────────────────
+// Costs 2000 mana, requires at least 3 priests, grants army_blessing (+5% att) for 24h
+app.post("/api/pray/:kingdom/bless", requireAuth, async (req, res) => {
+  try {
+    const session = (req as any).authSession;
+    const out = await withTx(async (c) => {
+      const k = await c.query(
+        `SELECT id, mana FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 FOR UPDATE`,
+        [req.params.kingdom, session.user_id],
+      );
+      if (!k.rowCount) throw new Error("kingdom not found or not yours");
+      const kr = k.rows[0];
+      const priestsQ = await c.query(
+        `SELECT COALESCE(amount,0) AS qty FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='priests'`,
+        [kr.id],
+      );
+      const priests = Number(priestsQ.rows[0]?.qty || 0);
+      if (priests < 3) throw new Error(`Bless Army requires at least 3 Priests (you have ${priests})`);
+      const manaCost = 2000;
+      if (Number(kr.mana || 0) < manaCost) throw new Error(`Not enough mana (need ${manaCost}, have ${Math.floor(Number(kr.mana || 0))})`);
+      // Check if blessing is already active
+      const existing = await c.query(
+        `SELECT id FROM kingdom_status_effects WHERE kingdom_id=$1 AND effect_code='army_blessing' AND ends_at > now() LIMIT 1`,
+        [kr.id],
+      );
+      if (existing.rowCount) throw new Error("Army Blessing is already active");
+      await c.query(`UPDATE kingdoms SET mana = mana - $2 WHERE id=$1`, [kr.id, manaCost]);
+      const endsAt = new Date(Date.now() + 24 * 3600 * 1000);
+      await c.query(
+        `INSERT INTO kingdom_status_effects(kingdom_id, effect_code, source_kind, source_ref, magnitude, payload, ends_at)
+         VALUES($1,'army_blessing','priest_bless',$2,0.05,'{}',  $3)`,
+        [kr.id, kr.id, endsAt],
+      );
+      return { manaCost, endsAt, priests };
+    });
+    return res.json({ ok: true, message: `Army blessed for 24 hours (+5% attack). Cost: ${out.manaCost} mana.`, ...out });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });
   }

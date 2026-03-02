@@ -574,11 +574,12 @@ function OverviewView() {
             <div style={SEC_HDR}>Resources</div>
             <div style={{ display: "grid", gap: 4 }}>
               {[
-                { label: "Food",  icon: "🌾", cur: Number(k?.food || 0),  cap: Number(econCaps.food || 0),  rate: Number(econPerHour.food || 0) },
-                { label: "Gold",  icon: "💰", cur: Number(k?.gold || 0),  cap: Number(econCaps.gold || 0),  rate: Number(econPerHour.gold || 0) },
-                { label: "Mana",  icon: "✨", cur: Number(k?.mana || 0),  cap: 0,                           rate: manaPerHour },
-                { label: "Stone", icon: "🪨", cur: Number(k?.stone || 0), cap: Number(econCaps.stone || 0), rate: Number(econPerHour.stone || 0) },
-                { label: "Wood",  icon: "🪵", cur: Number(k?.wood || 0),  cap: Number(econCaps.wood || 0),  rate: Number(econPerHour.wood || 0) },
+                { label: "Food",   icon: "🌾", cur: Number(k?.food || 0),   cap: Number(econCaps.food || 0),  rate: Number(econPerHour.food || 0) },
+                { label: "Gold",   icon: "💰", cur: Number(k?.gold || 0),   cap: Number(econCaps.gold || 0),  rate: Number(econPerHour.gold || 0) },
+                { label: "Mana",   icon: "✨", cur: Number(k?.mana || 0),   cap: 0,                           rate: manaPerHour },
+                { label: "Stone",  icon: "🪨", cur: Number(k?.stone || 0),  cap: Number(econCaps.stone || 0), rate: Number(econPerHour.stone || 0) },
+                { label: "Wood",   icon: "🪵", cur: Number(k?.wood || 0),   cap: Number(econCaps.wood || 0),  rate: Number(econPerHour.wood || 0) },
+                { label: "Horses", icon: "🐎", cur: Number(k?.horses || 0), cap: 0,                           rate: Number(econPerHour.horses || 0) },
               ].map((res) => {
                 const isStarving = res.rate < 0 && res.cur === 0;
                 const fillPct = res.cap > 0 ? res.cur / res.cap : 1;
@@ -4491,6 +4492,22 @@ function PrayView() {
   const activePrayers: any[] = data?.activePrayers ?? [];
   const recentCasts: any[] = data?.recentCasts ?? [];
   const activeEffects: any[] = data?.activeEffects ?? [];
+  const armyBlessingActive = activeEffects.some((e: any) => e.effect_code === "army_blessing");
+
+  async function blessArmy() {
+    if (armyBlessingActive) return;
+    setBusy(true); setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/pray/${encodeURIComponent(kingdom)}/bless`, {
+        method: "POST", headers: authHeaders(),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setActionMsg(j.message || "Army Blessed for 24 hours!");
+      await load();
+    } catch (e: any) { setActionMsg(`Error: ${String(e?.message || e)}`); }
+    finally { setBusy(false); }
+  }
   const selDef = PRAYER_DEFS[selectedPrayer];
   const daysNum = Math.max(0, Math.floor(Number(days || 0)));
   const daysSafe = Math.min(90, Math.max(1, daysNum || 1));
@@ -4562,6 +4579,28 @@ function PrayView() {
           )}
           {priestCap === 0 && (
             <div style={{ fontSize: 13, color: "#ffae9a", marginTop: 8 }}>Build a Temple first to train priests.</div>
+          )}
+        </div>
+      )}
+
+      {/* Bless Army */}
+      {data && (
+        <div style={CARD}>
+          <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 6 }}>⚔️ Bless Army</div>
+          <div style={{ fontSize: 13, color: TEXT_MUTED, marginBottom: 12 }}>
+            Your priests consecrate your troops — granting <strong>+5% attack power</strong> for 24 hours.<br />
+            Requires 3+ Priests · Costs 2,000 mana · {armyBlessingActive ? <span style={{ color: "#c8e7b1" }}>✓ Active now</span> : "one use at a time"}
+          </div>
+          {armyBlessingActive ? (
+            <div style={{ color: "#c8e7b1", fontWeight: 700, fontSize: 15 }}>✓ Army is currently blessed (+5% ATK)</div>
+          ) : (
+            <button
+              onClick={blessArmy}
+              disabled={busy || priests < 3 || mana < 2000}
+              style={{ ...BTN_STYLE }}
+            >
+              {busy ? "Blessing…" : priests < 3 ? `Need ${3 - priests} more Priests` : mana < 2000 ? "Not enough mana (2,000)" : "Bless Army (2,000 mana)"}
+            </button>
           )}
         </div>
       )}

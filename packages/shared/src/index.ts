@@ -52,6 +52,7 @@ export const POPULATION_CAPACITY = {
 // Mana rates
 export const MANA_PER_PRIEST_PER_HOUR = 4;   // 1 priest = 4 mana/hr (slow game)
 export const PRIESTS_PER_TEMPLE = 5;          // max priests per temple built
+export const DIPLOMATS_PER_EMBASSY = 3;       // max diplomats per embassy level
 
 export interface PrayerDef {
   name: string;
