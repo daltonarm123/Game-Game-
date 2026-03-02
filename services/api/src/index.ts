@@ -2026,17 +2026,17 @@ app.get("/api/kingdom/:name", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
 
-  // Only allow players to load their own kingdom data
-  const session = (req as any).authSession;
-  const ownKingdom = await pool.query(
-    `SELECT 1 FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1`,
-    [name, session.user_id],
-  );
-  if (!ownKingdom.rowCount) {
-    return res.status(403).json({ ok: false, error: "You can only view your own kingdom data" });
-  }
-
   try {
+    // Only allow players to load their own kingdom data
+    const session = (req as any).authSession;
+    const ownKingdom = await pool.query(
+      `SELECT 1 FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1`,
+      [name, session.user_id],
+    );
+    if (!ownKingdom.rowCount) {
+      return res.status(403).json({ ok: false, error: "You can only view your own kingdom data" });
+    }
+
     const k = await pool.query(
       `SELECT id, user_id, name, gold, wood, stone, food, land, horses, mana, created_at, last_tick_at, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, daily_login_streak, daily_last_claimed_at
        FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`,
@@ -3623,16 +3623,16 @@ app.get("/api/war-room/:kingdom", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
 
-  const session = (req as any).authSession;
-  const ownKingdom = await pool.query(
-    `SELECT 1 FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1`,
-    [kingdom, session.user_id],
-  );
-  if (!ownKingdom.rowCount) {
-    return res.status(403).json({ ok: false, error: "You can only view your own kingdom data" });
-  }
-
   try {
+    const session = (req as any).authSession;
+    const ownKingdom = await pool.query(
+      `SELECT 1 FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1`,
+      [kingdom, session.user_id],
+    );
+    if (!ownKingdom.rowCount) {
+      return res.status(403).json({ ok: false, error: "You can only view your own kingdom data" });
+    }
+
     const season = await getSeasonSnapshot();
     const k = await pool.query(
       `SELECT id, name, land, food, gold, horses, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, created_at FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`,
@@ -3848,16 +3848,16 @@ app.get("/api/war-room/reports/:kingdom", requireAuth, async (req, res) => {
   const limit = clamp(Number(req.query.limit || 25), 1, 200);
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
 
-  const session = (req as any).authSession;
-  const ownKingdom = await pool.query(
-    `SELECT 1 FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1`,
-    [kingdom, session.user_id],
-  );
-  if (!ownKingdom.rowCount) {
-    return res.status(403).json({ ok: false, error: "You can only view your own kingdom data" });
-  }
-
   try {
+    const session = (req as any).authSession;
+    const ownKingdom = await pool.query(
+      `SELECT 1 FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1`,
+      [kingdom, session.user_id],
+    );
+    if (!ownKingdom.rowCount) {
+      return res.status(403).json({ ok: false, error: "You can only view your own kingdom data" });
+    }
+
     const rows = await pool.query(
       `SELECT id, attacker_name, defender_name, result, ratio, land_taken, attacker_power, defender_power, sent_troops, attacker_losses, defender_losses, created_at\n       FROM attack_reports\n       WHERE LOWER(attacker_name)=LOWER($1) OR LOWER(defender_name)=LOWER($1)\n       ORDER BY created_at DESC\n       LIMIT $2`,
       [kingdom, limit],
@@ -4075,7 +4075,8 @@ app.get("/api/rankings/alliances", async (req, res) => {
   }
 });
 
-app.get("/api/pigeons/:kingdom", async (req, res) => {
+app.get("/api/pigeons/:kingdom", requireAuth, async (req, res) => {
+  const session = (req as any).authSession;
   const kingdom = String(req.params.kingdom || "").trim();
   const limit = clamp(Number(req.query.limit || 100), 1, 300);
   const filterKindRaw = String(req.query.kind || "all").trim().toLowerCase();
@@ -4084,15 +4085,13 @@ app.get("/api/pigeons/:kingdom", async (req, res) => {
   try {
     const k = await pool.query(`SELECT id, user_id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [kingdom]);
     if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
+    // Ownership check — only your own mail
+    if (String(k.rows[0].user_id) !== String(session.user_id)) {
+      return res.status(403).json({ ok: false, error: "You can only view your own pigeons" });
+    }
     const kingdomId = Number(k.rows[0].id);
 
     if (filterKind !== "all") {
-      const token = extractAuthToken(req);
-      const session = token ? await getAuthSession(token) : null;
-      if (!session) return res.status(403).json({ ok: false, error: "premium required for filtered pigeon views" });
-      if (String(k.rows[0].user_id) !== String(session.user_id)) {
-        return res.status(403).json({ ok: false, error: "filtered pigeon views require kingdom ownership" });
-      }
       const premiumQ = await pool.query(
         `SELECT premium_started_at, premium_ends_at FROM app_users WHERE id=$1 LIMIT 1`,
         [session.user_id],

@@ -7547,9 +7547,18 @@ function App() {
         const r = await fetch(`${API_BASE}/api/auth/me`, {
           headers: { Authorization: `Bearer ${token}` },
         });
+        if (cancelled) return;
+        // Only treat 401/403 as a definitive "session invalid" signal
+        if (r.status === 401 || r.status === 403) {
+          localStorage.removeItem(AUTH_STORAGE_KEY);
+          setAuth(null);
+          return;
+        }
+        if (!r.ok) return; // 5xx or other — keep the user logged in
         const j = await r.json();
         if (cancelled) return;
-        if (!r.ok || !j?.ok) {
+        if (!j?.ok) {
+          // Application-level rejection from the server
           localStorage.removeItem(AUTH_STORAGE_KEY);
           setAuth(null);
           return;
@@ -7573,9 +7582,9 @@ function App() {
         localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(nextAuth));
         if (j?.kingdom?.name) localStorage.setItem(KINGDOM_STORAGE_KEY, String(j.kingdom.name));
       } catch {
-        if (cancelled) return;
-        localStorage.removeItem(AUTH_STORAGE_KEY);
-        setAuth(null);
+        // Network error — server may be cold-starting or temporarily unreachable.
+        // Do NOT clear auth here; the token may still be valid.
+        // The user will see per-view fetch errors but won't be unexpectedly logged out.
       }
     })();
     return () => {
