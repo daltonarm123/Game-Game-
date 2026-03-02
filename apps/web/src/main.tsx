@@ -493,10 +493,6 @@ function OverviewView() {
         <div style={{ fontFamily: FONT_DISPLAY, fontSize: 26, fontWeight: 800, color: "#fff7ec" }}>
           Overview — {titleStr}
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={{ ...INPUT_STYLE, fontSize: 14, padding: "7px 10px" }} placeholder="Kingdom name" />
-          <button onClick={() => void load()} style={{ ...BTN_STYLE, padding: "7px 12px", fontSize: 13 }}>Load</button>
-        </div>
       </div>
 
       {loading ? <div style={{ color: TEXT_MUTED, padding: "0 4px" }}>Loading overview...</div> : null}
@@ -877,10 +873,6 @@ function BuildingsView() {
             <div style={{ marginTop: 4, color: TEXT_MUTED, fontSize: isMobile ? 15 : 17, fontWeight: 700, overflowWrap: "anywhere" }}>
               Stone: {Number(k?.stone || 0).toLocaleString()} ({Number(econ.stone || 0) >= 0 ? "+" : ""}{Number(econ.stone || 0).toLocaleString()}/h) • Wood: {Number(k?.wood || 0).toLocaleString()} ({Number(econ.wood || 0) >= 0 ? "+" : ""}{Number(econ.wood || 0).toLocaleString()}/h)
             </div>
-          </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={{ ...INPUT_STYLE, maxWidth: "100%" }} />
-            <button onClick={() => void load()} style={BTN_STYLE}>Load</button>
           </div>
         </div>
         <div style={{ marginTop: 10, color: TEXT_MUTED }}>
@@ -1347,10 +1339,6 @@ function ResearchView() {
               Gold: {Number(data?.kingdom?.gold || 0).toLocaleString()} • Queue: {Number(data?.queueSlotsUsed || 0)}/{Number(data?.queueSlotsMax || 2)}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={INPUT_STYLE} />
-            <button onClick={() => void load()} style={BTN_STYLE}>Load</button>
-          </div>
         </div>
         {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading research...</div> : null}
         {error ? (
@@ -1633,8 +1621,6 @@ function SettlementsView() {
                 ← Settlements
               </button>
             )}
-            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void load()} style={{ ...INPUT_STYLE, fontSize: 13, padding: "7px 10px", width: 140 }} placeholder="Kingdom name" />
-            <button onClick={() => void load()} style={{ ...BTN_STYLE, padding: "7px 12px", fontSize: 13 }}>Load</button>
           </div>
         </div>
         {loading && <div style={{ marginTop: 8, color: TEXT_MUTED, fontSize: 13 }}>Loading...</div>}
@@ -2113,10 +2099,6 @@ function AllianceView() {
       <div style={CARD}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ fontSize: 26, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>🤝 Alliance</div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={INPUT_STYLE} placeholder="Your kingdom name" />
-            <button onClick={() => void load()} style={BTN_STYLE}>Load</button>
-          </div>
         </div>
         {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading...</div> : null}
         {error ? <div style={{ marginTop: 8, color: "#ffae9a" }}>{error} <button onClick={() => void load()} style={{ ...BTN_STYLE, padding: "4px 10px", fontSize: 13 }}>Retry</button></div> : null}
@@ -3317,13 +3299,6 @@ function WarRoomView() {
           <div style={{ fontSize: isMobile ? 30 : 42, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY, lineHeight: 1.05 }}>
             War Room - {k?.name || kingdom}
           </div>
-          <input
-            value={kingdom}
-            onChange={(e) => setKingdom(e.target.value)}
-            style={{ ...INPUT_STYLE, maxWidth: "100%", minWidth: 0, flex: isMobile ? "1 1 180px" : "1 1 280px" }}
-            placeholder="Kingdom name"
-          />
-          <button onClick={() => void load()} style={{ ...BTN_STYLE, width: isMobile ? "100%" : undefined }}>Load</button>
         </div>
         {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading...</div> : null}
         {error ? (
@@ -3703,10 +3678,6 @@ function TrainTroopsView() {
       <div style={CARD}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <div style={{ fontSize: 22, fontWeight: 700 }}>Train Troops</div>
-          <input value={kingdom} onChange={(e) => setKingdom(e.target.value)} style={INPUT_STYLE} />
-          <button onClick={() => void load()} style={BTN_STYLE}>
-            Load
-          </button>
         </div>
         {loading ? <div style={{ marginTop: 8 }}>Loading...</div> : null}
         {error ? (
@@ -4536,15 +4507,6 @@ function PrayView() {
             <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 16 }}>
               Priests channel divine power into sustained prayers that bless your kingdom.
             </div>
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: isMobile ? "wrap" : "nowrap", width: isMobile ? "100%" : undefined }}>
-            <input
-              value={kingdom}
-              onChange={(e) => setKingdom(e.target.value)}
-              style={{ ...INPUT_STYLE, flex: isMobile ? "1 1 180px" : undefined, minWidth: 0 }}
-              placeholder="Kingdom name"
-            />
-            <button onClick={() => void load()} style={{ ...BTN_STYLE, width: isMobile ? "100%" : undefined }}>Load</button>
           </div>
         </div>
         {loading && <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading…</div>}
@@ -6729,15 +6691,6 @@ function GuildhallView() {
           <div style={{ fontFamily: FONT_DISPLAY, fontSize: isMobile ? 24 : 28, fontWeight: 800, color: "#fff7ec" }}>
             Guildhall — {String(data?.kingdom?.allianceTag ? `[${data.kingdom.allianceTag}] ` : "")}{kingdom || "..."}
           </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: isMobile ? "wrap" : "nowrap", width: isMobile ? "100%" : undefined }}>
-            <input
-              value={kingdom}
-              onChange={(e) => setKingdom(e.target.value)}
-              style={{ ...INPUT_STYLE, fontSize: 14, flex: isMobile ? "1 1 180px" : undefined, minWidth: 0 }}
-              placeholder="Kingdom name"
-            />
-            <button onClick={() => void load()} style={{ ...BTN_STYLE, fontSize: 13, width: isMobile ? "100%" : undefined }}>Load</button>
-          </div>
         </div>
         {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading...</div> : null}
         {error ? <div style={{ marginTop: 8, color: "#ffae9a" }}>{error}</div> : null}
@@ -6991,15 +6944,6 @@ function EmbassyView() {
         <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
           <div style={{ fontFamily: FONT_DISPLAY, fontSize: isMobile ? 24 : 28, fontWeight: 800, color: "#fff7ec" }}>
             Embassy — {allianceTag ? `[${allianceTag}] ` : ""}{kingdom || "..."}
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: isMobile ? "wrap" : "nowrap", width: isMobile ? "100%" : undefined }}>
-            <input
-              value={kingdom}
-              onChange={(e) => setKingdom(e.target.value)}
-              style={{ ...INPUT_STYLE, fontSize: 14, flex: isMobile ? "1 1 180px" : undefined, minWidth: 0 }}
-              placeholder="Kingdom name"
-            />
-            <button onClick={() => void load()} style={{ ...BTN_STYLE, fontSize: 13, width: isMobile ? "100%" : undefined }}>Load</button>
           </div>
         </div>
         {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading...</div> : null}

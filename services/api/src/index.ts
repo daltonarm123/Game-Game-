@@ -2019,9 +2019,19 @@ app.post("/api/dev/fix-castle-land", async (req, res) => {
   }
 });
 
-app.get("/api/kingdom/:name", async (req, res) => {
+app.get("/api/kingdom/:name", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
+
+  // Only allow players to load their own kingdom data
+  const session = (req as any).authSession;
+  const ownKingdom = await pool.query(
+    `SELECT 1 FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1`,
+    [name, session.user_id],
+  );
+  if (!ownKingdom.rowCount) {
+    return res.status(403).json({ ok: false, error: "You can only view your own kingdom data" });
+  }
 
   try {
     const k = await pool.query(
@@ -3606,9 +3616,18 @@ app.post("/api/war-room/:attacker/spy", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/api/war-room/:kingdom", async (req, res) => {
+app.get("/api/war-room/:kingdom", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+
+  const session = (req as any).authSession;
+  const ownKingdom = await pool.query(
+    `SELECT 1 FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1`,
+    [kingdom, session.user_id],
+  );
+  if (!ownKingdom.rowCount) {
+    return res.status(403).json({ ok: false, error: "You can only view your own kingdom data" });
+  }
 
   try {
     const season = await getSeasonSnapshot();
