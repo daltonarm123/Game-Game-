@@ -4,6 +4,7 @@ import {
   PRAYERS,
   SEASONS,
   clampNumber,
+  computeStorageCaps,
   effectivePeasantCap,
   peasantDeltaPerHour,
   taxGoldMultiplier,
@@ -345,7 +346,8 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
           COALESCE(MAX(CASE WHEN building_code='temples' THEN level END),0) AS temples,
           COALESCE(MAX(CASE WHEN building_code='guildhalls' THEN level END),0) AS guildhalls,
           COALESCE(MAX(CASE WHEN building_code='houses' THEN level END),0) AS houses,
-          COALESCE(MAX(CASE WHEN building_code='castles' THEN level END),0) AS castles
+          COALESCE(MAX(CASE WHEN building_code='castles' THEN level END),0) AS castles,
+          COALESCE(MAX(CASE WHEN building_code='barns' THEN level END),0) AS barns
         FROM kingdom_buildings
         WHERE kingdom_id = $1
         `,
@@ -394,6 +396,7 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       const houses = Number(b.rows[0]?.houses || 0);
       const castles = Number(b.rows[0]?.castles || 0);
       const guildhalls = Number((b.rows[0] as any)?.guildhalls || 0);
+      const barns = Number((b.rows[0] as any)?.barns || 0);
 
       // Land integrity guard: if building land usage exceeds current land, raise land to used amount.
       const usedLandQ = await c.query(
@@ -466,25 +469,28 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       const stoneDelta = Math.floor(seasonStoneIncome * TICK_HOURS);
       const horsesDelta = Math.floor(horseIncomePerHour * TICK_HOURS);
       const manaDelta = Math.floor(priestCount * 4 * TICK_HOURS); // 4 mana/hr per priest
-      const newFood = Math.max(0, Number(k.food || 0) + foodDelta);
-      const newGold = Math.max(0, Number(k.gold || 0) + goldDelta);
-      const newWood = Math.max(0, Number(k.wood || 0) + woodDelta);
-      const newStone = Math.max(0, Number(k.stone || 0) + stoneDelta);
+
+      // Compute storage caps from buildings and clamp resources
+      const storageCaps = computeStorageCaps({ farm, barns, lumberyard: lumber, quarry, castles, houses });
+      const newFood  = Math.min(storageCaps.food,  Math.max(0, Number(k.food  || 0) + foodDelta));
+      const newGold  = Math.min(storageCaps.gold,  Math.max(0, Number(k.gold  || 0) + goldDelta));
+      const newWood  = Math.min(storageCaps.wood,  Math.max(0, Number(k.wood  || 0) + woodDelta));
+      const newStone = Math.min(storageCaps.stone, Math.max(0, Number(k.stone || 0) + stoneDelta));
 
       await c.query(
         `
         UPDATE kingdoms
         SET
-          food = GREATEST(0, food + $2),
-          gold = GREATEST(0, gold + $3),
-          wood = GREATEST(0, wood + $4),
-          stone = GREATEST(0, stone + $5),
+          food  = $2,
+          gold  = $3,
+          wood  = $4,
+          stone = $5,
           horses = GREATEST(0, horses + $6),
-          mana = GREATEST(0, mana + $7),
+          mana   = GREATEST(0, mana   + $7),
           last_tick_at = now()
         WHERE id = $1
         `,
-        [k.id, foodDelta, goldDelta, woodDelta, stoneDelta, horsesDelta, manaDelta],
+        [k.id, newFood, newGold, newWood, newStone, horsesDelta, manaDelta],
       );
 
       // Population integrity guard: clamp peasants to current housing/castle cap.

@@ -12,6 +12,7 @@ import {
   SEASONS,
   SETTLEMENT_TYPE_DEF,
   clampNumber,
+  computeStorageCaps,
   effectivePeasantCap,
   expectedSettlementPlan,
   researchGoldCost,
@@ -1053,6 +1054,8 @@ function computeEconomyHourly(
     goldUpkeep += amount * Number(row.upkeep_gold || 0);
   }
 
+  const storageCaps = computeStorageCaps(buildingLevels);
+
   return {
     perHour: {
       food: foodIncome - foodUpkeep,
@@ -1060,6 +1063,7 @@ function computeEconomyHourly(
       wood: woodIncome,
       stone: stoneIncome,
     },
+    storageCaps,
     raw: {
       foodIncomeRaw,
       goldIncomeRaw,

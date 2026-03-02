@@ -94,6 +94,34 @@ export function effectivePeasantCap(buildingLevels: Record<string, number>) {
   return POPULATION_CAPACITY.baselinePeasants + peasantHousingCapacity(buildingLevels);
 }
 
+// ── Resource storage caps ─────────────────────────────────────────────────────
+// Base caps apply to all kingdoms regardless of buildings.
+// Each building level adds to the cap of the relevant resource(s).
+export const STORAGE_CAPS = {
+  base:          { gold: 100_000, food: 50_000, wood: 10_000, stone: 10_000 },
+  perFarm:       { gold: 30,      food: 2_000 },
+  perBarn:       { food: 10_000 },
+  perLumberyard: { wood: 200 },
+  perQuarry:     { stone: 200 },
+  perCastle:     { gold: 20_000, food: 7_500, wood: 500, stone: 500 },
+  perHouse:      { gold: 100 },
+} as const;
+
+export function computeStorageCaps(buildingLevels: Record<string, number>) {
+  const farm    = Math.max(0, Number(buildingLevels.farm       || 0));
+  const barns   = Math.max(0, Number(buildingLevels.barns      || 0));
+  const lumber  = Math.max(0, Number(buildingLevels.lumberyard || 0));
+  const quarry  = Math.max(0, Number(buildingLevels.quarry     || 0));
+  const castles = Math.max(0, Number(buildingLevels.castles    || 0));
+  const houses  = Math.max(0, Number(buildingLevels.houses     || 0));
+  return {
+    gold:  STORAGE_CAPS.base.gold  + farm * STORAGE_CAPS.perFarm.gold  + castles * STORAGE_CAPS.perCastle.gold  + houses * STORAGE_CAPS.perHouse.gold,
+    food:  STORAGE_CAPS.base.food  + farm * STORAGE_CAPS.perFarm.food  + barns   * STORAGE_CAPS.perBarn.food   + castles * STORAGE_CAPS.perCastle.food,
+    wood:  STORAGE_CAPS.base.wood  + lumber * STORAGE_CAPS.perLumberyard.wood + castles * STORAGE_CAPS.perCastle.wood,
+    stone: STORAGE_CAPS.base.stone + quarry * STORAGE_CAPS.perQuarry.stone    + castles * STORAGE_CAPS.perCastle.stone,
+  };
+}
+
 export function taxGoldMultiplier(taxRate: number) {
   return clampNumber(1 + (taxRate - 25) * 0.04, 0.2, 2.2);
 }
