@@ -5959,15 +5959,12 @@ function RankingsView() {
   };
   const TD: React.CSSProperties = { padding: "10px 12px", fontSize: 13, borderBottom: "1px solid rgba(255,255,255,.05)" };
 
-  // Top 3 shown as podium cards on page 0 (not during search)
-  const showPodium = page === 0 && !search;
-  const podiumItems = showPodium
-    ? (tab === "kingdoms" ? kingdoms.slice(0, 3) : alliances.slice(0, 3))
-    : [];
+  // Top 3 shown as podium cards on page 0 (not during search), only when 3+ items exist
+  const tabItems = tab === "kingdoms" ? kingdoms : alliances;
+  const showPodium = page === 0 && !search && tabItems.length >= 3;
+  const podiumItems = showPodium ? tabItems.slice(0, 3) : [];
   // Table body skips top 3 when podium is shown
-  const tableItems = tab === "kingdoms"
-    ? (showPodium ? kingdoms.slice(3) : kingdoms)
-    : (showPodium ? alliances.slice(3) : alliances);
+  const tableItems = showPodium ? tabItems.slice(3) : tabItems;
 
   const rankMedal = (r: number) => r === 1 ? "👑" : r === 2 ? "🥈" : r === 3 ? "🥉" : null;
   const rankColor = (r: number) => r === 1 ? "#ffd700" : r === 2 ? "#c0c0c0" : r === 3 ? "#cd7f32" : TEXT_MAIN;
