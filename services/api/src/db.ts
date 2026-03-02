@@ -927,4 +927,5 @@ export async function ensureSchema(): Promise<void> {
         WHERE kb.kingdom_id = k.id AND kb.building_code = 'castles' AND kb.level >= 1
       )
   `);
+  await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS registration_ip TEXT`);
 }

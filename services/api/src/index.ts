@@ -429,6 +429,10 @@ const EMAIL_FROM_MATCH = SMTP_FROM_RAW.match(/^(.+?)\s*<(.+?)>$/) ;
 const EMAIL_FROM_NAME = EMAIL_FROM_MATCH ? EMAIL_FROM_MATCH[1].trim() : "Crownforge";
 const EMAIL_FROM_ADDR = EMAIL_FROM_MATCH ? EMAIL_FROM_MATCH[2].trim() : SMTP_FROM_RAW.trim();
 
+if (!BREVO_API_KEY && process.env.NODE_ENV === "production") {
+  console.warn("[EMAIL] ⚠️  BREVO_API_KEY is not set — email delivery is DISABLED in production. Set BREVO_API_KEY in Railway environment variables.");
+}
+
 async function sendEmail(to: string, subject: string, html: string) {
   if (!BREVO_API_KEY) {
     console.log(`[EMAIL - no BREVO_API_KEY]\nTo: ${to}\nSubject: ${subject}\n${html.replace(/<[^>]+>/g, "")}`);
@@ -1327,6 +1331,7 @@ app.post("/api/auth/register", async (req, res) => {
       if (kingdomUsed.rowCount) throw new Error("kingdom name already in use");
 
       const userId = `u_${randomBytes(12).toString("hex")}`;
+      const regIp = String(req.ip || (req as any).socket?.remoteAddress || "").trim().slice(0, 100) || null;
       const kingdom = await seedKingdom(c, {
         userId,
         username,
@@ -1349,6 +1354,7 @@ app.post("/api/auth/register", async (req, res) => {
         },
         troopAmounts: { peasants: 1000 },
       });
+      if (regIp) await c.query(`UPDATE app_users SET registration_ip=$2 WHERE id=$1`, [userId, regIp]);
       const session = await createAuthSession(c, userId);
       await c.query(`DELETE FROM email_verification_tokens WHERE user_id=$1 AND used_at IS NULL`, [userId]);
       const verifyToken = randomBytes(32).toString("hex");
@@ -1541,6 +1547,21 @@ app.get("/api/account/referral", requireAuth, async (req, res) => {
   }
 });
 
+app.delete("/api/account/delete", requireAuth, async (req, res) => {
+  try {
+    const session = (req as any).authSession;
+    const userId = String(session?.user_id || "");
+    if (!userId) return res.status(401).json({ ok: false, error: "missing user session" });
+    const confirm = String(req.body?.confirm || "").trim();
+    if (confirm !== "DELETE") return res.status(400).json({ ok: false, error: "send confirm: 'DELETE' to proceed" });
+    // Cascade deletes kingdom, troops, buildings, sessions, etc.
+    await pool.query(`DELETE FROM app_users WHERE id=$1`, [userId]);
+    return res.json({ ok: true });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 app.post("/api/auth/logout", async (req, res) => {
   const token = extractAuthToken(req);
   if (!token) return res.status(400).json({ ok: false, error: "missing auth token" });
@@ -1616,6 +1637,14 @@ app.post("/api/auth/reset-password", async (req, res) => {
     await pool.query(`DELETE FROM auth_sessions WHERE user_id=$1`, [row.user_id]);
     return res.json({ ok: true, message: "Password reset successfully. Please log in." });
   } catch (e: any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }); }
+});
+
+// ── Block all dev routes in production ────────────────────────────────────────
+app.use("/api/dev", (req, res, next) => {
+  if (process.env.NODE_ENV === "production") {
+    return res.status(404).json({ ok: false, error: "Not found" });
+  }
+  return next();
 });
 
 app.post("/api/dev/demo-reset", async (req, res) => {
@@ -2754,6 +2783,17 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
       const atk = a.rows[0];
       const def = d.rows[0];
       if (Number(atk.id) === Number(def.id)) throw new Error("cannot attack self");
+
+      // Anti-cheat: cap attacks on the same kingdom to 3 per 24 hours
+      const recentAttackCount = await c.query(
+        `SELECT COUNT(*) AS cnt FROM attack_reports
+         WHERE attacker_kingdom_id=$1 AND defender_kingdom_id=$2
+           AND created_at > now() - interval '24 hours'`,
+        [atk.id, def.id],
+      );
+      if (Number(recentAttackCount.rows[0]?.cnt || 0) >= 3) {
+        throw new Error("You have attacked this kingdom 3 times in the last 24 hours. Wait before attacking again.");
+      }
 
       const atkShieldRow = await normalizeShieldStateTx(c, Number(atk.id));
       const defShieldRow = await normalizeShieldStateTx(c, Number(def.id));
@@ -6444,7 +6484,7 @@ app.get("/api/admin/users", requireAdmin, async (req, res) => {
   try {
     const q = await pool.query(
       `SELECT u.id, u.username, u.email, u.email_verified, u.is_admin, u.is_banned, u.banned_reason,
-              u.premium_started_at, u.premium_ends_at, u.created_at, k.name AS kingdom_name
+              u.premium_started_at, u.premium_ends_at, u.created_at, u.registration_ip, k.name AS kingdom_name
        FROM app_users u LEFT JOIN kingdoms k ON k.user_id = u.id
        WHERE ($1='' OR LOWER(u.username) LIKE '%'||LOWER($1)||'%' OR LOWER(u.email) LIKE '%'||LOWER($1)||'%')
        ORDER BY u.created_at DESC LIMIT $2 OFFSET $3`,

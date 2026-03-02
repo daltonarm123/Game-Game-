@@ -33,7 +33,6 @@ type NavItem = { id: string; label: string; group: "top" | "kingdom"; icon: stri
 
 const NAV_ITEMS: NavItem[] = [
   { id: "home",            label: "Home",             group: "top",     icon: "🏠" },
-  { id: "forums",          label: "Forums",           group: "top",     icon: "💬" },
   { id: "how-to-play",     label: "How To Play",      group: "top",     icon: "📖" },
   { id: "overview",        label: "Overview",         group: "kingdom", icon: "👑" },
   { id: "buildings",       label: "Buildings",        group: "kingdom", icon: "🏰" },
@@ -7215,6 +7214,31 @@ function AccountView() {
     }
   }
 
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  async function deleteAccount() {
+    if (!window.confirm("Are you sure? This will permanently delete your account and kingdom. This cannot be undone.")) return;
+    const typed = window.prompt('Type "DELETE" to confirm permanent account deletion:');
+    if (typed !== "DELETE") { setStatusMsg("Deletion cancelled."); return; }
+    setDeleteBusy(true);
+    setStatusMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/account/delete`, {
+        method: "DELETE",
+        headers: authHeaders(),
+        body: JSON.stringify({ confirm: "DELETE" }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      localStorage.removeItem("gg:auth");
+      localStorage.removeItem("gg:kingdom");
+      window.location.reload();
+    } catch (e: any) {
+      setStatusMsg(`Delete failed: ${String(e?.message || e)}`);
+      setDeleteBusy(false);
+    }
+  }
+
   function logout() {
     if (!window.confirm("Log out of all web sessions?")) return;
     localStorage.removeItem("gg:auth");
@@ -7350,6 +7374,21 @@ function AccountView() {
             </button>
           </div>
         </div>
+      </div>
+
+      <div style={CARD}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, marginBottom: 10, color: "#ffab9c" }}>Delete Account</div>
+        <div style={{ fontSize: 14, color: TEXT_MUTED, marginBottom: 12, lineHeight: 1.6 }}>
+          Permanently deletes your account and all associated data including your kingdom, troops, buildings, and history.
+          This action <strong style={{ color: "#ffb2a3" }}>cannot be undone</strong>.
+        </div>
+        <button
+          onClick={() => void deleteAccount()}
+          disabled={deleteBusy}
+          style={{ ...BTN_STYLE, background: "rgba(140,30,30,.5)", border: "1px solid rgba(255,80,80,.4)", fontSize: 13 }}
+        >
+          {deleteBusy ? "Deleting..." : "Delete My Account"}
+        </button>
       </div>
 
       <div style={CARD}>
@@ -7756,7 +7795,6 @@ function App() {
             <EmailVerifyBanner token={auth.token} onVerified={() => setAuth({ ...auth, user: { ...auth.user, emailVerified: true } })} />
           )}
           {active.id === "home" ? <HomeView /> : null}
-          {active.id === "forums" ? <ForumsView /> : null}
           {active.id === "alliance-forums" ? <AllianceForumsView /> : null}
           {active.id === "overview" ? <OverviewView /> : null}
           {active.id === "buildings" ? <BuildingsView /> : null}
