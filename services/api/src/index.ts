@@ -3840,10 +3840,19 @@ app.get("/api/war-room/:kingdom", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/api/war-room/reports/:kingdom", async (req, res) => {
+app.get("/api/war-room/reports/:kingdom", requireAuth, async (req, res) => {
   const kingdom = String(req.params.kingdom || "").trim();
   const limit = clamp(Number(req.query.limit || 25), 1, 200);
   if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+
+  const session = (req as any).authSession;
+  const ownKingdom = await pool.query(
+    `SELECT 1 FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1`,
+    [kingdom, session.user_id],
+  );
+  if (!ownKingdom.rowCount) {
+    return res.status(403).json({ ok: false, error: "You can only view your own kingdom data" });
+  }
 
   try {
     const rows = await pool.query(

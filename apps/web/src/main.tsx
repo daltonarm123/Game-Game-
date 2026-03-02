@@ -293,8 +293,8 @@ function OverviewView() {
     setError("");
     try {
       const [kRes, wRes, pRes] = await Promise.all([
-        fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}`),
-        fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`),
+        fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}`, { headers: authHeaders() }),
+        fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`, { headers: authHeaders() }),
         fetch(`${API_BASE}/api/pray/${encodeURIComponent(kingdom)}`),
       ]);
       const kJson = await kRes.json();
@@ -723,8 +723,8 @@ function BuildingsView() {
     setError("");
     try {
       const [kRes, wRes] = await Promise.all([
-        fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}`),
-        fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`),
+        fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}`, { headers: authHeaders() }),
+        fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`, { headers: authHeaders() }),
       ]);
       const kJson = await kRes.json();
       const wJson = await wRes.json();
@@ -2494,7 +2494,7 @@ function HomeView() {
       try {
         const [rankRes, kwRes] = await Promise.all([
           fetch(`${API_BASE}/api/rankings/kingdoms?limit=5`),
-          kingdom ? fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}`) : Promise.resolve(null),
+          kingdom ? fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}`, { headers: authHeaders() }) : Promise.resolve(null),
         ]);
         const rankJ = await rankRes.json();
         if (rankJ.ok) setTopKingdoms(rankJ.kingdoms || []);
@@ -3001,11 +3001,11 @@ function WarRoomView() {
     if (!background) { setLoading(true); setActionMsg(""); }
     setError("");
     try {
-      const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`);
+      const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`, { headers: authHeaders() });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       setData(j);
-      const rr = await fetch(`${API_BASE}/api/war-room/reports/${encodeURIComponent(kingdom)}?limit=12`);
+      const rr = await fetch(`${API_BASE}/api/war-room/reports/${encodeURIComponent(kingdom)}?limit=12`, { headers: authHeaders() });
       const rj = await rr.json();
       if (rr.ok && rj?.ok) setReports(Array.isArray(rj.items) ? rj.items : []);
     } catch (e: any) {
@@ -3599,7 +3599,7 @@ function TrainTroopsView() {
     if (!background) setLoading(true);
     setError("");
     try {
-      const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`);
+      const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`, { headers: authHeaders() });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       setData(j);
@@ -3784,11 +3784,11 @@ function AttackKingdomView() {
     setLoading(true);
     setError("");
     try {
-      const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`);
+      const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`, { headers: authHeaders() });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       setData(j);
-      const rr = await fetch(`${API_BASE}/api/war-room/reports/${encodeURIComponent(kingdom)}?limit=12`);
+      const rr = await fetch(`${API_BASE}/api/war-room/reports/${encodeURIComponent(kingdom)}?limit=12`, { headers: authHeaders() });
       const rj = await rr.json();
       if (rr.ok && rj?.ok) setReports(Array.isArray(rj.items) ? rj.items : []);
     } catch (e: any) {
@@ -6494,8 +6494,8 @@ function GuildhallView() {
     setError("");
     try {
       const [wRes, rRes] = await Promise.all([
-        fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`),
-        fetch(`${API_BASE}/api/war-room/reports/${encodeURIComponent(kingdom)}?limit=12`),
+        fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`, { headers: authHeaders() }),
+        fetch(`${API_BASE}/api/war-room/reports/${encodeURIComponent(kingdom)}?limit=12`, { headers: authHeaders() }),
       ]);
       const wJson = await wRes.json();
       const rJson = await rRes.json();
@@ -6863,7 +6863,7 @@ function EmbassyView() {
     setError("");
     try {
       const [warRes, embRes] = await Promise.all([
-        fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`),
+        fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`, { headers: authHeaders() }),
         fetch(`${API_BASE}/api/embassy/${encodeURIComponent(kingdom)}`),
       ]);
       const warJson = await warRes.json();
@@ -7095,7 +7095,7 @@ function AccountView() {
     setLoading(true);
     try {
       const [kRes] = await Promise.all([
-        fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}`),
+        fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}`, { headers: authHeaders() }),
       ]);
       const kJson = await kRes.json();
       if (kRes.ok && kJson?.ok) {
