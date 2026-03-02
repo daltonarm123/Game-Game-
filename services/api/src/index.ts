@@ -7543,8 +7543,11 @@ app.post("/api/market/:kingdom/cancel", requireAuth, async (req, res) => {
 
 async function bootstrap() {
   await ensureSchema();
-  const adminUsername = String(process.env.ADMIN_USERNAME || "").trim();
-  if (adminUsername) {
+  const adminUsernames = String(process.env.ADMIN_USERNAME || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const adminUsername of adminUsernames) {
     await pool.query(`UPDATE app_users SET is_admin=true WHERE LOWER(username)=LOWER($1)`, [adminUsername]);
     console.log(`Admin granted to: ${adminUsername}`);
   }
