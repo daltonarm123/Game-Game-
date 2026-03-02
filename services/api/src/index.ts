@@ -399,6 +399,7 @@ const TROOP_TRAIN_REQUIREMENTS: Record<string, { buildingCode: string; buildingN
   heavy_cavalry: { buildingCode: "stables", buildingName: "Stables", minLevel: 1 },
   knights: { buildingCode: "castles", buildingName: "Castles", minLevel: 1 },
   spies: { buildingCode: "guildhalls", buildingName: "Guildhall", minLevel: 1 },
+  priests: { buildingCode: "temples", buildingName: "Temple", minLevel: 1 },
 };
 const TROOP_TRAIN_PEASANT_COST: Record<string, number> = {
   footmen: 1,
@@ -2385,6 +2386,20 @@ app.post("/api/kingdom/:name/train", requireAuth, async (req, res) => {
         }
       }
 
+      if (troopCode === "priests") {
+        const [templesQ, priestsHomeQ, priestsTrainQ] = await Promise.all([
+          c.query(`SELECT COALESCE(MAX(level),0) AS lvl FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='temples'`, [kingdom.id]),
+          c.query(`SELECT COALESCE(amount,0) AS qty FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='priests'`, [kingdom.id]),
+          c.query(`SELECT COALESCE(SUM(quantity),0) AS qty FROM train_queue WHERE kingdom_id=$1 AND troop_code='priests' AND status='queued'`, [kingdom.id]),
+        ]);
+        const priestCap = Number(templesQ.rows[0]?.lvl || 0) * PRIESTS_PER_TEMPLE;
+        const priestsUsed = Number(priestsHomeQ.rows[0]?.qty || 0) + Number(priestsTrainQ.rows[0]?.qty || 0);
+        const priestsAvailable = Math.max(0, priestCap - priestsUsed);
+        if (qty > priestsAvailable) {
+          throw new Error(`not enough temple capacity (cap ${priestCap}, used ${priestsUsed}, available ${priestsAvailable})`);
+        }
+      }
+
       const totalGold = Number(def.gold_cost) * qty;
       const totalFood = Number(def.food_cost) * qty;
       const totalHorses = Number(def.horse_cost || 0) * qty;
@@ -2599,7 +2614,7 @@ app.post("/api/kingdom/:name/tax", requireAuth, async (req, res) => {
 
   try {
     const out = await withTx(async (c) => {
-      const taxRate = clamp(Number(parsed.data.taxRate || 25), 0, 40);
+      const taxRate = clamp(Number(parsed.data.taxRate), 0, 40);
       const k = await c.query(
         `UPDATE kingdoms SET tax_rate=$2 WHERE LOWER(name)=LOWER($1) RETURNING id, name, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at`,
         [name, taxRate],

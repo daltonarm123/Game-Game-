@@ -558,8 +558,8 @@ function OverviewView() {
             <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: ACCENT, marginBottom: 8 }}>Tax Rate</div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ fontSize: 20, fontWeight: 700 }}>{taxRate}%</span>
-              <button disabled={taxBusy} onClick={() => void updateTax(taxRate + 1)} style={{ ...BTN_STYLE, padding: "4px 12px", fontSize: 16 }}>+</button>
-              <button disabled={taxBusy} onClick={() => void updateTax(taxRate - 1)} style={{ ...BTN_STYLE, padding: "4px 12px", fontSize: 16 }}>-</button>
+              <button disabled={taxBusy || taxRate >= 40} onClick={() => void updateTax(taxRate + 1)} style={{ ...BTN_STYLE, padding: "4px 12px", fontSize: 16 }}>+</button>
+              <button disabled={taxBusy || taxRate <= 0} onClick={() => void updateTax(taxRate - 1)} style={{ ...BTN_STYLE, padding: "4px 12px", fontSize: 16 }}>-</button>
             </div>
           </div>
 
@@ -4335,6 +4335,8 @@ function PrayView() {
   const [spellTarget, setSpellTarget] = useState("");
   const [days, setDays] = useState("7");
   const [busy, setBusy] = useState(false);
+  const [priestQty, setPriestQty] = useState("1");
+  const [priestBusy, setPriestBusy] = useState(false);
   const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
 
   useEffect(() => {
@@ -4426,6 +4428,26 @@ function PrayView() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function trainPriests(e: React.FormEvent) {
+    e.preventDefault();
+    const qty = Math.floor(Number(priestQty || 0));
+    if (qty < 1) return setActionMsg("Enter a quantity of at least 1.");
+    setPriestBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/train`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ troopCode: "priests", quantity: qty }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setActionMsg(`Training ${qty} priest${qty !== 1 ? "s" : ""}.`);
+      await load();
+    } catch (e: any) { setActionMsg(`Error: ${String(e?.message || e)}`); }
+    finally { setPriestBusy(false); }
   }
 
   async function moderateThread(action: { pinned?: boolean; locked?: boolean; deleteThread?: boolean }) {
@@ -4536,6 +4558,42 @@ function PrayView() {
             <div style={{ fontSize: 28, fontWeight: 800, color: ACCENT, fontFamily: FONT_DISPLAY }}>{priests} / {priestCap}</div>
             <div style={{ fontSize: 13, color: TEXT_MUTED, marginTop: 2 }}>cap: {priestCap} · 5 per Temple · 4 mana/hr each</div>
           </div>
+        </div>
+      )}
+
+      {/* Train Priests */}
+      {data && (
+        <div style={CARD}>
+          <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 10 }}>Train Priests</div>
+          <div style={{ fontSize: 13, color: TEXT_MUTED, marginBottom: 12 }}>
+            Cost per priest: 400 gold · 150 food · 1 hr training · requires Temple
+          </div>
+          <form onSubmit={trainPriests} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <input
+              type="number"
+              min={1}
+              value={priestQty}
+              onChange={(e) => setPriestQty(e.target.value.replace(/\D+/g, ""))}
+              style={{ ...INPUT_STYLE, width: 80 }}
+              placeholder="Qty"
+            />
+            <div style={{ fontSize: 13, color: TEXT_MUTED }}>
+              Cost: {(Number(priestQty || 0) * 400).toLocaleString()} gold · {(Number(priestQty || 0) * 150).toLocaleString()} food
+            </div>
+            <button
+              type="submit"
+              disabled={priestBusy || priests >= priestCap}
+              style={{ ...BTN_STYLE }}
+            >
+              {priestBusy ? "Training…" : priests >= priestCap ? "Temple Full" : "Train"}
+            </button>
+          </form>
+          {priests >= priestCap && priestCap > 0 && (
+            <div style={{ fontSize: 13, color: "#ffae9a", marginTop: 8 }}>Build more Temples to increase your priest cap ({priestCap} max).</div>
+          )}
+          {priestCap === 0 && (
+            <div style={{ fontSize: 13, color: "#ffae9a", marginTop: 8 }}>Build a Temple first to train priests.</div>
+          )}
         </div>
       )}
 
