@@ -761,6 +761,9 @@ function shieldStateFromRow(row: any, now = new Date()) {
   if (status === "cooldown" && cooldownEndsAt) activeUntil = cooldownEndsAt;
 
   const remainingSeconds = activeUntil ? Math.max(0, Math.floor((activeUntil.getTime() - now.getTime()) / 1000)) : 0;
+  // pending  = no first strike, retaliation allowed, can be attacked, market open
+  // active   = fully locked — no attacks, cannot be attacked, no market
+  // cooldown = no first strike, retaliation allowed, can be attacked, market open
   const retaliationOnly = status === "pending" || status === "cooldown";
   const canAttack = status === "none";
   const canBeAttacked = status !== "active";
@@ -7443,9 +7446,10 @@ app.post("/api/market/:kingdom/list", requireAuth, async (req, res) => {
   const { resource, quantity, pricePerUnit } = parsed.data;
   try {
     const out = await withTx(async (c) => {
-      const k = await c.query(`SELECT id, name, ${resource} AS res_qty FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [req.params.kingdom]);
+      const k = await c.query(`SELECT id, name, shield_status, ${resource} AS res_qty FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [req.params.kingdom]);
       if (!k.rowCount) throw new Error("kingdom not found");
       const kRow = k.rows[0];
+      if (String(kRow.shield_status || "none") === "active") throw new Error("cannot use the market while your shield is active");
       if (Number(kRow.res_qty || 0) < quantity) throw new Error(`Not enough ${resource}. Have ${Number(kRow.res_qty||0).toLocaleString()}, need ${quantity.toLocaleString()}.`);
       await c.query(`UPDATE kingdoms SET ${resource} = ${resource} - $2 WHERE id=$1`, [kRow.id, quantity]);
       const ins = await c.query(
@@ -7465,9 +7469,10 @@ app.post("/api/market/:kingdom/buy", requireAuth, async (req, res) => {
   const { listingId, quantity } = parsed.data;
   try {
     const out = await withTx(async (c) => {
-      const buyer = await c.query(`SELECT id, name, gold FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [req.params.kingdom]);
+      const buyer = await c.query(`SELECT id, name, gold, shield_status FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [req.params.kingdom]);
       if (!buyer.rowCount) throw new Error("kingdom not found");
       const buyerRow = buyer.rows[0];
+      if (String(buyerRow.shield_status || "none") === "active") throw new Error("cannot use the market while your shield is active");
 
       const listing = await c.query(
         `SELECT id, seller_kingdom_id, seller_kingdom_name, resource, quantity_remaining, price_per_unit FROM market_listings WHERE id=$1 AND status='active' AND expires_at > now() FOR UPDATE`,

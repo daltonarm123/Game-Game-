@@ -7211,10 +7211,10 @@ function AccountView() {
 
       <div style={CARD}>
         <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, marginBottom: 10 }}>Kingdom Shield</div>
-        <div style={{ fontSize: 14, color: TEXT_MUTED, marginBottom: 12, lineHeight: 1.6 }}>
-          A shield protects your kingdom from attacks. Activating a shield takes 24 hours to come into effect.
-          While shielded, your kingdom cannot be attacked. Retaliation attacks are still allowed during cooldown.
-          Cancelling a pending or active shield starts a 24-hour cooldown. You can only have one shield active at a time.
+        <div style={{ fontSize: 14, color: TEXT_MUTED, marginBottom: 12, lineHeight: 1.8 }}>
+          <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>Pending (24h):</span> Shield is queuing. You cannot start an attack, but can retaliate if hit, and the market stays open.<br />
+          <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>Active:</span> Full lockdown — you cannot be attacked or attack, and the market is closed.<br />
+          <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>Cooldown (24h):</span> Shield has ended. You may use the market and defend yourself if attacked, but cannot send the first strike.
         </div>
         <div style={{ marginBottom: 10, fontSize: 14 }}>
           Status:{" "}
