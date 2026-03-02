@@ -5172,6 +5172,12 @@ function AdminView() {
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
   const [opsBusy, setOpsBusy] = useState(false);
+  const [grantKingdom, setGrantKingdom] = useState("");
+  const [grantBuilding, setGrantBuilding] = useState("farm");
+  const [grantBuildingAmt, setGrantBuildingAmt] = useState("10");
+  const [grantResource, setGrantResource] = useState("food");
+  const [grantResourceAmt, setGrantResourceAmt] = useState("50000");
+  const [grantBusy, setGrantBusy] = useState(false);
 
   const api = async (path: string, method = "GET", body?: object) => {
     const r = await fetch(`${API_BASE}${path}`, {
@@ -5292,6 +5298,28 @@ function AdminView() {
     const j = await api("/api/admin/update-user", "POST", body);
     setMsg(j.ok ? "Account updated." : j.error);
     if (tab === "users") loadUsers(search);
+  };
+
+  const doGrantBuilding = async () => {
+    const amt = parseInt(grantBuildingAmt, 10);
+    if (!grantKingdom.trim() || isNaN(amt) || amt < 1) return setMsg("Enter a valid kingdom name and amount.");
+    setGrantBusy(true);
+    try {
+      const j = await api("/api/admin/grant-building", "POST", { kingdom: grantKingdom.trim(), buildingCode: grantBuilding, amount: amt });
+      setMsg(j.ok ? `Granted ${amt}× ${grantBuilding} to ${j.name}. New level: ${j.newLevel}` : (j.error || "Failed"));
+      if (j.ok) loadKingdoms(search);
+    } finally { setGrantBusy(false); }
+  };
+
+  const doGrantResource = async () => {
+    const amt = parseInt(grantResourceAmt, 10);
+    if (!grantKingdom.trim() || isNaN(amt)) return setMsg("Enter a valid kingdom name and amount.");
+    setGrantBusy(true);
+    try {
+      const j = await api("/api/admin/grant-resource", "POST", { kingdom: grantKingdom.trim(), resource: grantResource, amount: amt });
+      setMsg(j.ok ? `Set ${grantResource} for ${j.name} → ${Number(j.newValue).toLocaleString()}` : (j.error || "Failed"));
+      if (j.ok) loadKingdoms(search);
+    } finally { setGrantBusy(false); }
   };
 
   const TAB_BTN = (id: typeof tab, label: string) => (
@@ -5425,6 +5453,10 @@ function AdminView() {
                                 style={{ ...BTN_STYLE, fontSize: 12, padding: "4px 8px", color: "#ff7f7f" }}
                               >Ban</button>
                             )}
+                            <button
+                              onClick={() => setGrantKingdom(k.name)}
+                              style={{ ...BTN_STYLE, fontSize: 12, padding: "4px 8px" }}
+                            >Grant</button>
                           </div>
                         </td>
                       </tr>
@@ -5433,6 +5465,72 @@ function AdminView() {
                 </table>
               </div>
             )}
+
+            {/* Kingdom Actions panel */}
+            <div style={{ ...CARD, marginTop: 16 }}>
+              <div style={{ fontWeight: 700, marginBottom: 12 }}>Kingdom Actions</div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
+                <span style={{ fontSize: 13, color: TEXT_MUTED, minWidth: 80 }}>Kingdom:</span>
+                <input
+                  value={grantKingdom}
+                  onChange={(e) => setGrantKingdom(e.target.value)}
+                  placeholder="Kingdom name…"
+                  style={{ ...INPUT_STYLE, flex: 1 }}
+                />
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                {/* Grant building */}
+                <div style={{ ...CARD, padding: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Grant Buildings</div>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                    <select
+                      value={grantBuilding}
+                      onChange={(e) => setGrantBuilding(e.target.value)}
+                      style={{ ...INPUT_STYLE, flex: 1 }}
+                    >
+                      {["farm", "lumberyard", "quarry", "barns", "houses", "castles", "stables", "barracks", "temple", "market", "guildhall", "embassy", "workshop", "library"].map((b) => (
+                        <option key={b} value={b}>{b}</option>
+                      ))}
+                    </select>
+                    <input
+                      value={grantBuildingAmt}
+                      onChange={(e) => setGrantBuildingAmt(e.target.value)}
+                      style={{ ...INPUT_STYLE, width: 70 }}
+                      type="number"
+                      min="1"
+                    />
+                  </div>
+                  <button disabled={grantBusy} onClick={() => void doGrantBuilding()} style={{ ...BTN_STYLE, width: "100%", fontSize: 13 }}>
+                    {grantBusy ? "…" : "Grant Building"}
+                  </button>
+                </div>
+                {/* Grant resource */}
+                <div style={{ ...CARD, padding: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Grant Resources</div>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                    <select
+                      value={grantResource}
+                      onChange={(e) => setGrantResource(e.target.value)}
+                      style={{ ...INPUT_STYLE, flex: 1 }}
+                    >
+                      {["gold", "food", "wood", "stone"].map((r) => (
+                        <option key={r} value={r}>{r}</option>
+                      ))}
+                    </select>
+                    <input
+                      value={grantResourceAmt}
+                      onChange={(e) => setGrantResourceAmt(e.target.value)}
+                      style={{ ...INPUT_STYLE, width: 90 }}
+                      type="number"
+                    />
+                  </div>
+                  <div style={{ fontSize: 11, color: TEXT_MUTED, marginBottom: 6 }}>Use negative to subtract.</div>
+                  <button disabled={grantBusy} onClick={() => void doGrantResource()} style={{ ...BTN_STYLE, width: "100%", fontSize: 13 }}>
+                    {grantBusy ? "…" : "Grant Resource"}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 

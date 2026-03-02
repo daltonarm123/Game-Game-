@@ -6732,6 +6732,72 @@ app.post("/api/admin/set-land", requireAdmin, async (req, res) => {
   }
 });
 
+app.post("/api/admin/grant-building", requireAdmin, async (req, res) => {
+  const parsed = z.object({
+    kingdom: z.string().min(1),
+    buildingCode: z.string().min(1),
+    amount: z.number().int().min(1).max(10_000),
+  }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const admin = (req as any).adminSession;
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1)`, [parsed.data.kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const row = k.rows[0];
+      await c.query(
+        `INSERT INTO kingdom_buildings (kingdom_id, building_code, level)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (kingdom_id, building_code)
+         DO UPDATE SET level = kingdom_buildings.level + EXCLUDED.level`,
+        [row.id, parsed.data.buildingCode, parsed.data.amount],
+      );
+      const newLevel = await c.query(
+        `SELECT level FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code=$2`,
+        [row.id, parsed.data.buildingCode],
+      );
+      const level = Number(newLevel.rows[0]?.level || 0);
+      await logAdminActionTx(c, admin, "grant_building", "kingdom", String(row.id), {
+        kingdom: row.name, buildingCode: parsed.data.buildingCode, amount: parsed.data.amount, newLevel: level,
+      });
+      return { id: Number(row.id), name: String(row.name), buildingCode: parsed.data.buildingCode, amount: parsed.data.amount, newLevel: level };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    return res.status(msg.includes("not found") ? 404 : 500).json({ ok: false, error: msg });
+  }
+});
+
+app.post("/api/admin/grant-resource", requireAdmin, async (req, res) => {
+  const parsed = z.object({
+    kingdom: z.string().min(1),
+    resource: z.enum(["gold", "food", "wood", "stone"]),
+    amount: z.number().int().min(-9_999_999).max(9_999_999),
+  }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: parsed.error.flatten() });
+  const admin = (req as any).adminSession;
+  const col = parsed.data.resource;
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(
+        `UPDATE kingdoms SET ${col} = GREATEST(0, ${col} + $2) WHERE LOWER(name)=LOWER($1) RETURNING id, name, ${col}`,
+        [parsed.data.kingdom, parsed.data.amount],
+      );
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const row = k.rows[0];
+      await logAdminActionTx(c, admin, "grant_resource", "kingdom", String(row.id), {
+        kingdom: row.name, resource: col, amount: parsed.data.amount, newValue: Number(row[col] || 0),
+      });
+      return { id: Number(row.id), name: String(row.name), resource: col, amount: parsed.data.amount, newValue: Number(row[col] || 0) };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    return res.status(msg.includes("not found") ? 404 : 500).json({ ok: false, error: msg });
+  }
+});
+
 // ── Prayer endpoints ─────────────────────────────────────────────────────────
 app.post("/api/admin/reconcile-land", requireAdmin, async (req, res) => {
   const parsed = z.object({
