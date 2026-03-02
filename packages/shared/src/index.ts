@@ -91,7 +91,7 @@ export function peasantHousingCapacity(buildingLevels: Record<string, number>) {
 }
 
 export function effectivePeasantCap(buildingLevels: Record<string, number>) {
-  return Math.max(POPULATION_CAPACITY.baselinePeasants, peasantHousingCapacity(buildingLevels));
+  return POPULATION_CAPACITY.baselinePeasants + peasantHousingCapacity(buildingLevels);
 }
 
 export function taxGoldMultiplier(taxRate: number) {
