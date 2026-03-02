@@ -3045,7 +3045,8 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
 
       const landPct = landPctForResult(result);
       const defenderLand = Number(def.land || 0);
-      const landTaken = Math.max(0, Math.floor(defenderLand * landPct * spoilsScale));
+      // Land is based purely on battle result — spoilsScale only gates loot/gems.
+      const landTaken = Math.max(0, Math.floor(defenderLand * landPct));
       const attackerLandNew = Number(atk.land || 0) + landTaken;
       const defenderLandNew = Math.max(0, defenderLand - landTaken);
 
