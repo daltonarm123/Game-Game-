@@ -289,8 +289,8 @@ function OverviewView() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  async function load() {
-    setLoading(true);
+  async function load(background = false) {
+    if (!background) setLoading(true);
     setError("");
     try {
       const [kRes, wRes, pRes] = await Promise.all([
@@ -308,11 +308,10 @@ function OverviewView() {
       if (pRes.ok && pJson?.ok) setPrayData(pJson);
       setTaxRate(Number(kJson?.kingdom?.tax_rate || 25));
     } catch (e: any) {
-      setDetails(null);
-      setWar(null);
+      if (!background) { setDetails(null); setWar(null); }
       setError(String(e?.message || e));
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }
 
@@ -334,7 +333,7 @@ function OverviewView() {
   }, []);
 
   useEffect(() => {
-    const t = setInterval(() => { void load(); }, 30_000);
+    const t = setInterval(() => { void load(true); }, 30_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -724,8 +723,8 @@ function BuildingsView() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  async function load() {
-    setLoading(true);
+  async function load(background = false) {
+    if (!background) setLoading(true);
     setError("");
     try {
       const [kRes, wRes] = await Promise.all([
@@ -739,17 +738,16 @@ function BuildingsView() {
       setDetails(kJson);
       setWar(wJson);
     } catch (e: any) {
-      setDetails(null);
-      setWar(null);
+      if (!background) { setDetails(null); setWar(null); }
       setError(String(e?.message || e));
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }
 
   useEffect(() => {
     void load();
-    const t = setInterval(() => { void load(); }, 30_000);
+    const t = setInterval(() => { void load(true); }, 30_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1265,8 +1263,8 @@ function ResearchView() {
   const [busyCode, setBusyCode] = useState("");
   const [researchTab, setResearchTab] = useState<"skills" | "effects">("skills");
 
-  async function load() {
-    setLoading(true);
+  async function load(background = false) {
+    if (!background) setLoading(true);
     setError("");
     try {
       const r = await fetch(`${API_BASE}/api/research/${encodeURIComponent(kingdom)}`);
@@ -1274,16 +1272,16 @@ function ResearchView() {
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       setData(j);
     } catch (e: any) {
-      setData(null);
+      if (!background) setData(null);
       setError(String(e?.message || e));
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }
 
   useEffect(() => {
     void load();
-    const t = setInterval(() => { void load(); }, 30_000);
+    const t = setInterval(() => { void load(true); }, 30_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -3018,10 +3016,9 @@ function WarRoomView() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  async function load() {
-    setLoading(true);
+  async function load(background = false) {
+    if (!background) { setLoading(true); setActionMsg(""); }
     setError("");
-    setActionMsg("");
     try {
       const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`);
       const j = await r.json();
@@ -3032,10 +3029,9 @@ function WarRoomView() {
       if (rr.ok && rj?.ok) setReports(Array.isArray(rj.items) ? rj.items : []);
     } catch (e: any) {
       setError(String(e?.message || e));
-      setData(null);
-      setReports([]);
+      if (!background) { setData(null); setReports([]); }
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }
 
@@ -3625,8 +3621,8 @@ function TrainTroopsView() {
   const [trainQty, setTrainQty] = useState("1000");
   const [cancelTrainId, setCancelTrainId] = useState<number | null>(null);
 
-  async function load() {
-    setLoading(true);
+  async function load(background = false) {
+    if (!background) setLoading(true);
     setError("");
     try {
       const r = await fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}`);
@@ -3635,15 +3631,15 @@ function TrainTroopsView() {
       setData(j);
     } catch (e: any) {
       setError(String(e?.message || e));
-      setData(null);
+      if (!background) setData(null);
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }
 
   useEffect(() => {
     void load();
-    const t = setInterval(() => { void load(); }, 30_000);
+    const t = setInterval(() => { void load(true); }, 30_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -4358,9 +4354,9 @@ function PrayView() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  async function load() {
+  async function load(background = false) {
     if (!kingdom.trim()) return;
-    setLoading(true);
+    if (!background) setLoading(true);
     setError("");
     try {
       const r = await fetch(`${API_BASE}/api/pray/${encodeURIComponent(kingdom)}`);
@@ -4368,11 +4364,11 @@ function PrayView() {
       if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setData(j);
     } catch (e: any) { setError(String(e?.message || e)); }
-    finally { setLoading(false); }
+    finally { if (!background) setLoading(false); }
   }
 
   useEffect(() => { void load(); }, []);
-  useKingdomStream(kingdom, () => { void load(); });
+  useKingdomStream(kingdom, () => { void load(true); });
 
   async function startPrayer(e: React.FormEvent) {
     e.preventDefault();
@@ -6302,9 +6298,9 @@ function PigeonsView() {
   const [kindFilter, setKindFilter] = useState<"all" | "system" | "attack" | "spy" | "player">("all");
   const [deleteBusy, setDeleteBusy] = useState(false);
 
-  async function load(filterKind = kindFilter) {
+  async function load(filterKind = kindFilter, background = false) {
     if (!kingdom) return;
-    setLoading(true);
+    if (!background) setLoading(true);
     setError("");
     try {
       const r = await fetch(
@@ -6317,7 +6313,7 @@ function PigeonsView() {
     } catch (e: any) {
       setError(String(e?.message || e));
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }
 
@@ -6329,7 +6325,7 @@ function PigeonsView() {
     }
     void load(kindFilter);
   }, [kindFilter, premiumActive]);
-  useKingdomStream(kingdom, () => { void load(); });
+  useKingdomStream(kingdom, () => { void load(kindFilter, true); });
 
   async function markRead(id: number) {
     try {
@@ -6531,9 +6527,9 @@ function GuildhallView() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  async function load() {
+  async function load(background = false) {
     if (!kingdom.trim()) return;
-    setLoading(true);
+    if (!background) setLoading(true);
     setError("");
     try {
       const [wRes, rRes] = await Promise.all([
@@ -6548,12 +6544,12 @@ function GuildhallView() {
     } catch (e: any) {
       setError(String(e?.message || e));
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }
 
   useEffect(() => { void load(); }, []);
-  useKingdomStream(kingdom, () => { void load(); });
+  useKingdomStream(kingdom, () => { void load(true); });
   useEffect(() => {
     if (!spyOutcomePopup) return;
     const timeout = window.setTimeout(() => setSpyOutcomePopup(null), 10000);
@@ -6909,9 +6905,9 @@ function EmbassyView() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  async function load() {
+  async function load(background = false) {
     if (!kingdom.trim()) return;
-    setLoading(true);
+    if (!background) setLoading(true);
     setError("");
     try {
       const [warRes, embRes] = await Promise.all([
@@ -6926,12 +6922,12 @@ function EmbassyView() {
     } catch (e: any) {
       setError(String(e?.message || e));
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }
 
   useEffect(() => { void load(); }, []);
-  useKingdomStream(kingdom, () => { void load(); });
+  useKingdomStream(kingdom, () => { void load(true); });
 
   const diplomats = (data?.war?.troops || []).find((t: any) => String(t.troop_code || t.code || t.troopCode) === "diplomats");
   const incomingMissions = (data?.embassy?.incoming || []) as Array<any>;
