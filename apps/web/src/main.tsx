@@ -3053,7 +3053,8 @@ function WarRoomView() {
   const troops = (data?.troops || []) as Array<any>;
   const training = (data?.training || []) as Array<any>;
   const movements = (data?.movements || []) as Array<any>;
-  const troopCodeOptions = troops.filter((t) => Boolean(t.isTrainable)).map((t) => String(t.troopCode || ""));
+  const troopCodeOptions = troops.filter((t) => Boolean(t.canTrainNow)).map((t) => String(t.troopCode || ""));
+  const lockedTroopOptions = troops.filter((t) => Boolean(t.isTrainable) && !t.canTrainNow);
   const trainTroopData = troops.find((t) => String(t.troopCode || "") === String(trainTroop));
   const peasantHome = Number(troops.find((t) => String(t.troopCode || "") === "peasants")?.home || 0);
   const trainQtyNum = Math.max(0, Math.floor(Number(trainQty || 0)));
@@ -3480,9 +3481,14 @@ function WarRoomView() {
                         {String(trainTroopData.notes || TROOP_META[String(trainTroopData.troopCode || "")]?.role || "")}
                       </div>
                     ) : null}
-                    <button type="submit" style={BTN_STYLE} disabled={trainTroopData && !Boolean(trainTroopData.canTrainNow)}>
-                      {trainTroopData && !Boolean(trainTroopData.canTrainNow) ? "Requirement Missing" : "Train Now"}
+                    <button type="submit" style={BTN_STYLE} disabled={!trainTroopData || troopCodeOptions.length === 0}>
+                      Train Now
                     </button>
+                    {lockedTroopOptions.length > 0 && (
+                      <div style={{ fontSize: 12, color: TEXT_MUTED, marginTop: 4 }}>
+                        Locked: {lockedTroopOptions.map((t) => `${String(t.troopName)} (needs ${String(t.requiredBuildingName)})`).join(" · ")}
+                      </div>
+                    )}
                   </form>
                 ) : null}
 
@@ -3645,7 +3651,8 @@ function TrainTroopsView() {
   const k = data?.kingdom;
   const troops = (data?.troops || []) as Array<any>;
   const training = (data?.training || []) as Array<any>;
-  const troopCodeOptions = troops.filter((t) => Boolean(t.isTrainable)).map((t) => String(t.troopCode || ""));
+  const troopCodeOptions = troops.filter((t) => Boolean(t.canTrainNow));
+  const lockedTroopsTV = troops.filter((t) => Boolean(t.isTrainable) && !t.canTrainNow);
 
   async function submitTrain(e: React.FormEvent) {
     e.preventDefault();
@@ -3746,10 +3753,10 @@ function TrainTroopsView() {
 
           <div style={CARD}>
             <form onSubmit={submitTrain} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <select value={trainTroop} onChange={(e) => setTrainTroop(e.target.value)} style={INPUT_STYLE}>
-                {troopCodeOptions.map((code) => (
-                  <option key={code} value={code}>
-                    {code}
+              <select value={trainTroop} onChange={(e) => setTrainTroop(e.target.value)} style={INPUT_STYLE} disabled={troopCodeOptions.length === 0}>
+                {troopCodeOptions.map((t) => (
+                  <option key={t.troopCode} value={t.troopCode}>
+                    {t.troopName}
                   </option>
                 ))}
               </select>
@@ -3761,10 +3768,15 @@ function TrainTroopsView() {
                 onChange={(e) => setTrainQty(String(e.target.value || "").replace(/\D+/g, ""))}
                 style={{ ...INPUT_STYLE, width: 130 }}
               />
-              <button type="submit" style={BTN_STYLE}>
+              <button type="submit" style={BTN_STYLE} disabled={troopCodeOptions.length === 0}>
                 Queue Training
               </button>
             </form>
+            {lockedTroopsTV.length > 0 && (
+              <div style={{ marginTop: 8, fontSize: 12, color: TEXT_MUTED }}>
+                🔒 Locked: {lockedTroopsTV.map((t) => `${String(t.troopName)} (needs ${String(t.requiredBuildingName)})`).join(" · ")}
+              </div>
+            )}
           </div>
 
           <div style={CARD}>
