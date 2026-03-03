@@ -21,7 +21,7 @@ export function resolveSabotageOutcome(input: {
   random: () => number;
 }) {
   const successScore = input.spiesToSend * (0.9 + input.random() * 0.4) * (1 + Number(input.attackBonus || 0));
-  const defenseScore = Math.max(1, input.defenderSpiesHome) * (0.8 + input.random() * 0.4) * (1 + Number(input.defenseBonus || 0));
+  const defenseScore = Math.max(15, input.defenderSpiesHome) * (0.8 + input.random() * 0.4) * (1 + Number(input.defenseBonus || 0));
   const success = successScore >= defenseScore;
   const lossRate = success ? 0.08 : 0.26;
   const spyLosses = clampNumber(Math.floor(input.spiesToSend * lossRate), 0, input.spiesToSend);

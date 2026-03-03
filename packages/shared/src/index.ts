@@ -50,7 +50,7 @@ export const POPULATION_CAPACITY = {
 } as const;
 
 // Mana rates
-export const MANA_PER_PRIEST_PER_HOUR = 4;   // 1 priest = 4 mana/hr (slow game)
+export const MANA_PER_PRIEST_PER_HOUR = 8;   // 1 priest = 8 mana/hr
 export const PRIESTS_PER_TEMPLE = 5;          // max priests per temple built
 export const DIPLOMATS_PER_EMBASSY = 3;       // max diplomats per embassy level
 
@@ -128,7 +128,7 @@ export function taxGoldMultiplier(taxRate: number) {
 }
 
 export function researchGoldCost(baseGold: number, currentLevel: number) {
-  return Math.max(1, Math.floor(baseGold * Math.pow(1.35, Math.max(0, currentLevel))));
+  return Math.max(1, Math.floor(baseGold * Math.pow(1.25, Math.max(0, currentLevel))));
 }
 
 export function researchSeconds(baseSeconds: number, currentLevel: number, fastSeconds?: number) {

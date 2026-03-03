@@ -441,8 +441,19 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
         if (def.type === "population_bonus") prayerPopBonus   += def.bonus;
       }
 
-      const foodIncomePerHour = farm * ECON_BUILDING_HOURLY.farmFood * prayerFoodBonus;
-      const goldIncomePerHour = effectiveLand * ECON_BUILDING_HOURLY.baseGoldPerLand * prayerGoldBonus;
+      // Agriculture and economics research bonuses
+      const econResQ = await c.query(
+        `SELECT research_code, level FROM kingdom_research WHERE kingdom_id=$1
+         AND research_code IN ('better_farming_methods','crop_rotation','irrigation','manure','mathematics','accounting','monastery','clergy','basilica')`,
+        [k.id],
+      );
+      const econRes = Object.fromEntries(econResQ.rows.map((r: any) => [String(r.research_code), Number(r.level || 0)]));
+      const researchFoodMult = 1 + ((econRes.better_farming_methods || 0) + (econRes.crop_rotation || 0) + (econRes.irrigation || 0) + (econRes.manure || 0)) * 0.01;
+      const researchGoldMult = 1 + ((econRes.mathematics || 0) + (econRes.accounting || 0)) * 0.01;
+      const researchManaMult = 1 + ((econRes.monastery || 0) + (econRes.clergy || 0) + (econRes.basilica || 0)) * 0.05;
+
+      const foodIncomePerHour = farm * ECON_BUILDING_HOURLY.farmFood * prayerFoodBonus * researchFoodMult;
+      const goldIncomePerHour = effectiveLand * ECON_BUILDING_HOURLY.baseGoldPerLand * prayerGoldBonus * researchGoldMult;
       const woodIncomePerHour = lumber * ECON_BUILDING_HOURLY.lumberWood * prayerWoodBonus;
       const stoneIncomePerHour = quarry * ECON_BUILDING_HOURLY.quarryStone * prayerStoneBonus;
       const horseIncomePerHour = horseFarms * ECON_BUILDING_HOURLY.horseFarmHorses * prayerHorseBonus;
@@ -461,8 +472,8 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       // Priests bless the army — each priest reduces total food upkeep by 2/hr
       const priestFoodReduction = Math.min(priestCount * 2, foodUpkeepPerHour);
       const effectiveFoodUpkeepPerHour = foodUpkeepPerHour - priestFoodReduction;
-      // Diplomats generate 200 gold/hr through trade relations
-      const diplomatGoldPerHour = diplomatCount * 200;
+      // Diplomats generate gold/hr through trade relations
+      const diplomatGoldPerHour = diplomatCount * 75;
 
       const seasonFoodIncome = foodIncomePerHour * Number(season.modifiers.food || 1);
       const taxRate = clampNumber(Math.floor(Number(k.tax_rate || 25)), TAX_MIN, TAX_MAX);
@@ -475,7 +486,7 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       const woodDelta = Math.floor(seasonWoodIncome * TICK_HOURS);
       const stoneDelta = Math.floor(seasonStoneIncome * TICK_HOURS);
       const horsesDelta = Math.floor(horseIncomePerHour * TICK_HOURS);
-      const manaDelta = Math.floor(priestCount * 4 * TICK_HOURS); // 4 mana/hr per priest
+      const manaDelta = Math.floor(priestCount * 8 * researchManaMult * TICK_HOURS); // 8 mana/hr per priest, boosted by monastery/clergy/basilica research
 
       // Compute storage caps from buildings and clamp resources
       const storageCaps = computeStorageCaps({ farm, barns, lumberyard: lumber, quarry, castles, houses });

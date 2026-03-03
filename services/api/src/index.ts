@@ -1045,6 +1045,7 @@ function computeEconomyHourly(
   troopRows: any[],
   taxRate?: number,
   modifiers?: { food?: number; gold?: number; wood?: number; stone?: number; horse?: number },
+  researchBonus?: { food?: number; gold?: number },
 ) {
   const farm = Number(buildingLevels.farm || 0);
   const lumber = Number(buildingLevels.lumberyard || 0);
@@ -1057,10 +1058,12 @@ function computeEconomyHourly(
   const stoneIncomeRaw = quarry * ECON_BUILDING_HOURLY.quarryStone;
   const horseIncomeRaw = horseFarms * ECON_BUILDING_HOURLY.horseFarmHorses;
 
-  const foodIncome = foodIncomeRaw * Number(modifiers?.food ?? 1);
+  const resFoodMult = 1 + Number(researchBonus?.food ?? 0);
+  const resGoldMult = 1 + Number(researchBonus?.gold ?? 0);
+  const foodIncome = foodIncomeRaw * Number(modifiers?.food ?? 1) * resFoodMult;
   const tax = clamp(Math.floor(Number(taxRate ?? 25)), 0, 40);
   const taxGoldMult = clamp(1 + (tax - 25) * 0.04, 0.2, 2.2);
-  const goldIncome = goldIncomeRaw * Number(modifiers?.gold ?? 1) * taxGoldMult;
+  const goldIncome = goldIncomeRaw * Number(modifiers?.gold ?? 1) * taxGoldMult * resGoldMult;
   const woodIncome = woodIncomeRaw * Number(modifiers?.wood ?? 1);
   const stoneIncome = stoneIncomeRaw * Number(modifiers?.stone ?? 1);
   const horseIncome = horseIncomeRaw * Number(modifiers?.horse ?? 1);
@@ -1077,11 +1080,10 @@ function computeEconomyHourly(
     if (String(row.troop_code) === "diplomats") diplomatCount += amount;
   }
   // Priests passively bless your army — each priest reduces total food upkeep by 2/hr
-  // (they consecrate rations, boosting morale and stretching supplies)
   const priestFoodReduction = priestCount * 2;
   const effectiveFoodUpkeep = Math.max(0, foodUpkeep - priestFoodReduction);
-  // Diplomats generate 200 gold/hr each from ongoing trade relations
-  const diplomatGoldIncome = diplomatCount * 200;
+  // Diplomats generate gold/hr each from ongoing trade relations
+  const diplomatGoldIncome = diplomatCount * 75;
 
   const storageCaps = computeStorageCaps(buildingLevels);
 
@@ -2158,7 +2160,17 @@ app.get("/api/kingdom/:name", requireAuth, async (req, res) => {
       const away = Number(awayMap.get(code) || 0);
       return { ...t, amount: home + train + away };
     });
-    const economy = computeEconomyHourly(Number(kingdomSync.land || 0), buildingLevels, economyTroops, Number(kingdomSync.tax_rate || 25), season.modifiers);
+    const econResearchQ = await pool.query(
+      `SELECT research_code, level FROM kingdom_research WHERE kingdom_id=$1
+       AND research_code IN ('better_farming_methods','crop_rotation','irrigation','manure','mathematics','accounting')`,
+      [kingdom.id],
+    );
+    const econRes = Object.fromEntries(econResearchQ.rows.map((r: any) => [String(r.research_code), Number(r.level || 0)]));
+    const econResBonus = {
+      food: ((econRes.better_farming_methods || 0) + (econRes.crop_rotation || 0) + (econRes.irrigation || 0) + (econRes.manure || 0)) * 0.01,
+      gold: ((econRes.mathematics || 0) + (econRes.accounting || 0)) * 0.01,
+    };
+    const economy = computeEconomyHourly(Number(kingdomSync.land || 0), buildingLevels, economyTroops, Number(kingdomSync.tax_rate || 25), season.modifiers, econResBonus);
 
     return res.json({
       ok: true,
@@ -2839,6 +2851,15 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
       const def = d.rows[0];
       if (Number(atk.id) === Number(def.id)) throw new Error("cannot attack self");
 
+      // Block attacks on fellow alliance members
+      const sameAllianceQ = await c.query(
+        `SELECT 1 FROM alliance_members am1
+         JOIN alliance_members am2 ON am2.alliance_id = am1.alliance_id
+         WHERE am1.kingdom_id=$1 AND am2.kingdom_id=$2 LIMIT 1`,
+        [atk.id, def.id],
+      );
+      if (sameAllianceQ.rowCount) throw new Error("cannot attack a member of your own alliance");
+
       // Anti-cheat: 24-hour cooldown per attacker-defender pair (1 hit then wait)
       const recentAttackCount = await c.query(
         `SELECT COUNT(*) AS cnt FROM attack_reports
@@ -2895,6 +2916,16 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
          WHERE kt.kingdom_id=$1`,
         [def.id],
       );
+      // Garrison troops from settlements also defend the kingdom
+      const defGarrisonRows = await c.query(
+        `SELECT sg.troop_code, SUM(sg.amount) AS amount, tt.att_rating, tt.def_rating
+         FROM settlement_garrison sg
+         JOIN settlements s ON s.id = sg.settlement_id
+         JOIN troop_types tt ON tt.code = sg.troop_code
+         WHERE s.kingdom_id=$1 AND sg.amount > 0
+         GROUP BY sg.troop_code, tt.att_rating, tt.def_rating`,
+        [def.id],
+      );
       const defCastle = await c.query(
         `SELECT COALESCE(level,0) AS lvl FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='castles' LIMIT 1`,
         [def.id],
@@ -2913,6 +2944,13 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
       for (const r of defRows.rows) {
         troopAtt[String(r.troop_code)] = Number(r.att_rating || troopAtt[String(r.troop_code)] || 0);
         troopDef[String(r.troop_code)] = Number(r.def_rating || troopDef[String(r.troop_code)] || 0);
+      }
+      // Merge garrison troops into defender pool
+      for (const r of defGarrisonRows.rows) {
+        const code = String(r.troop_code);
+        defenderTroops[code] = (defenderTroops[code] || 0) + Number(r.amount || 0);
+        troopAtt[code] = troopAtt[code] || Number(r.att_rating || 0);
+        troopDef[code] = troopDef[code] || Number(r.def_rating || 0);
       }
 
       for (const [code, sent] of Object.entries(sentTroopsRaw)) {
@@ -2969,16 +3007,56 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
       );
       const armyBlessingBonus = blessingQ.rowCount ? Number(blessingQ.rows[0]?.magnitude || 0) : 0;
 
-      let attackerPower = effectivePowerVsComposition(sentOnly, troopAtt, defenderCombatTroops) * (1 + armyBlessingBonus);
+      // Research bonuses: attacker offense + casualty reduction; defender defense
+      const [atkResQ, defResQ, casualtyResQ] = await Promise.all([
+        c.query(
+          `SELECT research_code, level FROM kingdom_research WHERE kingdom_id=$1
+           AND research_code IN ('tactics','better_training_methods','horse_breeding','war_horse')`,
+          [atk.id],
+        ),
+        c.query(
+          `SELECT research_code, level FROM kingdom_research WHERE kingdom_id=$1
+           AND research_code IN ('leadership_training','better_training_methods','city_walls','palisades','loose_order_formation','improved_defences','improved_castles_motte_bailey')`,
+          [def.id],
+        ),
+        c.query(
+          `SELECT research_code, level FROM kingdom_research WHERE kingdom_id=$1
+           AND research_code IN ('herbalism','medicine','good_medical_practice','hospitals')`,
+          [atk.id],
+        ),
+      ]);
+      const atkRes = Object.fromEntries(atkResQ.rows.map((r: any) => [String(r.research_code), Number(r.level || 0)]));
+      const defRes = Object.fromEntries(defResQ.rows.map((r: any) => [String(r.research_code), Number(r.level || 0)]));
+      const casRes = Object.fromEntries(casualtyResQ.rows.map((r: any) => [String(r.research_code), Number(r.level || 0)]));
+      // Each warfare tech level = +1% attack or +0.5% for secondary techs
+      const atkResBonus =
+        (atkRes.tactics || 0) * 0.01 +
+        (atkRes.better_training_methods || 0) * 0.005 +
+        (atkRes.horse_breeding || 0) * 0.005 +
+        (atkRes.war_horse || 0) * 0.005;
+      const defResBonus =
+        (defRes.leadership_training || 0) * 0.01 +
+        (defRes.better_training_methods || 0) * 0.005 +
+        (defRes.city_walls || 0) * 0.005 +
+        (defRes.palisades || 0) * 0.005 +
+        (defRes.loose_order_formation || 0) * 0.005 +
+        (defRes.improved_defences || 0) * 0.005 +
+        (defRes.improved_castles_motte_bailey || 0) * 0.005;
+      // Medical research reduces attacker casualties (each level = -0.5%)
+      const casualtyReduction = Math.min(0.40,
+        ((casRes.herbalism || 0) + (casRes.medicine || 0) + (casRes.good_medical_practice || 0) + (casRes.hospitals || 0)) * 0.005,
+      );
+
+      let attackerPower = effectivePowerVsComposition(sentOnly, troopAtt, defenderCombatTroops) * (1 + armyBlessingBonus) * (1 + atkResBonus);
       const defenderPowerRaw = effectivePowerVsComposition(defenderCombatTroops, troopDef, sentOnly);
       const castles = Number(defCastle.rows[0]?.lvl || 0);
       const castleBonus = castles > 0 ? Math.sqrt(castles) / 100 : 0;
-      const defenderPower = defenderPowerRaw * (1 + castleBonus);
+      const defenderPower = defenderPowerRaw * (1 + castleBonus) * (1 + defResBonus);
 
       let ratio = attackerPower <= 0 ? 0 : attackerPower / Math.max(1, defenderPower);
       let result = combatResultFromRatio(ratio);
 
-      let aLossPct = attackerLossPct(result);
+      let aLossPct = attackerLossPct(result) * (1 - casualtyReduction);
       let dLossPct = defenderLossPct(result);
       if (isPeasantOnlyAttack) {
         // Hard punish peasant-only attacks: no defender damage, attackers are wiped out.

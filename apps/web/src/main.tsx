@@ -3043,6 +3043,24 @@ function WarRoomView() {
     const troop = troops.find((t) => String(t.troopCode || "") === code);
     return acc + Number(qty || 0) * Number(troop?.att || 0);
   }, 0);
+  const exploreApTotal = Object.entries(exploreSentTroops).reduce((acc, [code, qty]) => {
+    const troop = troops.find((t) => String(t.troopCode || "") === code);
+    const unitPower = code === "peasants" ? Number(troop?.att || 0) * 0.25 : Number(troop?.att || 0);
+    return acc + Number(qty || 0) * unitPower;
+  }, 0);
+  // Rough land estimate: matches server formula (power * 0.08, capped at 550, scaled by kingdom size)
+  const exploreLandEstimate = (() => {
+    if (exploreApTotal <= 0) return 0;
+    const landCap = data?.explore?.landCap || 20000;
+    const curLand = Number(k?.land || 0);
+    const remaining = Math.max(0, landCap - curLand);
+    if (remaining === 0) return 0;
+    const landProgress = Math.min(1, curLand / landCap);
+    const kgBonusHigh = 1.8; const kgBonusLow = 1.0;
+    const kgBonus = kgBonusHigh - (kgBonusHigh - kgBonusLow) * landProgress;
+    const raw = Math.min(550, Math.floor(exploreApTotal * 0.08 * kgBonus));
+    return Math.min(raw, remaining);
+  })();
   const pairCols = isMobile ? "1fr" : "170px 1fr";
   const sendCols = isMobile ? "1fr" : "170px 1fr 120px";
   const reqText = trainTroopData?.requiredBuildingName
@@ -3532,6 +3550,12 @@ function WarRoomView() {
                             </div>
                           ))}
                         </div>
+                        {exploreApTotal > 0 && (
+                          <div style={{ fontSize: 13, color: TEXT_MUTED }}>
+                            Est. land gain: <strong style={{ color: ACCENT }}>~{exploreLandEstimate.toLocaleString()}</strong>
+                            {" "}(based on {Math.floor(exploreApTotal).toLocaleString()} attack power sent)
+                          </div>
+                        )}
                         <button type="submit" style={BTN_STYLE}>Explore!</button>
                       </>
                     )}
@@ -5014,6 +5038,7 @@ function MarketplaceView() {
                     <th style={TH}>Seller</th>
                     <th style={{ ...TH, textAlign: "right" }}>Available</th>
                     <th style={{ ...TH, textAlign: "right" }}>Price / Unit</th>
+                    <th style={{ ...TH, textAlign: "right" }}>Expires</th>
                     <th style={{ ...TH, textAlign: "right" }}>Buy Qty</th>
                     <th style={TH}></th>
                   </tr>
@@ -5022,12 +5047,18 @@ function MarketplaceView() {
                   {listings.map((l) => {
                     const available = Number(l.quantity_remaining);
                     const isOwnListing = String(l.seller_kingdom_name).toLowerCase() === kingdom.toLowerCase();
+                    const expiresMs = l.expires_at ? Math.max(0, new Date(l.expires_at).getTime() - Date.now()) : 0;
+                    const expiresHr = Math.floor(expiresMs / 3600000);
+                    const expiresMin = Math.floor((expiresMs % 3600000) / 60000);
+                    const expiresStr = expiresMs <= 0 ? "Expired" : expiresHr > 0 ? `${expiresHr}h ${expiresMin}m` : `${expiresMin}m`;
+                    const expireSoon = expiresMs > 0 && expiresHr < 2;
                     return (
                       <tr key={l.id} style={{ opacity: isOwnListing ? 0.5 : 1 }}>
                         <td style={TD}>{RESOURCE_ICONS[l.resource]} {RESOURCE_LABELS[l.resource]}</td>
                         <td style={TD}>{l.seller_kingdom_name}</td>
                         <td style={{ ...TD, textAlign: "right" }}>{available.toLocaleString()}</td>
                         <td style={{ ...TD, textAlign: "right", color: ACCENT }}>{Number(l.price_per_unit).toLocaleString()} gold</td>
+                        <td style={{ ...TD, textAlign: "right", color: expireSoon ? "#ffae9a" : TEXT_MUTED, fontSize: 12 }}>{expiresStr}</td>
                         <td style={{ ...TD, textAlign: "right" }}>
                           <input
                             type="number"
