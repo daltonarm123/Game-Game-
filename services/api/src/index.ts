@@ -425,6 +425,20 @@ function trainPeasantCostPerUnit(troopCode: string) {
 
 const SPY_CAPACITY_PER_GUILDHALL = 5;
 
+// How many of each troop type can be housed per level of their housing building
+const TROOP_HOUSING_CAPS: Record<string, { buildingCode: string; perLevel: number }> = {
+  footmen:       { buildingCode: "barracks",       perLevel: 50 },
+  pikemen:       { buildingCode: "barracks",       perLevel: 50 },
+  archers:       { buildingCode: "archery_ranges", perLevel: 20 },
+  crossbowmen:   { buildingCode: "archery_ranges", perLevel: 20 },
+  light_cavalry: { buildingCode: "stables",        perLevel: 10 },
+  heavy_cavalry: { buildingCode: "stables",        perLevel: 10 },
+  knights:       { buildingCode: "castles",        perLevel: 20 },
+  spies:         { buildingCode: "guildhalls",     perLevel: 5  },
+  priests:       { buildingCode: "temples",        perLevel: 5  },
+  diplomats:     { buildingCode: "embassies",      perLevel: 3  },
+};
+
 const FOOTMAN_ELITE_PROMOTION_RATE = clamp(Number(process.env.FOOTMAN_ELITE_PROMOTION_RATE || 0.0025), 0, 0.05);
 const AUTH_SESSION_DAYS = 30;
 const APP_BASE_URL = String(process.env.APP_BASE_URL || "http://localhost:5173").replace(/\/$/, "");
@@ -1046,6 +1060,7 @@ function computeEconomyHourly(
   taxRate?: number,
   modifiers?: { food?: number; gold?: number; wood?: number; stone?: number; horse?: number },
   researchBonus?: { food?: number; gold?: number },
+  settlementBonus?: { food?: number; gold?: number; wood?: number; stone?: number; foodCap?: number },
 ) {
   const farm = Number(buildingLevels.farm || 0);
   const lumber = Number(buildingLevels.lumberyard || 0);
@@ -1068,6 +1083,12 @@ function computeEconomyHourly(
   const stoneIncome = stoneIncomeRaw * Number(modifiers?.stone ?? 1);
   const horseIncome = horseIncomeRaw * Number(modifiers?.horse ?? 1);
 
+  // Settlement building flat bonuses (granary, inn, carpenter, mason)
+  const sFood  = Number(settlementBonus?.food  ?? 0);
+  const sGold  = Number(settlementBonus?.gold  ?? 0);
+  const sWood  = Number(settlementBonus?.wood  ?? 0);
+  const sStone = Number(settlementBonus?.stone ?? 0);
+
   let foodUpkeep = 0;
   let goldUpkeep = 0;
   let priestCount = 0;
@@ -1079,20 +1100,19 @@ function computeEconomyHourly(
     if (String(row.troop_code) === "priests") priestCount += amount;
     if (String(row.troop_code) === "diplomats") diplomatCount += amount;
   }
-  // Priests passively bless your army — each priest reduces total food upkeep by 2/hr
   const priestFoodReduction = priestCount * 2;
   const effectiveFoodUpkeep = Math.max(0, foodUpkeep - priestFoodReduction);
-  // Diplomats generate gold/hr each from ongoing trade relations
   const diplomatGoldIncome = diplomatCount * 75;
 
-  const storageCaps = computeStorageCaps(buildingLevels);
+  const baseCaps = computeStorageCaps(buildingLevels);
+  const storageCaps = { ...baseCaps, food: baseCaps.food + Number(settlementBonus?.foodCap ?? 0) };
 
   return {
     perHour: {
-      food: foodIncome - effectiveFoodUpkeep,
-      gold: goldIncome - goldUpkeep + diplomatGoldIncome,
-      wood: woodIncome,
-      stone: stoneIncome,
+      food: foodIncome + sFood - effectiveFoodUpkeep,
+      gold: goldIncome + sGold - goldUpkeep + diplomatGoldIncome,
+      wood: woodIncome + sWood,
+      stone: stoneIncome + sStone,
       horses: horseIncome,
     },
     storageCaps,
@@ -1113,6 +1133,10 @@ function computeEconomyHourly(
       woodIncome,
       stoneIncome,
       horseIncome,
+      settlementFoodBonus: sFood,
+      settlementGoldBonus: sGold,
+      settlementWoodBonus: sWood,
+      settlementStoneBonus: sStone,
     },
   };
 }
@@ -2160,17 +2184,35 @@ app.get("/api/kingdom/:name", requireAuth, async (req, res) => {
       const away = Number(awayMap.get(code) || 0);
       return { ...t, amount: home + train + away };
     });
-    const econResearchQ = await pool.query(
-      `SELECT research_code, level FROM kingdom_research WHERE kingdom_id=$1
-       AND research_code IN ('better_farming_methods','crop_rotation','irrigation','manure','mathematics','accounting')`,
-      [kingdom.id],
-    );
+    const [econResearchQ, settlementBldgQ] = await Promise.all([
+      pool.query(
+        `SELECT research_code, level FROM kingdom_research WHERE kingdom_id=$1
+         AND research_code IN ('better_farming_methods','crop_rotation','irrigation','manure','mathematics','accounting')`,
+        [kingdom.id],
+      ),
+      pool.query(
+        `SELECT sb.building_code, COALESCE(SUM(sb.level),0)::int AS total_level
+         FROM settlement_buildings sb
+         JOIN settlements s ON s.id = sb.settlement_id
+         WHERE s.kingdom_id=$1 AND sb.level > 0
+         GROUP BY sb.building_code`,
+        [kingdom.id],
+      ),
+    ]);
     const econRes = Object.fromEntries(econResearchQ.rows.map((r: any) => [String(r.research_code), Number(r.level || 0)]));
     const econResBonus = {
       food: ((econRes.better_farming_methods || 0) + (econRes.crop_rotation || 0) + (econRes.irrigation || 0) + (econRes.manure || 0)) * 0.01,
       gold: ((econRes.mathematics || 0) + (econRes.accounting || 0)) * 0.01,
     };
-    const economy = computeEconomyHourly(Number(kingdomSync.land || 0), buildingLevels, economyTroops, Number(kingdomSync.tax_rate || 25), season.modifiers, econResBonus);
+    const sBldg = Object.fromEntries(settlementBldgQ.rows.map((r: any) => [String(r.building_code), Number(r.total_level || 0)]));
+    const econSettlementBonus = {
+      food:    (sBldg.granary   || 0) * 25,   // 25 food/hr per granary level
+      gold:    (sBldg.inn       || 0) * 20,   // 20 gold/hr per inn level
+      wood:    (sBldg.carpenter || 0) * 8,    //  8 wood/hr per carpenter level
+      stone:   (sBldg.mason     || 0) * 8,    //  8 stone/hr per mason level
+      foodCap: (sBldg.barn      || 0) * 500,  // 500 food cap per barn level
+    };
+    const economy = computeEconomyHourly(Number(kingdomSync.land || 0), buildingLevels, economyTroops, Number(kingdomSync.tax_rate || 25), season.modifiers, econResBonus, econSettlementBonus);
 
     return res.json({
       ok: true,
@@ -3881,6 +3923,13 @@ app.get("/api/war-room/:kingdom", requireAuth, async (req, res) => {
       const req = TROOP_TRAIN_REQUIREMENTS[troopCode] || null;
       const reqLevel = req ? Number(buildingLevelMap.get(req.buildingCode) || 0) : 0;
       const trainable = Boolean(t.is_trainable);
+      const housingDef = TROOP_HOUSING_CAPS[troopCode];
+      const housingCap = troopCode === "peasants"
+        ? popCap
+        : housingDef
+        ? Number(buildingLevelMap.get(housingDef.buildingCode) || 0) * housingDef.perLevel
+        : null;
+      const housingUsed = Number(t.home || 0) + Number(trainMap.get(troopCode) || 0) + Number(awayMap.get(troopCode) || 0);
       return {
         troopCode,
         troopName: t.name,
@@ -3905,6 +3954,9 @@ app.get("/api/war-room/:kingdom", requireAuth, async (req, res) => {
         home: Number(t.home || 0),
         train: Number(trainMap.get(troopCode) || 0),
         away: Number(awayMap.get(troopCode) || 0),
+        housingCap,
+        housingUsed,
+        housingRoom: housingCap !== null ? Math.max(0, housingCap - housingUsed) : null,
       };
     });
 

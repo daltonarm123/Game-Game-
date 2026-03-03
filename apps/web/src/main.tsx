@@ -3469,6 +3469,12 @@ function WarRoomView() {
                         {trainTroopData.requiredBuildingName ? ` (you have ${Number(trainTroopData.currentRequiredBuildingLevel || 0)})` : ""}
                         {!Boolean(trainTroopData.canTrainNow) ? " - requirement not met." : ""}
                         <br />
+                        {trainTroopData.housingCap !== null && trainTroopData.housingCap !== undefined ? (
+                          <span style={{ color: (trainTroopData.housingRoom ?? 0) <= 0 ? "#e55" : TEXT_MUTED }}>
+                            Housing: {Number(trainTroopData.housingUsed || 0).toLocaleString()} / {Number(trainTroopData.housingCap).toLocaleString()} — room for {Number(trainTroopData.housingRoom ?? 0).toLocaleString()} more
+                          </span>
+                        ) : null}
+                        {trainTroopData.housingCap !== null && trainTroopData.housingCap !== undefined ? <br /> : null}
                         {String(trainTroopData.notes || TROOP_META[String(trainTroopData.troopCode || "")]?.role || "")}
                       </div>
                     ) : null}
@@ -3728,17 +3734,24 @@ function TrainTroopsView() {
                     <th style={{ textAlign: "right", padding: 6 }}>Home</th>
                     <th style={{ textAlign: "right", padding: 6 }}>Train</th>
                     <th style={{ textAlign: "right", padding: 6 }}>Away</th>
+                    <th style={{ textAlign: "right", padding: 6 }}>Cap</th>
+                    <th style={{ textAlign: "right", padding: 6 }}>Room</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {troops.map((t) => (
-                    <tr key={t.troopCode}>
-                      <td style={{ padding: 6 }}>{t.troopName}</td>
-                      <td style={{ padding: 6, textAlign: "right" }}>{Number(t.home || 0).toLocaleString()}</td>
-                      <td style={{ padding: 6, textAlign: "right" }}>{Number(t.train || 0).toLocaleString()}</td>
-                      <td style={{ padding: 6, textAlign: "right" }}>{Number(t.away || 0).toLocaleString()}</td>
-                    </tr>
-                  ))}
+                  {troops.map((t) => {
+                    const room = t.housingRoom ?? null;
+                    return (
+                      <tr key={t.troopCode}>
+                        <td style={{ padding: 6 }}>{t.troopName}</td>
+                        <td style={{ padding: 6, textAlign: "right" }}>{Number(t.home || 0).toLocaleString()}</td>
+                        <td style={{ padding: 6, textAlign: "right" }}>{Number(t.train || 0).toLocaleString()}</td>
+                        <td style={{ padding: 6, textAlign: "right" }}>{Number(t.away || 0).toLocaleString()}</td>
+                        <td style={{ padding: 6, textAlign: "right", color: TEXT_MUTED }}>{t.housingCap !== null && t.housingCap !== undefined ? Number(t.housingCap).toLocaleString() : "—"}</td>
+                        <td style={{ padding: 6, textAlign: "right", color: room !== null && room <= 0 ? "#e55" : "#7c5" }}>{room !== null ? room.toLocaleString() : "—"}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -3765,6 +3778,17 @@ function TrainTroopsView() {
                 Queue Training
               </button>
             </form>
+            {(() => {
+              const sel = troopCodeOptions.find((t: any) => t.troopCode === trainTroop);
+              if (!sel || sel.housingCap === null || sel.housingCap === undefined) return null;
+              const room = Number(sel.housingRoom ?? 0);
+              return (
+                <div style={{ marginTop: 8, fontSize: 13, color: room <= 0 ? "#e55" : TEXT_MUTED }}>
+                  Housing: {Number(sel.housingUsed || 0).toLocaleString()} / {Number(sel.housingCap).toLocaleString()} — room for <strong>{room.toLocaleString()}</strong> more
+                  {room <= 0 ? " (build more to increase capacity)" : ""}
+                </div>
+              );
+            })()}
             {lockedTroopsTV.length > 0 && (
               <div style={{ marginTop: 8, fontSize: 12, color: TEXT_MUTED }}>
                 🔒 Locked: {lockedTroopsTV.map((t) => `${String(t.troopName)} (needs ${String(t.requiredBuildingName)})`).join(" · ")}
@@ -7051,6 +7075,14 @@ function EmbassyView() {
                     <td style={TD}>Away (missions)</td>
                     <td style={TD}>{Number(diplomats?.away || 0).toLocaleString()} diplomats</td>
                   </tr>
+                  {diplomats?.housingCap !== null && diplomats?.housingCap !== undefined ? (
+                    <tr>
+                      <td style={TD}>Capacity</td>
+                      <td style={{ ...TD, color: (diplomats?.housingRoom ?? 0) <= 0 ? "#e55" : TEXT_MUTED }}>
+                        {Number(diplomats?.housingUsed || 0).toLocaleString()} / {Number(diplomats?.housingCap).toLocaleString()} — {Number(diplomats?.housingRoom ?? 0).toLocaleString()} room left
+                      </td>
+                    </tr>
+                  ) : null}
                 </tbody>
               </table>
             </div>

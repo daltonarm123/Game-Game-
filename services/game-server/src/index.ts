@@ -441,21 +441,38 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
         if (def.type === "population_bonus") prayerPopBonus   += def.bonus;
       }
 
-      // Agriculture and economics research bonuses
-      const econResQ = await c.query(
-        `SELECT research_code, level FROM kingdom_research WHERE kingdom_id=$1
-         AND research_code IN ('better_farming_methods','crop_rotation','irrigation','manure','mathematics','accounting','monastery','clergy','basilica')`,
-        [k.id],
-      );
+      // Agriculture and economics research bonuses + settlement building bonuses
+      const [econResQ, settlBldgQ] = await Promise.all([
+        c.query(
+          `SELECT research_code, level FROM kingdom_research WHERE kingdom_id=$1
+           AND research_code IN ('better_farming_methods','crop_rotation','irrigation','manure','mathematics','accounting','monastery','clergy','basilica')`,
+          [k.id],
+        ),
+        c.query(
+          `SELECT sb.building_code, COALESCE(SUM(sb.level),0)::int AS total_level
+           FROM settlement_buildings sb
+           JOIN settlements s ON s.id = sb.settlement_id
+           WHERE s.kingdom_id=$1 AND sb.level > 0
+           GROUP BY sb.building_code`,
+          [k.id],
+        ),
+      ]);
       const econRes = Object.fromEntries(econResQ.rows.map((r: any) => [String(r.research_code), Number(r.level || 0)]));
       const researchFoodMult = 1 + ((econRes.better_farming_methods || 0) + (econRes.crop_rotation || 0) + (econRes.irrigation || 0) + (econRes.manure || 0)) * 0.01;
       const researchGoldMult = 1 + ((econRes.mathematics || 0) + (econRes.accounting || 0)) * 0.01;
       const researchManaMult = 1 + ((econRes.monastery || 0) + (econRes.clergy || 0) + (econRes.basilica || 0)) * 0.05;
+      const sBldg = Object.fromEntries(settlBldgQ.rows.map((r: any) => [String(r.building_code), Number(r.total_level || 0)]));
+      const settlFoodBonus  = (sBldg.granary   || 0) * 25;  // +25 food/hr per granary level
+      const settlGoldBonus  = (sBldg.inn       || 0) * 20;  // +20 gold/hr per inn level
+      const settlWoodBonus  = (sBldg.carpenter || 0) * 8;   // +8 wood/hr per carpenter level
+      const settlStoneBonus = (sBldg.mason     || 0) * 8;   // +8 stone/hr per mason level
+      const settlFoodCap    = (sBldg.barn      || 0) * 500; // +500 food cap per barn level
+      const settlManaBonus  = (sBldg.church    || 0) * 5 + (sBldg.cathedral || 0) * 10; // flat mana/hr bonus
 
-      const foodIncomePerHour = farm * ECON_BUILDING_HOURLY.farmFood * prayerFoodBonus * researchFoodMult;
-      const goldIncomePerHour = effectiveLand * ECON_BUILDING_HOURLY.baseGoldPerLand * prayerGoldBonus * researchGoldMult;
-      const woodIncomePerHour = lumber * ECON_BUILDING_HOURLY.lumberWood * prayerWoodBonus;
-      const stoneIncomePerHour = quarry * ECON_BUILDING_HOURLY.quarryStone * prayerStoneBonus;
+      const foodIncomePerHour = farm * ECON_BUILDING_HOURLY.farmFood * prayerFoodBonus * researchFoodMult + settlFoodBonus;
+      const goldIncomePerHour = effectiveLand * ECON_BUILDING_HOURLY.baseGoldPerLand * prayerGoldBonus * researchGoldMult + settlGoldBonus;
+      const woodIncomePerHour = lumber * ECON_BUILDING_HOURLY.lumberWood * prayerWoodBonus + settlWoodBonus;
+      const stoneIncomePerHour = quarry * ECON_BUILDING_HOURLY.quarryStone * prayerStoneBonus + settlStoneBonus;
       const horseIncomePerHour = horseFarms * ECON_BUILDING_HOURLY.horseFarmHorses * prayerHorseBonus;
 
       let foodUpkeepPerHour = 0;
@@ -486,10 +503,11 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       const woodDelta = Math.floor(seasonWoodIncome * TICK_HOURS);
       const stoneDelta = Math.floor(seasonStoneIncome * TICK_HOURS);
       const horsesDelta = Math.floor(horseIncomePerHour * TICK_HOURS);
-      const manaDelta = Math.floor(priestCount * 8 * researchManaMult * TICK_HOURS); // 8 mana/hr per priest, boosted by monastery/clergy/basilica research
+      const manaDelta = Math.floor((priestCount * 8 * researchManaMult + settlManaBonus) * TICK_HOURS); // 8 mana/hr per priest, boosted by research and settlement churches
 
       // Compute storage caps from buildings and clamp resources
-      const storageCaps = computeStorageCaps({ farm, barns, lumberyard: lumber, quarry, castles, houses });
+      const baseCaps = computeStorageCaps({ farm, barns, lumberyard: lumber, quarry, castles, houses });
+      const storageCaps = { ...baseCaps, food: baseCaps.food + settlFoodCap };
       const newFood  = Math.min(storageCaps.food,  Math.max(0, Number(k.food  || 0) + foodDelta));
       const newGold  = Math.min(storageCaps.gold,  Math.max(0, Number(k.gold  || 0) + goldDelta));
       const newWood  = Math.min(storageCaps.wood,  Math.max(0, Number(k.wood  || 0) + woodDelta));
