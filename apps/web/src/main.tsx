@@ -187,6 +187,28 @@ const TROOP_META: Record<string, { sigil: string; tint: string; role: string }> 
   spies: { sigil: "SP", tint: "linear-gradient(180deg, rgba(86,86,96,.72), rgba(40,40,46,.9))", role: "Covert agents for intelligence and sabotage." },
 };
 
+function calcMaxTrainNowFromTroop(
+  troop: any,
+  resources: { gold: number; food: number; horses: number },
+  peasantsHome: number,
+): number {
+  if (!troop || !troop.canTrainNow) return 0;
+  const maxByCost = (have: number, cost: number) =>
+    cost > 0 ? Math.max(0, Math.floor(have / cost)) : Number.POSITIVE_INFINITY;
+  const caps = [
+    maxByCost(Number(resources.gold || 0), Number(troop.goldCost || 0)),
+    maxByCost(Number(resources.food || 0), Number(troop.foodCost || 0)),
+    maxByCost(Number(resources.horses || 0), Number(troop.horseCost || 0)),
+    maxByCost(Math.max(0, Number(peasantsHome || 0)), Number(troop.peasantCost || 0)),
+    troop.housingRoom === null || troop.housingRoom === undefined
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, Number(troop.housingRoom || 0)),
+  ];
+  const finite = caps.filter((x) => Number.isFinite(x));
+  if (!finite.length) return 0;
+  return Math.max(0, Math.floor(Math.min(...finite)));
+}
+
 // ── Kingdom Autocomplete Input ─────────────────────────────────────────────────
 function KingdomInput({ value, onChange, onSelect, placeholder, style, inputStyle }: {
   value: string;
@@ -3037,6 +3059,17 @@ function WarRoomView() {
   const lockedTroopOptions = troops.filter((t) => Boolean(t.isTrainable) && !t.canTrainNow);
   const trainTroopData = troops.find((t) => String(t.troopCode || "") === String(trainTroop));
   const peasantHome = Number(troops.find((t) => String(t.troopCode || "") === "peasants")?.home || 0);
+  const trainMaxNow = Math.max(
+    0,
+    Number(
+      trainTroopData?.maxTrainNow ??
+      calcMaxTrainNowFromTroop(trainTroopData, {
+        gold: Number(k?.gold || 0),
+        food: Number(k?.food || 0),
+        horses: Number(k?.horses || 0),
+      }, peasantHome),
+    ),
+  );
   const trainQtyNum = Math.max(0, Math.floor(Number(trainQty || 0)));
   const trainQtySafe = Math.max(1, trainQtyNum || 1);
   const attackApTotal = Object.entries(sentTroops).reduce((acc, [code, qty]) => {
@@ -3072,6 +3105,14 @@ function WarRoomView() {
     setActionMsg("");
     if (trainQtyNum < 1) {
       setActionMsg("Train failed: enter a quantity of at least 1.");
+      return;
+    }
+    if (!trainTroopData || trainMaxNow <= 0) {
+      setActionMsg("Train failed: no train capacity available right now for that troop.");
+      return;
+    }
+    if (trainQtyNum > trainMaxNow) {
+      setActionMsg(`Train failed: you can train up to ${trainMaxNow.toLocaleString()} right now.`);
       return;
     }
     try {
@@ -3453,7 +3494,7 @@ function WarRoomView() {
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: pairCols, gap: 8 }}>
                       <div style={{ ...INPUT_STYLE }}>Amount To Train</div>
-                      <input type="number" min={1} max={50000} value={trainQty} onChange={(e) => setTrainQty(String(e.target.value || "").replace(/\D+/g, ""))} style={INPUT_STYLE} />
+                      <input type="number" min={1} max={Math.max(1, trainMaxNow)} value={trainQty} onChange={(e) => setTrainQty(String(e.target.value || "").replace(/\D+/g, ""))} style={INPUT_STYLE} />
                     </div>
                     {trainTroopData ? (
                       <div style={{ color: TEXT_MUTED }}>
@@ -3475,10 +3516,14 @@ function WarRoomView() {
                           </span>
                         ) : null}
                         {trainTroopData.housingCap !== null && trainTroopData.housingCap !== undefined ? <br /> : null}
+                        <span style={{ color: trainMaxNow <= 0 ? "#e55" : "#c8e7b1" }}>
+                          Max train now: {trainMaxNow.toLocaleString()}
+                        </span>
+                        <br />
                         {String(trainTroopData.notes || TROOP_META[String(trainTroopData.troopCode || "")]?.role || "")}
                       </div>
                     ) : null}
-                    <button type="submit" style={BTN_STYLE} disabled={!trainTroopData || troopCodeOptions.length === 0}>
+                    <button type="submit" style={BTN_STYLE} disabled={!trainTroopData || troopCodeOptions.length === 0 || trainMaxNow <= 0}>
                       Train Now
                     </button>
                     {lockedTroopOptions.length > 0 && (
@@ -3656,6 +3701,19 @@ function TrainTroopsView() {
   const training = (data?.training || []) as Array<any>;
   const troopCodeOptions = troops.filter((t) => Boolean(t.canTrainNow));
   const lockedTroopsTV = troops.filter((t) => Boolean(t.isTrainable) && !t.canTrainNow);
+  const peasantHomeTV = Number(troops.find((t) => String(t.troopCode || "") === "peasants")?.home || 0);
+  const selectedTrainTroopTV = troops.find((t) => String(t.troopCode || "") === String(trainTroop));
+  const trainMaxNowTV = Math.max(
+    0,
+    Number(
+      selectedTrainTroopTV?.maxTrainNow ??
+      calcMaxTrainNowFromTroop(selectedTrainTroopTV, {
+        gold: Number(k?.gold || 0),
+        food: Number(k?.food || 0),
+        horses: Number(k?.horses || 0),
+      }, peasantHomeTV),
+    ),
+  );
 
   async function submitTrain(e: React.FormEvent) {
     e.preventDefault();
@@ -3663,6 +3721,14 @@ function TrainTroopsView() {
     const trainQtyNum = Math.max(0, Math.floor(Number(trainQty || 0)));
     if (trainQtyNum < 1) {
       setActionMsg("Train failed: enter a quantity of at least 1.");
+      return;
+    }
+    if (!selectedTrainTroopTV || trainMaxNowTV <= 0) {
+      setActionMsg("Train failed: no train capacity available right now for that troop.");
+      return;
+    }
+    if (trainQtyNum > trainMaxNowTV) {
+      setActionMsg(`Train failed: you can train up to ${trainMaxNowTV.toLocaleString()} right now.`);
       return;
     }
     try {
@@ -3769,23 +3835,31 @@ function TrainTroopsView() {
               <input
                 type="number"
                 min={1}
-                max={50000}
+                max={Math.max(1, trainMaxNowTV)}
                 value={trainQty}
                 onChange={(e) => setTrainQty(String(e.target.value || "").replace(/\D+/g, ""))}
                 style={{ ...INPUT_STYLE, width: 130 }}
               />
-              <button type="submit" style={BTN_STYLE} disabled={troopCodeOptions.length === 0}>
+              <button type="submit" style={BTN_STYLE} disabled={troopCodeOptions.length === 0 || trainMaxNowTV <= 0}>
                 Queue Training
               </button>
             </form>
             {(() => {
               const sel = troopCodeOptions.find((t: any) => t.troopCode === trainTroop);
-              if (!sel || sel.housingCap === null || sel.housingCap === undefined) return null;
+              if (!sel) return null;
               const room = Number(sel.housingRoom ?? 0);
               return (
                 <div style={{ marginTop: 8, fontSize: 13, color: room <= 0 ? "#e55" : TEXT_MUTED }}>
-                  Housing: {Number(sel.housingUsed || 0).toLocaleString()} / {Number(sel.housingCap).toLocaleString()} — room for <strong>{room.toLocaleString()}</strong> more
-                  {room <= 0 ? " (build more to increase capacity)" : ""}
+                  {sel.housingCap !== null && sel.housingCap !== undefined ? (
+                    <>
+                      Housing: {Number(sel.housingUsed || 0).toLocaleString()} / {Number(sel.housingCap).toLocaleString()} — room for <strong>{room.toLocaleString()}</strong> more
+                      {room <= 0 ? " (build more to increase capacity)" : ""}
+                      <br />
+                    </>
+                  ) : null}
+                  <span style={{ color: trainMaxNowTV <= 0 ? "#e55" : "#c8e7b1" }}>
+                    Max train now: <strong>{trainMaxNowTV.toLocaleString()}</strong>
+                  </span>
                 </div>
               );
             })()}
@@ -4463,6 +4537,8 @@ function PrayView() {
     e.preventDefault();
     const qty = Math.floor(Number(priestQty || 0));
     if (qty < 1) return setActionMsg("Enter a quantity of at least 1.");
+    if (priestMaxTrainNow <= 0) return setActionMsg("You cannot train priests right now.");
+    if (qty > priestMaxTrainNow) return setActionMsg(`You can train up to ${priestMaxTrainNow.toLocaleString()} priests right now.`);
     setPriestBusy(true);
     setActionMsg("");
     try {
@@ -4537,7 +4613,31 @@ function PrayView() {
 
   const mana: number = data?.mana ?? 0;
   const priests: number = data?.priests ?? 0;
+  const priestsTrain: number = data?.priestsTrain ?? 0;
   const priestCap: number = data?.priestCap ?? 0;
+  const priestAvailable: number = data?.priestAvailable ?? Math.max(0, priestCap - (priests + priestsTrain));
+  const priestCosts = {
+    gold: Number(data?.priestCosts?.gold ?? 400),
+    food: Number(data?.priestCosts?.food ?? 150),
+    horses: Number(data?.priestCosts?.horses ?? 0),
+  };
+  const kingdomResources = {
+    gold: Number(data?.kingdomResources?.gold ?? 0),
+    food: Number(data?.kingdomResources?.food ?? 0),
+    horses: Number(data?.kingdomResources?.horses ?? 0),
+  };
+  const priestMaxTrainNow: number = Number(
+    data?.priestMaxTrainNow ??
+    Math.max(
+      0,
+      Math.min(
+        priestAvailable,
+        priestCosts.gold > 0 ? Math.floor(kingdomResources.gold / priestCosts.gold) : Number.POSITIVE_INFINITY,
+        priestCosts.food > 0 ? Math.floor(kingdomResources.food / priestCosts.food) : Number.POSITIVE_INFINITY,
+        priestCosts.horses > 0 ? Math.floor(kingdomResources.horses / priestCosts.horses) : Number.POSITIVE_INFINITY,
+      ),
+    ),
+  );
   const manaPerHour: number = data?.manaPerHour ?? 0;
   const activePrayers: any[] = data?.activePrayers ?? [];
   const recentCasts: any[] = data?.recentCasts ?? [];
@@ -4602,26 +4702,31 @@ function PrayView() {
         <div style={CARD}>
           <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 10 }}>Train Priests</div>
           <div style={{ fontSize: 13, color: TEXT_MUTED, marginBottom: 12 }}>
-            Cost per priest: 400 gold · 150 food · 1 hr training · requires Temple
+            Cost per priest: {priestCosts.gold.toLocaleString()} gold · {priestCosts.food.toLocaleString()} food{priestCosts.horses > 0 ? ` · ${priestCosts.horses.toLocaleString()} horses` : ""} · 1 hr training · requires Temple
+            <br />
+            Available temple room: <span style={{ color: priestAvailable > 0 ? "#c8e7b1" : "#ffb0a5", fontWeight: 700 }}>{priestAvailable.toLocaleString()}</span>
+            {" "}· Max train now: <span style={{ color: priestMaxTrainNow > 0 ? "#c8e7b1" : "#ffb0a5", fontWeight: 700 }}>{priestMaxTrainNow.toLocaleString()}</span>
           </div>
           <form onSubmit={trainPriests} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <input
               type="number"
               min={1}
+              max={Math.max(1, priestMaxTrainNow)}
               value={priestQty}
               onChange={(e) => setPriestQty(e.target.value.replace(/\D+/g, ""))}
               style={{ ...INPUT_STYLE, width: 80 }}
               placeholder="Qty"
             />
             <div style={{ fontSize: 13, color: TEXT_MUTED }}>
-              Cost: {(Number(priestQty || 0) * 400).toLocaleString()} gold · {(Number(priestQty || 0) * 150).toLocaleString()} food
+              Cost: {(Number(priestQty || 0) * priestCosts.gold).toLocaleString()} gold · {(Number(priestQty || 0) * priestCosts.food).toLocaleString()} food
+              {priestCosts.horses > 0 ? ` · ${(Number(priestQty || 0) * priestCosts.horses).toLocaleString()} horses` : ""}
             </div>
             <button
               type="submit"
-              disabled={priestBusy || priests >= priestCap}
+              disabled={priestBusy || priestMaxTrainNow <= 0}
               style={{ ...BTN_STYLE }}
             >
-              {priestBusy ? "Training…" : priests >= priestCap ? "Temple Full" : "Train"}
+              {priestBusy ? "Training…" : priestMaxTrainNow <= 0 ? "Cannot Train" : "Train"}
             </button>
           </form>
           {priests >= priestCap && priestCap > 0 && (
@@ -6622,6 +6727,20 @@ function GuildhallView() {
   const spyCapacityAvailable = Number(data?.spyCapacity?.available ?? Math.max(0, spyCapacityTotal - spyCapacityUsed));
   const guildhallCount = Number(data?.spyCapacity?.guildhalls || 0);
   const perGuildhall = Number(data?.spyCapacity?.perGuildhall || 5);
+  const spyMaxTrainNow = Math.max(
+    0,
+    Math.min(
+      spyCapacityAvailable,
+      Number(
+        spiesTroop?.maxTrainNow ??
+        calcMaxTrainNowFromTroop(spiesTroop, {
+          gold: Number(data?.kingdom?.gold || 0),
+          food: Number(data?.kingdom?.food || 0),
+          horses: Number(data?.kingdom?.horses || 0),
+        }, Number(data?.troops?.find((t: any) => String(t.troopCode || "") === "peasants")?.home || 0)),
+      ),
+    ),
+  );
 
   async function trainSpies(e: React.FormEvent) {
     e.preventDefault();
@@ -6630,8 +6749,8 @@ function GuildhallView() {
     try {
       const reqQty = Math.floor(Number(trainAmt || 0));
       if (reqQty < 1) throw new Error("enter at least 1 spy");
-      if (spyCapacityAvailable <= 0) throw new Error("no guildhall room left for more spies");
-      if (reqQty > spyCapacityAvailable) throw new Error(`only ${spyCapacityAvailable.toLocaleString()} spy slots left`);
+      if (spyMaxTrainNow <= 0) throw new Error("no spy training capacity available right now");
+      if (reqQty > spyMaxTrainNow) throw new Error(`you can train up to ${spyMaxTrainNow.toLocaleString()} spies right now`);
       const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/train`, {
         method: "POST",
         headers: authHeaders(),
@@ -6847,20 +6966,21 @@ function GuildhallView() {
               <form onSubmit={trainSpies} style={{ display: "grid", gap: 8 }}>
                 <div style={{ fontSize: 13, color: TEXT_MUTED }}>
                   Train spies at your guildhall. Available slots: <span style={{ color: spyCapacityAvailable > 0 ? ACCENT : "#ffb0a5", fontWeight: 700 }}>{spyCapacityAvailable.toLocaleString()}</span>
+                  {" "}· Max train now: <span style={{ color: spyMaxTrainNow > 0 ? "#c8e7b1" : "#ffb0a5", fontWeight: 700 }}>{spyMaxTrainNow.toLocaleString()}</span>
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <span style={{ fontSize: 14, color: TEXT_MUTED }}>Amount:</span>
                   <input
                     type="number"
                     min={1}
-                    max={Math.max(1, spyCapacityAvailable)}
+                    max={Math.max(1, spyMaxTrainNow)}
                     value={trainAmt}
                     onChange={(e) => setTrainAmt(String(e.target.value || "").replace(/\D+/g, ""))}
                     style={{ ...INPUT_STYLE, width: 80, fontSize: 14 }}
                   />
                 </div>
-                <button type="submit" disabled={busy || spyCapacityAvailable <= 0} style={{ ...BTN_STYLE, width: isMobile ? "100%" : "fit-content", fontSize: 13 }}>
-                  {busy ? "Training..." : spyCapacityAvailable <= 0 ? "No Capacity" : "Train Now"}
+                <button type="submit" disabled={busy || spyMaxTrainNow <= 0} style={{ ...BTN_STYLE, width: isMobile ? "100%" : "fit-content", fontSize: 13 }}>
+                  {busy ? "Training..." : spyMaxTrainNow <= 0 ? "Cannot Train" : "Train Now"}
                 </button>
               </form>
             ) : null}

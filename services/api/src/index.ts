@@ -3917,12 +3917,24 @@ app.get("/api/war-room/:kingdom", requireAuth, async (req, res) => {
     const spiesCapacity = guildhalls * SPY_CAPACITY_PER_GUILDHALL;
     const spiesUsed = spiesHome + spiesTrain + spiesAway;
     const spiesAvailable = Math.max(0, spiesCapacity - spiesUsed);
+    const kingdomGold = Number(row.gold || 0);
+    const kingdomFood = Number(row.food || 0);
+    const kingdomHorses = Number(row.horses || 0);
+    const peasantsHome = Number(homeRows.rows.find((t) => String(t.code) === "peasants")?.home || 0);
+
+    const maxByCost = (have: number, cost: number) =>
+      cost > 0 ? Math.max(0, Math.floor(have / cost)) : Number.POSITIVE_INFINITY;
 
     const troops = homeRows.rows.map((t) => {
       const troopCode = String(t.code || "");
       const req = TROOP_TRAIN_REQUIREMENTS[troopCode] || null;
       const reqLevel = req ? Number(buildingLevelMap.get(req.buildingCode) || 0) : 0;
       const trainable = Boolean(t.is_trainable);
+      const canTrainNow = trainable && (!req || reqLevel >= req.minLevel);
+      const goldCost = Number(t.gold_cost || 0);
+      const foodCost = Number(t.food_cost || 0);
+      const peasantCost = Number(t.peasant_cost || 0);
+      const horseCost = Number(t.horse_cost || 0);
       const housingDef = TROOP_HOUSING_CAPS[troopCode];
       const housingCap = troopCode === "peasants"
         ? popCap
@@ -3930,13 +3942,27 @@ app.get("/api/war-room/:kingdom", requireAuth, async (req, res) => {
         ? Number(buildingLevelMap.get(housingDef.buildingCode) || 0) * housingDef.perLevel
         : null;
       const housingUsed = Number(t.home || 0) + Number(trainMap.get(troopCode) || 0) + Number(awayMap.get(troopCode) || 0);
+      const housingRoom = housingCap !== null ? Math.max(0, housingCap - housingUsed) : null;
+      let maxTrainNow = 0;
+      if (canTrainNow) {
+        const caps = [
+          maxByCost(kingdomGold, goldCost),
+          maxByCost(kingdomFood, foodCost),
+          maxByCost(kingdomHorses, horseCost),
+          maxByCost(peasantsHome, peasantCost),
+          housingRoom !== null ? housingRoom : Number.POSITIVE_INFINITY,
+        ];
+        if (troopCode === "spies") caps.push(spiesAvailable);
+        const finite = caps.filter((x) => Number.isFinite(x));
+        maxTrainNow = finite.length ? Math.max(0, Math.min(...finite)) : 0;
+      }
       return {
         troopCode,
         troopName: t.name,
-        goldCost: Number(t.gold_cost || 0),
-        foodCost: Number(t.food_cost || 0),
-        peasantCost: Number(t.peasant_cost || 0),
-        horseCost: Number(t.horse_cost || 0),
+        goldCost,
+        foodCost,
+        peasantCost,
+        horseCost,
         trainSeconds: Number(t.train_seconds || 0),
         att: Number(t.att_rating || 0),
         def: Number(t.def_rating || 0),
@@ -3950,13 +3976,14 @@ app.get("/api/war-room/:kingdom", requireAuth, async (req, res) => {
         requiredBuildingName: req?.buildingName || null,
         requiredBuildingLevel: req?.minLevel || null,
         currentRequiredBuildingLevel: req ? reqLevel : null,
-        canTrainNow: trainable && (!req || reqLevel >= req.minLevel),
+        canTrainNow,
         home: Number(t.home || 0),
         train: Number(trainMap.get(troopCode) || 0),
         away: Number(awayMap.get(troopCode) || 0),
         housingCap,
         housingUsed,
-        housingRoom: housingCap !== null ? Math.max(0, housingCap - housingUsed) : null,
+        housingRoom,
+        maxTrainNow,
       };
     });
 
@@ -7398,16 +7425,34 @@ app.post("/api/admin/reconcile-train-queue-times", requireAdmin, async (req, res
 
 app.get("/api/pray/:kingdom", async (req, res) => {
   try {
-    const k = await pool.query(`SELECT id, mana FROM kingdoms WHERE LOWER(name)=LOWER($1)`, [req.params.kingdom]);
+    const k = await pool.query(`SELECT id, mana, gold, food, horses FROM kingdoms WHERE LOWER(name)=LOWER($1)`, [req.params.kingdom]);
     if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
     const kRow = k.rows[0];
 
-    const [templesQ, priestsQ] = await Promise.all([
+    const [templesQ, priestsQ, priestsTrainQ, priestTypeQ] = await Promise.all([
       pool.query(`SELECT COALESCE(MAX(level),0) AS temples FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='temples'`, [kRow.id]),
       pool.query(`SELECT COALESCE(SUM(amount),0) AS priests FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='priests'`, [kRow.id]),
+      pool.query(`SELECT COALESCE(SUM(quantity),0) AS priests_train FROM train_queue WHERE kingdom_id=$1 AND troop_code='priests' AND status='queued'`, [kRow.id]),
+      pool.query(`SELECT COALESCE(gold_cost,400) AS gold_cost, COALESCE(food_cost,150) AS food_cost, COALESCE(horse_cost,0) AS horse_cost FROM troop_types WHERE code='priests' LIMIT 1`),
     ]);
     const priestCap = Number(templesQ.rows[0]?.temples || 0) * PRIESTS_PER_TEMPLE;
     const priests = Number(priestsQ.rows[0]?.priests || 0);
+    const priestsTrain = Number(priestsTrainQ.rows[0]?.priests_train || 0);
+    const priestsAvailable = Math.max(0, priestCap - (priests + priestsTrain));
+    const priestGoldCost = Number(priestTypeQ.rows[0]?.gold_cost || 400);
+    const priestFoodCost = Number(priestTypeQ.rows[0]?.food_cost || 150);
+    const priestHorseCost = Number(priestTypeQ.rows[0]?.horse_cost || 0);
+    const maxByCost = (have: number, cost: number) =>
+      cost > 0 ? Math.max(0, Math.floor(have / cost)) : Number.POSITIVE_INFINITY;
+    const priestMaxTrainNow = Math.max(
+      0,
+      Math.min(
+        priestsAvailable,
+        maxByCost(Number(kRow.gold || 0), priestGoldCost),
+        maxByCost(Number(kRow.food || 0), priestFoodCost),
+        maxByCost(Number(kRow.horses || 0), priestHorseCost),
+      ),
+    );
     const manaPerHour = Math.min(priests, priestCap) * MANA_PER_PRIEST_PER_HOUR;
 
     // Clean up expired prayers
@@ -7440,7 +7485,20 @@ app.get("/api/pray/:kingdom", async (req, res) => {
       ok: true,
       mana: Number(kRow.mana || 0),
       priests,
+      priestsTrain,
       priestCap,
+      priestAvailable: priestsAvailable,
+      priestCosts: {
+        gold: priestGoldCost,
+        food: priestFoodCost,
+        horses: priestHorseCost,
+      },
+      priestMaxTrainNow,
+      kingdomResources: {
+        gold: Number(kRow.gold || 0),
+        food: Number(kRow.food || 0),
+        horses: Number(kRow.horses || 0),
+      },
       manaPerHour,
       activePrayers: prayers.rows,
       recentCasts: casts.rows,
