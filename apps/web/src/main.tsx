@@ -2567,7 +2567,7 @@ function HomeView() {
         )}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
         {/* Season card */}
         <div style={{ ...CARD }}>
           <div style={{ fontSize: 13, color: TEXT_MUTED, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 6 }}>Current Season</div>
@@ -5428,6 +5428,8 @@ function AdminView() {
   const [grantBuildingAmt, setGrantBuildingAmt] = useState("10");
   const [grantResource, setGrantResource] = useState("food");
   const [grantResourceAmt, setGrantResourceAmt] = useState("50000");
+  const [grantTroop, setGrantTroop] = useState("footmen");
+  const [grantTroopAmt, setGrantTroopAmt] = useState("1000");
   const [grantBusy, setGrantBusy] = useState(false);
 
   const api = async (path: string, method = "GET", body?: object) => {
@@ -5575,6 +5577,17 @@ function AdminView() {
     try {
       const j = await api("/api/admin/grant-resource", "POST", { kingdom: grantKingdom.trim(), resource: grantResource, amount: amt });
       setMsg(j.ok ? `Set ${grantResource} for ${j.name} → ${Number(j.newValue).toLocaleString()}` : (j.error || "Failed"));
+      if (j.ok) loadKingdoms(search);
+    } finally { setGrantBusy(false); }
+  };
+
+  const doGrantTroop = async () => {
+    const amt = parseInt(grantTroopAmt, 10);
+    if (!grantKingdom.trim() || isNaN(amt) || amt < 1) return setMsg("Enter a valid kingdom name and troop amount.");
+    setGrantBusy(true);
+    try {
+      const j = await api("/api/admin/grant-troop", "POST", { kingdom: grantKingdom.trim(), troopCode: grantTroop, amount: amt });
+      setMsg(j.ok ? `Granted ${amt.toLocaleString()} ${grantTroop} to ${j.name}. New total: ${Number(j.newValue).toLocaleString()}` : (j.error || "Failed"));
       if (j.ok) loadKingdoms(search);
     } finally { setGrantBusy(false); }
   };
@@ -5735,7 +5748,7 @@ function AdminView() {
                   style={{ ...INPUT_STYLE, flex: 1 }}
                 />
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
                 {/* Grant building */}
                 <div style={{ ...CARD, padding: 12 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Grant Buildings</div>
@@ -5784,6 +5797,31 @@ function AdminView() {
                   <div style={{ fontSize: 11, color: TEXT_MUTED, marginBottom: 6 }}>Use negative to subtract.</div>
                   <button disabled={grantBusy} onClick={() => void doGrantResource()} style={{ ...BTN_STYLE, width: "100%", fontSize: 13 }}>
                     {grantBusy ? "…" : "Grant Resource"}
+                  </button>
+                </div>
+                {/* Grant troop */}
+                <div style={{ ...CARD, padding: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Grant Troops</div>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                    <select
+                      value={grantTroop}
+                      onChange={(e) => setGrantTroop(e.target.value)}
+                      style={{ ...INPUT_STYLE, flex: 1 }}
+                    >
+                      {Object.keys(TROOP_META).map((t) => (
+                        <option key={t} value={t}>{t.replace(/_/g, " ")}</option>
+                      ))}
+                    </select>
+                    <input
+                      value={grantTroopAmt}
+                      onChange={(e) => setGrantTroopAmt(e.target.value)}
+                      style={{ ...INPUT_STYLE, width: 90 }}
+                      type="number"
+                      min="1"
+                    />
+                  </div>
+                  <button disabled={grantBusy} onClick={() => void doGrantTroop()} style={{ ...BTN_STYLE, width: "100%", fontSize: 13 }}>
+                    {grantBusy ? "..." : "Grant Troops"}
                   </button>
                 </div>
               </div>

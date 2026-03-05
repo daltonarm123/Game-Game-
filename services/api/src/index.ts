@@ -7194,6 +7194,48 @@ app.post("/api/admin/grant-resource", requireAdmin, async (req, res) => {
 });
 
 // ── Prayer endpoints ─────────────────────────────────────────────────────────
+app.post("/api/admin/grant-troop", requireAdmin, async (req, res) => {
+  const parsed = z.object({
+    kingdom: z.string().min(1),
+    troopCode: z.string().min(1),
+    amount: z.number().int().min(1).max(50_000_000),
+  }).safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
+  const admin = (req as any).adminSession;
+  try {
+    const out = await withTx(async (c) => {
+      const k = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1)`, [parsed.data.kingdom]);
+      if (!k.rowCount) throw new Error("kingdom not found");
+      const row = k.rows[0];
+      const troopCode = String(parsed.data.troopCode || "").trim().toLowerCase();
+      const troop = await c.query(`SELECT code FROM troop_types WHERE code=$1 LIMIT 1`, [troopCode]);
+      if (!troop.rowCount) throw new Error("invalid troop code");
+
+      await c.query(
+        `INSERT INTO kingdom_troops(kingdom_id, troop_code, amount)
+         VALUES($1,$2,$3)
+         ON CONFLICT (kingdom_id, troop_code) DO UPDATE
+         SET amount = kingdom_troops.amount + EXCLUDED.amount`,
+        [row.id, troopCode, parsed.data.amount],
+      );
+      const next = await c.query(
+        `SELECT amount FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code=$2 LIMIT 1`,
+        [row.id, troopCode],
+      );
+      const newValue = Number(next.rows[0]?.amount || 0);
+      await logAdminActionTx(c, admin, "grant_troop", "kingdom", String(row.id), {
+        kingdom: row.name, troopCode, amount: parsed.data.amount, newValue,
+      });
+      return { id: Number(row.id), name: String(row.name), troopCode, amount: parsed.data.amount, newValue };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    const status = msg.includes("not found") ? 404 : (msg.includes("invalid troop code") ? 400 : 500);
+    return res.status(status).json({ ok: false, error: msg });
+  }
+});
+
 app.post("/api/admin/reconcile-land", requireAdmin, async (req, res) => {
   const parsed = z.object({
     kingdom: z.string().min(2).optional(),
