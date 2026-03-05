@@ -11,6 +11,7 @@ import {
   PRIESTS_PER_TEMPLE,
   DIPLOMATS_PER_EMBASSY,
   SEASONS,
+  SETTLEMENT_EFFECTS,
   SETTLEMENT_TYPE_DEF,
   clampNumber,
   computeStorageCaps,
@@ -1063,7 +1064,7 @@ function computeEconomyHourly(
   taxRate?: number,
   modifiers?: { food?: number; gold?: number; wood?: number; stone?: number; horse?: number },
   researchBonus?: { food?: number; gold?: number },
-  settlementBonus?: { food?: number; gold?: number; wood?: number; stone?: number; foodCap?: number },
+  settlementBonus?: { food?: number; gold?: number; wood?: number; stone?: number; horses?: number; foodCap?: number },
 ) {
   const farm = Number(buildingLevels.farm || 0);
   const lumber = Number(buildingLevels.lumberyard || 0);
@@ -1091,6 +1092,7 @@ function computeEconomyHourly(
   const sGold  = Number(settlementBonus?.gold  ?? 0);
   const sWood  = Number(settlementBonus?.wood  ?? 0);
   const sStone = Number(settlementBonus?.stone ?? 0);
+  const sHorses = Number(settlementBonus?.horses ?? 0);
 
   let foodUpkeep = 0;
   let goldUpkeep = 0;
@@ -1116,7 +1118,7 @@ function computeEconomyHourly(
       gold: goldIncome + sGold - goldUpkeep + diplomatGoldIncome,
       wood: woodIncome + sWood,
       stone: stoneIncome + sStone,
-      horses: horseIncome,
+      horses: horseIncome + sHorses,
     },
     storageCaps,
     raw: {
@@ -1140,6 +1142,7 @@ function computeEconomyHourly(
       settlementGoldBonus: sGold,
       settlementWoodBonus: sWood,
       settlementStoneBonus: sStone,
+      settlementHorseBonus: sHorses,
     },
   };
 }
@@ -2209,11 +2212,12 @@ app.get("/api/kingdom/:name", requireAuth, async (req, res) => {
     };
     const sBldg = Object.fromEntries(settlementBldgQ.rows.map((r: any) => [String(r.building_code), Number(r.total_level || 0)]));
     const econSettlementBonus = {
-      food:    (sBldg.granary   || 0) * 25,   // 25 food/hr per granary level
-      gold:    (sBldg.inn       || 0) * 20,   // 20 gold/hr per inn level
-      wood:    (sBldg.carpenter || 0) * 8,    //  8 wood/hr per carpenter level
-      stone:   (sBldg.mason     || 0) * 8,    //  8 stone/hr per mason level
-      foodCap: (sBldg.barn      || 0) * 500,  // 500 food cap per barn level
+      food:    (sBldg.granary   || 0) * SETTLEMENT_EFFECTS.granaryFoodPerHour,
+      gold:    (sBldg.inn       || 0) * SETTLEMENT_EFFECTS.innGoldPerHour + (sBldg.market || 0) * SETTLEMENT_EFFECTS.marketGoldPerHour,
+      wood:    (sBldg.carpenter || 0) * SETTLEMENT_EFFECTS.carpenterWoodPerHour,
+      stone:   (sBldg.mason     || 0) * SETTLEMENT_EFFECTS.masonStonePerHour,
+      horses:  (sBldg.stables   || 0) * SETTLEMENT_EFFECTS.stablesHorsesPerHour,
+      foodCap: (sBldg.barn      || 0) * SETTLEMENT_EFFECTS.barnFoodCapPerLevel,
     };
     const economy = computeEconomyHourly(Number(kingdomSync.land || 0), buildingLevels, economyTroops, Number(kingdomSync.tax_rate || 25), season.modifiers, econResBonus, econSettlementBonus);
 
@@ -2540,6 +2544,51 @@ app.post("/api/kingdom/:name/train", requireAuth, async (req, res) => {
         const diplomatsAvailable = Math.max(0, diplomatCap - diplomatsUsed);
         if (qty > diplomatsAvailable) {
           throw new Error(`not enough embassy capacity (cap ${diplomatCap}, used ${diplomatsUsed}, available ${diplomatsAvailable})`);
+        }
+      }
+
+      const housingDef = TROOP_HOUSING_CAPS[troopCode];
+      if (housingDef && !["spies", "priests", "diplomats"].includes(troopCode)) {
+        const settlementSupportCode =
+          housingDef.buildingCode === "barracks" || housingDef.buildingCode === "stables"
+            ? housingDef.buildingCode
+            : null;
+        const [baseHousingQ, settlementHousingQ, troopHomeQ, troopTrainQ, troopAwayQ] = await Promise.all([
+          c.query(
+            `SELECT COALESCE(level,0) AS lvl FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code=$2 LIMIT 1`,
+            [kingdom.id, housingDef.buildingCode],
+          ),
+          settlementSupportCode
+            ? c.query(
+              `
+              SELECT COALESCE(SUM(sb.level),0)::int AS lvl
+              FROM settlement_buildings sb
+              JOIN settlements s ON s.id = sb.settlement_id
+              WHERE s.kingdom_id=$1 AND sb.building_code=$2
+              `,
+              [kingdom.id, settlementSupportCode],
+            )
+            : Promise.resolve({ rows: [{ lvl: 0 }] } as any),
+          c.query(`SELECT COALESCE(amount,0) AS qty FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code=$2 LIMIT 1`, [kingdom.id, troopCode]),
+          c.query(`SELECT COALESCE(SUM(quantity),0) AS qty FROM train_queue WHERE kingdom_id=$1 AND troop_code=$2 AND status='queued'`, [kingdom.id, troopCode]),
+          c.query(`SELECT COALESCE(SUM(quantity),0) AS qty FROM troop_movements WHERE owner_kingdom_id=$1 AND troop_code=$2 AND status='out' AND returns_at > now()`, [kingdom.id, troopCode]),
+        ]);
+        const baseLevels = Number(baseHousingQ.rows[0]?.lvl || 0);
+        const settlementLevels = Number(settlementHousingQ.rows[0]?.lvl || 0);
+        const settlementBonus =
+          housingDef.buildingCode === "barracks"
+            ? settlementLevels * SETTLEMENT_EFFECTS.barracksInfantryCapPerLevel
+            : housingDef.buildingCode === "stables"
+              ? settlementLevels * SETTLEMENT_EFFECTS.stablesCavalryCapPerLevel
+              : 0;
+        const cap = Math.max(0, baseLevels * housingDef.perLevel + settlementBonus);
+        const used =
+          Number(troopHomeQ.rows[0]?.qty || 0) +
+          Number(troopTrainQ.rows[0]?.qty || 0) +
+          Number(troopAwayQ.rows[0]?.qty || 0);
+        const available = Math.max(0, cap - used);
+        if (qty > available) {
+          throw new Error(`not enough ${troopCode.replaceAll("_", " ")} housing (cap ${cap}, used ${used}, available ${available})`);
         }
       }
 
@@ -3903,17 +3952,30 @@ app.get("/api/war-room/:kingdom", requireAuth, async (req, res) => {
       `SELECT building_code, level FROM kingdom_buildings WHERE kingdom_id=$1`,
       [row.id],
     );
+    const settlementBuildingTotals = await pool.query(
+      `
+      SELECT sb.building_code, COALESCE(SUM(sb.level),0)::int AS total_level
+      FROM settlement_buildings sb
+      JOIN settlements s ON s.id = sb.settlement_id
+      WHERE s.kingdom_id=$1 AND sb.level > 0
+      GROUP BY sb.building_code
+      `,
+      [row.id],
+    );
 
     const trainMap = new Map<string, number>();
     const awayMap = new Map<string, number>();
     const buildingLevelMap = new Map<string, number>();
+    const settlementLevelMap = new Map<string, number>();
     for (const tr of trainRows.rows) trainMap.set(String(tr.troop_code), Number(tr.qty || 0));
     for (const aw of awayRows.rows) awayMap.set(String(aw.troop_code), Number(aw.qty || 0));
     for (const b of kingdomBuildings.rows) buildingLevelMap.set(String(b.building_code), Number(b.level || 0));
+    for (const b of settlementBuildingTotals.rows) settlementLevelMap.set(String(b.building_code), Number(b.total_level || 0));
     const guildhalls = Number(buildingLevelMap.get("guildhalls") || 0);
     const housesBuilt = Number(buildingLevelMap.get("houses") || 0);
     const castlesBuilt = Number(buildingLevelMap.get("castles") || 0);
-    const popCap = effectivePeasantCap({ houses: housesBuilt, castles: castlesBuilt });
+    const settlementHousingLevels = Number(settlementLevelMap.get("housing") || 0);
+    const popCap = effectivePeasantCap({ houses: housesBuilt, castles: castlesBuilt }) + settlementHousingLevels * SETTLEMENT_EFFECTS.housingPeasantCapPerLevel;
     const spiesHome = Number(homeRows.rows.find((t) => String(t.code) === "spies")?.home || 0);
     const spiesTrain = Number(trainMap.get("spies") || 0);
     const spiesAway = Number(awayMap.get("spies") || 0);
@@ -3939,10 +4001,16 @@ app.get("/api/war-room/:kingdom", requireAuth, async (req, res) => {
       const peasantCost = Number(t.peasant_cost || 0);
       const horseCost = Number(t.horse_cost || 0);
       const housingDef = TROOP_HOUSING_CAPS[troopCode];
+      const settlementHousingBonus =
+        troopCode === "footmen" || troopCode === "pikemen"
+          ? Number(settlementLevelMap.get("barracks") || 0) * SETTLEMENT_EFFECTS.barracksInfantryCapPerLevel
+          : troopCode === "light_cavalry" || troopCode === "heavy_cavalry"
+            ? Number(settlementLevelMap.get("stables") || 0) * SETTLEMENT_EFFECTS.stablesCavalryCapPerLevel
+            : 0;
       const housingCap = troopCode === "peasants"
         ? popCap
         : housingDef
-        ? Number(buildingLevelMap.get(housingDef.buildingCode) || 0) * housingDef.perLevel
+        ? Number(buildingLevelMap.get(housingDef.buildingCode) || 0) * housingDef.perLevel + settlementHousingBonus
         : null;
       const housingUsed = Number(t.home || 0) + Number(trainMap.get(troopCode) || 0) + Number(awayMap.get(troopCode) || 0);
       const housingRoom = housingCap !== null ? Math.max(0, housingCap - housingUsed) : null;
@@ -4787,22 +4855,37 @@ app.get("/api/settlements/:kingdom", async (req, res) => {
       });
       garrisonMap.set(sid, cur);
     }
+    const settlementBuildingLevelMap = new Map<number, Record<string, number>>();
+    for (const b of buildings.rows) {
+      const sid = Number(b.settlement_id);
+      const row = settlementBuildingLevelMap.get(sid) || {};
+      row[String(b.building_code)] = Number(b.level || 0);
+      settlementBuildingLevelMap.set(sid, row);
+    }
 
     const settlementsWithMeta = settlements.rows.map((s, idx) => {
       const sid = Number(s.id);
       const gRows = garrisonMap.get(sid) || [];
+      const bLevels = settlementBuildingLevelMap.get(sid) || {};
       const footmen = gRows
         .filter((g) => String(g.troopCode) === "footmen")
         .reduce((a, g) => a + Number(g.amount || 0), 0);
       const garrisonWellbeingBonus = Math.floor(footmen / 100);
+      const buildingWellbeingBonus =
+        Number(bLevels.tavern || 0) * SETTLEMENT_EFFECTS.tavernWellbeingPerLevel +
+        Number(bLevels.inn || 0) * SETTLEMENT_EFFECTS.innWellbeingPerLevel +
+        Number(bLevels.brewery || 0) * SETTLEMENT_EFFECTS.breweryWellbeingPerLevel;
       const baseWellbeing = Number(s.wellbeing || 0);
+      const townWallsLevel = Number(bLevels.town_walls || 0);
       return {
         ...s,
         isCapital: idx === 0,
+        wall_level: Math.max(Number(s.wall_level || 0), townWallsLevel),
         maintenance: maintMap.get(sid) || { gold: 0, stone: 0, wood: 0 },
         garrison: gRows,
         garrisonWellbeingBonus,
-        wellbeing: baseWellbeing + garrisonWellbeingBonus,
+        buildingWellbeingBonus,
+        wellbeing: baseWellbeing + garrisonWellbeingBonus + buildingWellbeingBonus,
         baseWellbeing,
       };
     });
@@ -5074,6 +5157,9 @@ app.post("/api/settlements/:kingdom/destroy-building", requireAuth, async (req, 
       if (!sb.rowCount) throw new Error("building not found");
       const buildingCode = String(sb.rows[0].building_code || "");
       await c.query(`DELETE FROM settlement_buildings WHERE id=$1`, [buildingId]);
+      if (buildingCode === "town_walls") {
+        await c.query(`UPDATE settlements SET wall_level=0 WHERE id=$1`, [settlementId]);
+      }
       await c.query(`UPDATE settlements SET wellbeing = wellbeing - 50 WHERE id=$1`, [settlementId]);
       await c.query(`INSERT INTO settlement_history(settlement_id, item, datetime) VALUES ($1,$2,now())`, [settlementId, `Demolished ${buildingCode.replaceAll("_", " ")}`]);
       return true;
@@ -7210,7 +7296,17 @@ app.post("/api/admin/reconcile-population", requireAdmin, async (req, res) => {
         );
         const houses = Number(bq.rows[0]?.houses || 0);
         const castles = Number(bq.rows[0]?.castles || 0);
-        const cap = Number(effectivePeasantCap({ houses, castles }));
+        const settlementHousingQ = await c.query(
+          `
+          SELECT COALESCE(SUM(sb.level),0)::int AS housing_levels
+          FROM settlement_buildings sb
+          JOIN settlements s ON s.id = sb.settlement_id
+          WHERE s.kingdom_id=$1 AND sb.building_code='housing'
+          `,
+          [k.id],
+        );
+        const settlementHousingLevels = Number(settlementHousingQ.rows[0]?.housing_levels || 0);
+        const cap = Number(effectivePeasantCap({ houses, castles })) + settlementHousingLevels * SETTLEMENT_EFFECTS.housingPeasantCapPerLevel;
 
         const pq = await c.query(
           `SELECT COALESCE(amount,0)::bigint AS peasants FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='peasants' LIMIT 1 FOR UPDATE`,

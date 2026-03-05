@@ -49,6 +49,25 @@ export const POPULATION_CAPACITY = {
   peasantsPerCastle: 100,
 } as const;
 
+// Settlement building effects that should feed into kingdom-level systems.
+export const SETTLEMENT_EFFECTS = {
+  housingPeasantCapPerLevel: 20,
+  barracksInfantryCapPerLevel: 10,
+  stablesCavalryCapPerLevel: 4,
+  granaryFoodPerHour: 25,
+  innGoldPerHour: 20,
+  marketGoldPerHour: 12,
+  carpenterWoodPerHour: 8,
+  masonStonePerHour: 8,
+  stablesHorsesPerHour: 6,
+  barnFoodCapPerLevel: 500,
+  churchManaPerHour: 5,
+  cathedralManaPerHour: 10,
+  tavernWellbeingPerLevel: 20,
+  innWellbeingPerLevel: 10,
+  breweryWellbeingPerLevel: 15,
+} as const;
+
 // Mana rates
 export const MANA_PER_PRIEST_PER_HOUR = 8;   // 1 priest = 8 mana/hr
 export const PRIESTS_PER_TEMPLE = 5;          // max priests per temple built
@@ -80,7 +99,7 @@ export function clampNumber(v: number, min: number, max: number) {
 }
 
 export function peasantDeltaPerHour(taxRate: number) {
-  if (taxRate < 24) return (24 - taxRate) * 50;
+  if (taxRate <= 24) return (25 - taxRate) * 50;
   if (taxRate > 27) return -1 * (taxRate - 27) * 60;
   return 0;
 }

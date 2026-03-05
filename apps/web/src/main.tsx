@@ -2884,6 +2884,62 @@ function AllianceForumsView() {
     }
   }
 
+  async function moderateThread(action: { pinned?: boolean; locked?: boolean; deleteThread?: boolean }) {
+    if (!selectedThreadId) return;
+    if (action.deleteThread && !window.confirm("Delete this thread and all replies?")) return;
+    setBusy(true);
+    setStatusMsg("");
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance-forums/${encodeURIComponent(kingdom)}/threads/${selectedThreadId}/moderate`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify(action),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setStatusMsg(action.deleteThread ? "Thread deleted." : "Thread moderation updated.");
+      if (action.deleteThread) setSelectedThreadId(null);
+      await loadThreads();
+      if (!action.deleteThread && selectedThreadId) await loadThreadPosts(selectedThreadId);
+      await loadModLog();
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deletePost(postId: number) {
+    setBusy(true);
+    setStatusMsg("");
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/alliance-forums/${encodeURIComponent(kingdom)}/posts/${postId}/moderate`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ deletePost: true }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setStatusMsg("Post deleted.");
+      if (selectedThreadId) await loadThreadPosts(selectedThreadId);
+      await loadThreads();
+      await loadModLog();
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function runSearch(e: React.FormEvent) {
+    e.preventDefault();
+    const q = searchInput.trim();
+    setSearchQ(q);
+    void loadThreads(q);
+  }
+
   return (
     <div style={{ display: "grid", gap: 14 }}>
       <div style={CARD}>
@@ -4555,62 +4611,6 @@ function PrayView() {
     finally { setPriestBusy(false); }
   }
 
-  async function moderateThread(action: { pinned?: boolean; locked?: boolean; deleteThread?: boolean }) {
-    if (!selectedThreadId) return;
-    if (action.deleteThread && !window.confirm("Delete this thread and all replies?")) return;
-    setBusy(true);
-    setStatusMsg("");
-    setError("");
-    try {
-      const r = await fetch(`${API_BASE}/api/alliance-forums/${encodeURIComponent(kingdom)}/threads/${selectedThreadId}/moderate`, {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify(action),
-      });
-      const j = await r.json();
-      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setStatusMsg(action.deleteThread ? "Thread deleted." : "Thread moderation updated.");
-      if (action.deleteThread) setSelectedThreadId(null);
-      await loadThreads();
-      if (!action.deleteThread && selectedThreadId) await loadThreadPosts(selectedThreadId);
-      await loadModLog();
-    } catch (e: any) {
-      setError(String(e?.message || e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function deletePost(postId: number) {
-    setBusy(true);
-    setStatusMsg("");
-    setError("");
-    try {
-      const r = await fetch(`${API_BASE}/api/alliance-forums/${encodeURIComponent(kingdom)}/posts/${postId}/moderate`, {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({ deletePost: true }),
-      });
-      const j = await r.json();
-      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setStatusMsg("Post deleted.");
-      if (selectedThreadId) await loadThreadPosts(selectedThreadId);
-      await loadThreads();
-      await loadModLog();
-    } catch (e: any) {
-      setError(String(e?.message || e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function runSearch(e: React.FormEvent) {
-    e.preventDefault();
-    const q = searchInput.trim();
-    setSearchQ(q);
-    void loadThreads(q);
-  }
-
   const mana: number = data?.mana ?? 0;
   const priests: number = data?.priests ?? 0;
   const priestsTrain: number = data?.priestsTrain ?? 0;
@@ -5047,16 +5047,22 @@ function MarketplaceView() {
   }
 
   async function handleBuy(listingId: number, pricePerUnit: number, available: number) {
-    const rawQty = buyQtyMap[listingId] || String(available);
-    const qty = Math.min(parseInt(rawQty, 10) || 1, available);
-    setBuyBusy(listingId);
+    const listingIdNum = Math.max(0, Math.floor(Number(listingId || 0)));
+    const rawQty = buyQtyMap[listingIdNum] || String(available);
+    const qtyInput = Math.floor(Number(rawQty || 0));
+    const qty = Math.max(1, Math.min(Number.isFinite(qtyInput) ? qtyInput : 1, Math.max(1, available)));
+    if (!listingIdNum) {
+      setError("Failed to buy: invalid listing ID.");
+      return;
+    }
+    setBuyBusy(listingIdNum);
     setError("");
     setStatusMsg("");
     try {
       const r = await fetch(`${API_BASE}/api/market/${encodeURIComponent(kingdom)}/buy`, {
         method: "POST",
         headers: authHeaders(),
-        body: JSON.stringify({ listingId, quantity: qty }),
+        body: JSON.stringify({ listingId: listingIdNum, quantity: qty }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || "Failed to buy");
@@ -5178,6 +5184,7 @@ function MarketplaceView() {
                 </thead>
                 <tbody>
                   {listings.map((l) => {
+                    const listingId = Math.max(0, Math.floor(Number(l.id || 0)));
                     const available = Number(l.quantity_remaining);
                     const isOwnListing = String(l.seller_kingdom_name).toLowerCase() === kingdom.toLowerCase();
                     const expiresMs = l.expires_at ? Math.max(0, new Date(l.expires_at).getTime() - Date.now()) : 0;
@@ -5186,7 +5193,7 @@ function MarketplaceView() {
                     const expiresStr = expiresMs <= 0 ? "Expired" : expiresHr > 0 ? `${expiresHr}h ${expiresMin}m` : `${expiresMin}m`;
                     const expireSoon = expiresMs > 0 && expiresHr < 2;
                     return (
-                      <tr key={l.id} style={{ opacity: isOwnListing ? 0.5 : 1 }}>
+                      <tr key={listingId || String(l.id)} style={{ opacity: isOwnListing ? 0.5 : 1 }}>
                         <td style={TD}>{RESOURCE_ICONS[l.resource]} {RESOURCE_LABELS[l.resource]}</td>
                         <td style={TD}>{l.seller_kingdom_name}</td>
                         <td style={{ ...TD, textAlign: "right" }}>{available.toLocaleString()}</td>
@@ -5197,16 +5204,16 @@ function MarketplaceView() {
                             type="number"
                             min={1}
                             max={available}
-                            value={buyQtyMap[l.id] ?? String(available)}
-                            onChange={(e) => setBuyQtyMap((m) => ({ ...m, [l.id]: e.target.value }))}
+                            value={buyQtyMap[listingId] ?? String(available)}
+                            onChange={(e) => setBuyQtyMap((m) => ({ ...m, [listingId]: e.target.value }))}
                             style={{ ...INPUT_STYLE, width: 90, padding: "4px 8px", fontSize: 13 }}
                             disabled={isOwnListing}
                           />
                         </td>
                         <td style={TD}>
                           <button
-                            onClick={() => handleBuy(l.id, Number(l.price_per_unit), available)}
-                            disabled={isOwnListing || buyBusy === l.id}
+                            onClick={() => handleBuy(listingId, Number(l.price_per_unit), available)}
+                            disabled={isOwnListing || buyBusy === listingId}
                             style={{
                               ...BTN_STYLE,
                               fontSize: 12,
@@ -5214,7 +5221,7 @@ function MarketplaceView() {
                               opacity: isOwnListing ? 0.4 : 1,
                             }}
                           >
-                            {buyBusy === l.id ? "Buying..." : isOwnListing ? "Yours" : "Buy"}
+                            {buyBusy === listingId ? "Buying..." : isOwnListing ? "Yours" : "Buy"}
                           </button>
                         </td>
                       </tr>
@@ -5391,7 +5398,19 @@ function AdminView() {
 
   type StatsData = { totalUsers: number; totalKingdoms: number; activeSessions: number; bannedUsers: number };
   type KingdomRow = { id: number; name: string; land: number; gold: number; user_id: string; username: string; email: string; is_admin: boolean; is_banned: boolean; banned_reason: string | null };
-  type UserRow = { id: string; username: string; email: string; email_verified: boolean; is_admin: boolean; is_banned: boolean; banned_reason: string | null; created_at: string; kingdom_name: string | null };
+  type UserRow = {
+    id: string;
+    username: string;
+    email: string;
+    email_verified: boolean;
+    is_admin: boolean;
+    is_banned: boolean;
+    banned_reason: string | null;
+    created_at: string;
+    kingdom_name: string | null;
+    premium_started_at?: string | null;
+    premium_ends_at?: string | null;
+  };
 
   const [tab, setTab] = useState<"overview" | "kingdoms" | "users">("overview");
   const [stats, setStats] = useState<StatsData | null>(null);
@@ -5480,6 +5499,12 @@ function AdminView() {
   const setAdminUser = async (userId: string, grant: boolean) => {
     const j = await api("/api/admin/set-admin", "POST", { userId, grant });
     setMsg(j.ok ? (grant ? "Admin granted." : "Admin revoked.") : j.error);
+    if (tab === "users") loadUsers(search);
+  };
+
+  const setPremiumUser = async (userId: string, days: number) => {
+    const j = await api("/api/admin/set-premium", "POST", { userId, days });
+    setMsg(j.ok ? (days > 0 ? `Premium granted for ${days} days.` : "Premium cleared.") : j.error);
     if (tab === "users") loadUsers(search);
   };
 
@@ -5787,7 +5812,7 @@ function AdminView() {
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr>
-                      {["Username", "Email", "Kingdom", "Verified", "Admin", "Status", "Actions"].map((h) => (
+                      {["Username", "Email", "Kingdom", "Verified", "Admin", "Premium", "Status", "Actions"].map((h) => (
                         <th key={h} style={TH}>{h}</th>
                       ))}
                     </tr>
@@ -5800,6 +5825,17 @@ function AdminView() {
                         <td style={TD}>{u.kingdom_name || "—"}</td>
                         <td style={{ ...TD, color: u.email_verified ? "#a8e6a3" : "#ffb5a5" }}>{u.email_verified ? "Yes" : "No"}</td>
                         <td style={{ ...TD, color: u.is_admin ? ACCENT : TEXT_MUTED }}>{u.is_admin ? "Yes" : "No"}</td>
+                        <td style={{ ...TD, color: TEXT_MUTED, fontSize: 12 }}>
+                          {(() => {
+                            const premiumEndsAt = u.premium_ends_at ? new Date(String(u.premium_ends_at)) : null;
+                            const premiumActive = Boolean(premiumEndsAt && premiumEndsAt.getTime() > Date.now());
+                            return premiumActive ? (
+                              <span style={{ color: "#a8e6a3" }}>Active until {premiumEndsAt?.toLocaleDateString()}</span>
+                            ) : (
+                              "Inactive"
+                            );
+                          })()}
+                        </td>
                         <td style={{ ...TD, color: u.is_banned ? "#ff7f7f" : "#a8e6a3" }}>
                           {u.is_banned ? `Banned${u.banned_reason ? ": " + u.banned_reason : ""}` : "Active"}
                         </td>
@@ -5834,6 +5870,18 @@ function AdminView() {
                               style={{ ...BTN_STYLE, fontSize: 12, padding: "4px 8px" }}
                             >
                               Edit Account
+                            </button>
+                            <button
+                              onClick={() => void setPremiumUser(u.id, 30)}
+                              style={{ ...BTN_STYLE, fontSize: 12, padding: "4px 8px", color: "#a8e6a3" }}
+                            >
+                              +30d Prem
+                            </button>
+                            <button
+                              onClick={() => void setPremiumUser(u.id, 0)}
+                              style={{ ...BTN_STYLE, fontSize: 12, padding: "4px 8px" }}
+                            >
+                              Clear Prem
                             </button>
                           </div>
                         </td>

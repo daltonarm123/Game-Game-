@@ -3,6 +3,7 @@ import {
   ECON_BUILDING_HOURLY,
   PRAYERS,
   SEASONS,
+  SETTLEMENT_EFFECTS,
   clampNumber,
   computeStorageCaps,
   effectivePeasantCap,
@@ -282,6 +283,9 @@ async function processSettlementBuildQueueTick(): Promise<number> {
           [row.settlement_id, `Finished building ${String(row.building_code).replaceAll("_", " ")} to level ${row.target_level}`],
         );
       }
+      if (String(row.building_code || "") === "town_walls") {
+        await c.query(`UPDATE settlements SET wall_level=$2 WHERE id=$1`, [row.settlement_id, row.target_level]);
+      }
       await c.query(`UPDATE settlement_build_queue SET status='completed', completed_at=now() WHERE id=$1`, [row.id]);
       await c.query(`UPDATE kingdoms SET last_tick_at=now() WHERE id=$1`, [row.kingdom_id]);
     }
@@ -462,18 +466,24 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       const researchGoldMult = 1 + ((econRes.mathematics || 0) + (econRes.accounting || 0)) * 0.01;
       const researchManaMult = 1 + ((econRes.monastery || 0) + (econRes.clergy || 0) + (econRes.basilica || 0)) * 0.05;
       const sBldg = Object.fromEntries(settlBldgQ.rows.map((r: any) => [String(r.building_code), Number(r.total_level || 0)]));
-      const settlFoodBonus  = (sBldg.granary   || 0) * 25;  // +25 food/hr per granary level
-      const settlGoldBonus  = (sBldg.inn       || 0) * 20;  // +20 gold/hr per inn level
-      const settlWoodBonus  = (sBldg.carpenter || 0) * 8;   // +8 wood/hr per carpenter level
-      const settlStoneBonus = (sBldg.mason     || 0) * 8;   // +8 stone/hr per mason level
-      const settlFoodCap    = (sBldg.barn      || 0) * 500; // +500 food cap per barn level
-      const settlManaBonus  = (sBldg.church    || 0) * 5 + (sBldg.cathedral || 0) * 10; // flat mana/hr bonus
+      const settlFoodBonus  = (sBldg.granary   || 0) * SETTLEMENT_EFFECTS.granaryFoodPerHour;
+      const settlGoldBonus  =
+        (sBldg.inn || 0) * SETTLEMENT_EFFECTS.innGoldPerHour +
+        (sBldg.market || 0) * SETTLEMENT_EFFECTS.marketGoldPerHour;
+      const settlWoodBonus  = (sBldg.carpenter || 0) * SETTLEMENT_EFFECTS.carpenterWoodPerHour;
+      const settlStoneBonus = (sBldg.mason     || 0) * SETTLEMENT_EFFECTS.masonStonePerHour;
+      const settlHorseBonus = (sBldg.stables   || 0) * SETTLEMENT_EFFECTS.stablesHorsesPerHour;
+      const settlFoodCap    = (sBldg.barn      || 0) * SETTLEMENT_EFFECTS.barnFoodCapPerLevel;
+      const settlManaBonus  =
+        (sBldg.church || 0) * SETTLEMENT_EFFECTS.churchManaPerHour +
+        (sBldg.cathedral || 0) * SETTLEMENT_EFFECTS.cathedralManaPerHour;
+      const settlHousingCapBonus = (sBldg.housing || 0) * SETTLEMENT_EFFECTS.housingPeasantCapPerLevel;
 
       const foodIncomePerHour = farm * ECON_BUILDING_HOURLY.farmFood * prayerFoodBonus * researchFoodMult + settlFoodBonus;
       const goldIncomePerHour = effectiveLand * ECON_BUILDING_HOURLY.baseGoldPerLand * prayerGoldBonus * researchGoldMult + settlGoldBonus;
       const woodIncomePerHour = lumber * ECON_BUILDING_HOURLY.lumberWood * prayerWoodBonus + settlWoodBonus;
       const stoneIncomePerHour = quarry * ECON_BUILDING_HOURLY.quarryStone * prayerStoneBonus + settlStoneBonus;
-      const horseIncomePerHour = horseFarms * ECON_BUILDING_HOURLY.horseFarmHorses * prayerHorseBonus;
+      const horseIncomePerHour = horseFarms * ECON_BUILDING_HOURLY.horseFarmHorses * prayerHorseBonus + settlHorseBonus;
 
       let foodUpkeepPerHour = 0;
       let goldUpkeepPerHour = 0;
@@ -530,7 +540,7 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       );
 
       // Population integrity guard: clamp peasants to current housing/castle cap.
-      const peasantCap = effectivePeasantCap({ houses, castles });
+      const peasantCap = effectivePeasantCap({ houses, castles }) + settlHousingCapBonus;
       const peasantsTotal = Number(t.rows.find((row) => String(row.troop_code) === "peasants")?.amount || 0);
       if (peasantsTotal > peasantCap) {
         const homePeasantQ = await c.query(
