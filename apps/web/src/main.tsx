@@ -6260,6 +6260,7 @@ function RankingsView() {
                   const a = podiumItems[1];
                   const nw = tab === "kingdoms" ? Number(a.networth || 0) : Number(a.totalNetworth || 0);
                   const name = tab === "kingdoms" ? String(a.name || "") : `[${String(a.slug || "").toUpperCase()}] ${String(a.name || "")}`;
+                  const isMe = tab === "kingdoms" && String(a.name || "") === myKingdom;
                   return (
                     <div
                       onClick={tab === "alliances" ? () => setViewAllianceSlug(String(a.slug || "")) : undefined}
@@ -6268,6 +6269,19 @@ function RankingsView() {
                       <div style={{ fontSize: 30, marginBottom: 5 }}>🥈</div>
                       <div style={{ fontWeight: 700, fontSize: 13, color: "#c8c8c8", marginBottom: 4, wordBreak: "break-word", lineHeight: 1.3 }}>{name}</div>
                       <div style={{ fontSize: 12, color: TEXT_MUTED }}>{nw.toLocaleString()} NW</div>
+                      {tab === "kingdoms" && !isMe ? (
+                        <div style={{ display: "flex", gap: 4, justifyContent: "center", flexWrap: "wrap", marginTop: 8 }}>
+                          <button
+                            title={premiumActive ? "Networth chart" : "Premium required"}
+                            disabled={!premiumActive}
+                            onClick={(e) => { e.stopPropagation(); const t = String(a.name || ""); setChartKingdom(t); void loadChart(t, chartWindow); }}
+                            style={{ ...BTN_STYLE, padding: "4px 8px", fontSize: 12, opacity: premiumActive ? 1 : 0.45, minWidth: 0 }}
+                          >📊</button>
+                          <button title="Spy" onClick={(e) => { e.stopPropagation(); localStorage.setItem("gg:prefill-target", String(a.name || "")); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "guildhall" })); }} style={{ ...BTN_STYLE, padding: "4px 8px", fontSize: 12, minWidth: 0 }}>🕵️</button>
+                          <button title="Attack" onClick={(e) => { e.stopPropagation(); localStorage.setItem("gg:prefill-target", String(a.name || "")); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "attack-kingdom" })); }} style={{ ...BTN_STYLE, padding: "4px 8px", fontSize: 12, minWidth: 0 }}>⚔️</button>
+                          <button title="Pigeon" onClick={(e) => { e.stopPropagation(); localStorage.setItem("gg:prefill-compose-to", String(a.name || "")); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "pigeons" })); }} style={{ ...BTN_STYLE, padding: "4px 8px", fontSize: 12, minWidth: 0 }}>🕊️</button>
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })()}
@@ -6276,6 +6290,7 @@ function RankingsView() {
                   const a = podiumItems[0];
                   const nw = tab === "kingdoms" ? Number(a.networth || 0) : Number(a.totalNetworth || 0);
                   const name = tab === "kingdoms" ? String(a.name || "") : `[${String(a.slug || "").toUpperCase()}] ${String(a.name || "")}`;
+                  const isMe = tab === "kingdoms" && String(a.name || "") === myKingdom;
                   return (
                     <div
                       onClick={tab === "alliances" ? () => setViewAllianceSlug(String(a.slug || "")) : undefined}
@@ -6284,6 +6299,19 @@ function RankingsView() {
                       <div style={{ fontSize: 38, marginBottom: 6 }}>👑</div>
                       <div style={{ fontWeight: 800, fontSize: 15, color: "#ffd700", marginBottom: 5, wordBreak: "break-word", lineHeight: 1.3 }}>{name}</div>
                       <div style={{ fontSize: 13, color: ACCENT, fontWeight: 600 }}>{nw.toLocaleString()} NW</div>
+                      {tab === "kingdoms" && !isMe ? (
+                        <div style={{ display: "flex", gap: 4, justifyContent: "center", flexWrap: "wrap", marginTop: 8 }}>
+                          <button
+                            title={premiumActive ? "Networth chart" : "Premium required"}
+                            disabled={!premiumActive}
+                            onClick={(e) => { e.stopPropagation(); const t = String(a.name || ""); setChartKingdom(t); void loadChart(t, chartWindow); }}
+                            style={{ ...BTN_STYLE, padding: "4px 8px", fontSize: 12, opacity: premiumActive ? 1 : 0.45, minWidth: 0 }}
+                          >📊</button>
+                          <button title="Spy" onClick={(e) => { e.stopPropagation(); localStorage.setItem("gg:prefill-target", String(a.name || "")); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "guildhall" })); }} style={{ ...BTN_STYLE, padding: "4px 8px", fontSize: 12, minWidth: 0 }}>🕵️</button>
+                          <button title="Attack" onClick={(e) => { e.stopPropagation(); localStorage.setItem("gg:prefill-target", String(a.name || "")); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "attack-kingdom" })); }} style={{ ...BTN_STYLE, padding: "4px 8px", fontSize: 12, minWidth: 0 }}>⚔️</button>
+                          <button title="Pigeon" onClick={(e) => { e.stopPropagation(); localStorage.setItem("gg:prefill-compose-to", String(a.name || "")); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "pigeons" })); }} style={{ ...BTN_STYLE, padding: "4px 8px", fontSize: 12, minWidth: 0 }}>🕊️</button>
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })()}
@@ -6292,6 +6320,7 @@ function RankingsView() {
                   const a = podiumItems[2];
                   const nw = tab === "kingdoms" ? Number(a.networth || 0) : Number(a.totalNetworth || 0);
                   const name = tab === "kingdoms" ? String(a.name || "") : `[${String(a.slug || "").toUpperCase()}] ${String(a.name || "")}`;
+                  const isMe = tab === "kingdoms" && String(a.name || "") === myKingdom;
                   return (
                     <div
                       onClick={tab === "alliances" ? () => setViewAllianceSlug(String(a.slug || "")) : undefined}
@@ -6300,6 +6329,19 @@ function RankingsView() {
                       <div style={{ fontSize: 30, marginBottom: 5 }}>🥉</div>
                       <div style={{ fontWeight: 700, fontSize: 13, color: "#cd7f32", marginBottom: 4, wordBreak: "break-word", lineHeight: 1.3 }}>{name}</div>
                       <div style={{ fontSize: 12, color: TEXT_MUTED }}>{nw.toLocaleString()} NW</div>
+                      {tab === "kingdoms" && !isMe ? (
+                        <div style={{ display: "flex", gap: 4, justifyContent: "center", flexWrap: "wrap", marginTop: 8 }}>
+                          <button
+                            title={premiumActive ? "Networth chart" : "Premium required"}
+                            disabled={!premiumActive}
+                            onClick={(e) => { e.stopPropagation(); const t = String(a.name || ""); setChartKingdom(t); void loadChart(t, chartWindow); }}
+                            style={{ ...BTN_STYLE, padding: "4px 8px", fontSize: 12, opacity: premiumActive ? 1 : 0.45, minWidth: 0 }}
+                          >📊</button>
+                          <button title="Spy" onClick={(e) => { e.stopPropagation(); localStorage.setItem("gg:prefill-target", String(a.name || "")); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "guildhall" })); }} style={{ ...BTN_STYLE, padding: "4px 8px", fontSize: 12, minWidth: 0 }}>🕵️</button>
+                          <button title="Attack" onClick={(e) => { e.stopPropagation(); localStorage.setItem("gg:prefill-target", String(a.name || "")); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "attack-kingdom" })); }} style={{ ...BTN_STYLE, padding: "4px 8px", fontSize: 12, minWidth: 0 }}>⚔️</button>
+                          <button title="Pigeon" onClick={(e) => { e.stopPropagation(); localStorage.setItem("gg:prefill-compose-to", String(a.name || "")); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "pigeons" })); }} style={{ ...BTN_STYLE, padding: "4px 8px", fontSize: 12, minWidth: 0 }}>🕊️</button>
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })()}
