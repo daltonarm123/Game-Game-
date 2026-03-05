@@ -4620,11 +4620,13 @@ function PrayView() {
     gold: Number(data?.priestCosts?.gold ?? 400),
     food: Number(data?.priestCosts?.food ?? 150),
     horses: Number(data?.priestCosts?.horses ?? 0),
+    peasants: Number(data?.priestCosts?.peasants ?? 1),
   };
   const kingdomResources = {
     gold: Number(data?.kingdomResources?.gold ?? 0),
     food: Number(data?.kingdomResources?.food ?? 0),
     horses: Number(data?.kingdomResources?.horses ?? 0),
+    peasants: Number(data?.kingdomResources?.peasants ?? 0),
   };
   const priestMaxTrainNow: number = Number(
     data?.priestMaxTrainNow ??
@@ -4635,6 +4637,7 @@ function PrayView() {
         priestCosts.gold > 0 ? Math.floor(kingdomResources.gold / priestCosts.gold) : Number.POSITIVE_INFINITY,
         priestCosts.food > 0 ? Math.floor(kingdomResources.food / priestCosts.food) : Number.POSITIVE_INFINITY,
         priestCosts.horses > 0 ? Math.floor(kingdomResources.horses / priestCosts.horses) : Number.POSITIVE_INFINITY,
+        priestCosts.peasants > 0 ? Math.floor(kingdomResources.peasants / priestCosts.peasants) : Number.POSITIVE_INFINITY,
       ),
     ),
   );
@@ -4702,7 +4705,7 @@ function PrayView() {
         <div style={CARD}>
           <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 10 }}>Train Priests</div>
           <div style={{ fontSize: 13, color: TEXT_MUTED, marginBottom: 12 }}>
-            Cost per priest: {priestCosts.gold.toLocaleString()} gold · {priestCosts.food.toLocaleString()} food{priestCosts.horses > 0 ? ` · ${priestCosts.horses.toLocaleString()} horses` : ""} · 1 hr training · requires Temple
+            Cost per priest: {priestCosts.gold.toLocaleString()} gold · {priestCosts.food.toLocaleString()} food{priestCosts.horses > 0 ? ` · ${priestCosts.horses.toLocaleString()} horses` : ""}{priestCosts.peasants > 0 ? ` · ${priestCosts.peasants.toLocaleString()} peasants` : ""} · 1 hr training · requires Temple
             <br />
             Available temple room: <span style={{ color: priestAvailable > 0 ? "#c8e7b1" : "#ffb0a5", fontWeight: 700 }}>{priestAvailable.toLocaleString()}</span>
             {" "}· Max train now: <span style={{ color: priestMaxTrainNow > 0 ? "#c8e7b1" : "#ffb0a5", fontWeight: 700 }}>{priestMaxTrainNow.toLocaleString()}</span>
@@ -4720,6 +4723,7 @@ function PrayView() {
             <div style={{ fontSize: 13, color: TEXT_MUTED }}>
               Cost: {(Number(priestQty || 0) * priestCosts.gold).toLocaleString()} gold · {(Number(priestQty || 0) * priestCosts.food).toLocaleString()} food
               {priestCosts.horses > 0 ? ` · ${(Number(priestQty || 0) * priestCosts.horses).toLocaleString()} horses` : ""}
+              {priestCosts.peasants > 0 ? ` · ${(Number(priestQty || 0) * priestCosts.peasants).toLocaleString()} peasants` : ""}
             </div>
             <button
               type="submit"

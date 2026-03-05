@@ -417,6 +417,9 @@ const TROOP_TRAIN_PEASANT_COST: Record<string, number> = {
   light_cavalry: 1,
   heavy_cavalry: 1,
   knights: 1,
+  spies: 1,
+  priests: 1,
+  diplomats: 1,
 };
 
 function trainPeasantCostPerUnit(troopCode: string) {
@@ -2125,7 +2128,7 @@ app.get("/api/kingdom/:name", requireAuth, async (req, res) => {
     const troops = await pool.query(
       `
       SELECT kt.troop_code, tt.name AS troop_name, kt.amount, tt.gold_cost, tt.food_cost, tt.train_seconds,
-             CASE WHEN tt.code IN ('footmen','pikemen','archers','crossbowmen','light_cavalry','heavy_cavalry','knights') THEN 1 ELSE 0 END AS peasant_cost,
+             CASE WHEN tt.code <> 'peasants' AND tt.is_trainable THEN 1 ELSE 0 END AS peasant_cost,
              tt.horse_cost, tt.upkeep_food, tt.upkeep_gold, tt.att_rating, tt.def_rating, tt.nw_value, tt.housing, tt.notes, tt.is_trainable
       FROM kingdom_troops kt
       JOIN troop_types tt ON tt.code = kt.troop_code
@@ -2635,7 +2638,7 @@ app.post("/api/kingdom/:name/train/cancel", requireAuth, async (req, res) => {
       const q = await c.query(
         `
         SELECT tq.id, tq.troop_code, tq.quantity, tt.name AS troop_name, tt.gold_cost, tt.food_cost, tt.horse_cost,
-               CASE WHEN tt.code IN ('footmen','pikemen','archers','crossbowmen','light_cavalry','heavy_cavalry','knights') THEN 1 ELSE 0 END AS peasant_cost
+               CASE WHEN tt.code <> 'peasants' AND tt.is_trainable THEN 1 ELSE 0 END AS peasant_cost
         FROM train_queue tq
         JOIN troop_types tt ON tt.code = tq.troop_code
         WHERE tq.id = $1 AND tq.kingdom_id = $2 AND tq.status = 'queued'
@@ -3873,7 +3876,7 @@ app.get("/api/war-room/:kingdom", requireAuth, async (req, res) => {
 
     const homeRows = await pool.query(
       `SELECT tt.code, tt.name, tt.gold_cost, tt.food_cost, tt.horse_cost, tt.train_seconds,
-              CASE WHEN tt.code IN ('footmen','pikemen','archers','crossbowmen','light_cavalry','heavy_cavalry','knights') THEN 1 ELSE 0 END AS peasant_cost,
+              CASE WHEN tt.code <> 'peasants' AND tt.is_trainable THEN 1 ELSE 0 END AS peasant_cost,
               tt.att_rating, tt.def_rating, tt.upkeep_food, tt.upkeep_gold, tt.nw_value, tt.housing, tt.notes, tt.is_trainable,
               COALESCE(kt.amount,0) AS home
        FROM troop_types tt
@@ -7429,11 +7432,12 @@ app.get("/api/pray/:kingdom", async (req, res) => {
     if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
     const kRow = k.rows[0];
 
-    const [templesQ, priestsQ, priestsTrainQ, priestTypeQ] = await Promise.all([
+    const [templesQ, priestsQ, priestsTrainQ, priestTypeQ, peasantsQ] = await Promise.all([
       pool.query(`SELECT COALESCE(MAX(level),0) AS temples FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='temples'`, [kRow.id]),
       pool.query(`SELECT COALESCE(SUM(amount),0) AS priests FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='priests'`, [kRow.id]),
       pool.query(`SELECT COALESCE(SUM(quantity),0) AS priests_train FROM train_queue WHERE kingdom_id=$1 AND troop_code='priests' AND status='queued'`, [kRow.id]),
       pool.query(`SELECT COALESCE(gold_cost,400) AS gold_cost, COALESCE(food_cost,150) AS food_cost, COALESCE(horse_cost,0) AS horse_cost FROM troop_types WHERE code='priests' LIMIT 1`),
+      pool.query(`SELECT COALESCE(amount,0) AS peasants_home FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='peasants' LIMIT 1`, [kRow.id]),
     ]);
     const priestCap = Number(templesQ.rows[0]?.temples || 0) * PRIESTS_PER_TEMPLE;
     const priests = Number(priestsQ.rows[0]?.priests || 0);
@@ -7442,6 +7446,8 @@ app.get("/api/pray/:kingdom", async (req, res) => {
     const priestGoldCost = Number(priestTypeQ.rows[0]?.gold_cost || 400);
     const priestFoodCost = Number(priestTypeQ.rows[0]?.food_cost || 150);
     const priestHorseCost = Number(priestTypeQ.rows[0]?.horse_cost || 0);
+    const priestPeasantCost = trainPeasantCostPerUnit("priests");
+    const peasantsHome = Number(peasantsQ.rows[0]?.peasants_home || 0);
     const maxByCost = (have: number, cost: number) =>
       cost > 0 ? Math.max(0, Math.floor(have / cost)) : Number.POSITIVE_INFINITY;
     const priestMaxTrainNow = Math.max(
@@ -7451,6 +7457,7 @@ app.get("/api/pray/:kingdom", async (req, res) => {
         maxByCost(Number(kRow.gold || 0), priestGoldCost),
         maxByCost(Number(kRow.food || 0), priestFoodCost),
         maxByCost(Number(kRow.horses || 0), priestHorseCost),
+        maxByCost(peasantsHome, priestPeasantCost),
       ),
     );
     const manaPerHour = Math.min(priests, priestCap) * MANA_PER_PRIEST_PER_HOUR;
@@ -7492,12 +7499,14 @@ app.get("/api/pray/:kingdom", async (req, res) => {
         gold: priestGoldCost,
         food: priestFoodCost,
         horses: priestHorseCost,
+        peasants: priestPeasantCost,
       },
       priestMaxTrainNow,
       kingdomResources: {
         gold: Number(kRow.gold || 0),
         food: Number(kRow.food || 0),
         horses: Number(kRow.horses || 0),
+        peasants: peasantsHome,
       },
       manaPerHour,
       activePrayers: prayers.rows,
