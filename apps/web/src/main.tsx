@@ -3728,6 +3728,8 @@ function TrainTroopsView() {
   const [trainTroop, setTrainTroop] = useState("pikemen");
   const [trainQty, setTrainQty] = useState("1000");
   const [cancelTrainId, setCancelTrainId] = useState<number | null>(null);
+  const [disbandQtyMap, setDisbandQtyMap] = useState<Record<string, string>>({});
+  const [disbandBusyTroop, setDisbandBusyTroop] = useState<string | null>(null);
 
   async function load(background = false) {
     if (!background) setLoading(true);
@@ -3828,6 +3830,37 @@ function TrainTroopsView() {
     }
   }
 
+  async function disbandTroopFromTraining(troopCode: string, maxHome: number) {
+    const raw = String(disbandQtyMap[troopCode] || "").replace(/\D+/g, "");
+    const qty = Math.max(0, Math.floor(Number(raw || 0)));
+    if (qty < 1) {
+      setActionMsg("Disband failed: enter a quantity of at least 1.");
+      return;
+    }
+    if (qty > maxHome) {
+      setActionMsg(`Disband failed: amount exceeds home troops (${maxHome.toLocaleString()}).`);
+      return;
+    }
+    setDisbandBusyTroop(troopCode);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/disband`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ troopCode, quantity: qty }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Disbanded ${qty.toLocaleString()} ${troopCode.replace(/_/g, " ")}.`);
+      setDisbandQtyMap((prev) => ({ ...prev, [troopCode]: "" }));
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Disband failed: ${String(e?.message || e)}`);
+    } finally {
+      setDisbandBusyTroop(null);
+    }
+  }
+
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <div style={CARD}>
@@ -3847,35 +3880,84 @@ function TrainTroopsView() {
       {k ? (
         <>
           <div style={CARD}>
-            <div style={{ fontWeight: 700, marginBottom: 8 }}>Kingdom Troops</div>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th style={{ textAlign: "left", padding: 6 }}>Troop</th>
-                    <th style={{ textAlign: "right", padding: 6 }}>Home</th>
-                    <th style={{ textAlign: "right", padding: 6 }}>Train</th>
-                    <th style={{ textAlign: "right", padding: 6 }}>Away</th>
-                    <th style={{ textAlign: "right", padding: 6 }}>Cap</th>
-                    <th style={{ textAlign: "right", padding: 6 }}>Room</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {troops.map((t) => {
-                    const room = t.housingRoom ?? null;
-                    return (
-                      <tr key={t.troopCode}>
-                        <td style={{ padding: 6 }}>{t.troopName}</td>
-                        <td style={{ padding: 6, textAlign: "right" }}>{Number(t.home || 0).toLocaleString()}</td>
-                        <td style={{ padding: 6, textAlign: "right" }}>{Number(t.train || 0).toLocaleString()}</td>
-                        <td style={{ padding: 6, textAlign: "right" }}>{Number(t.away || 0).toLocaleString()}</td>
-                        <td style={{ padding: 6, textAlign: "right", color: TEXT_MUTED }}>{t.housingCap !== null && t.housingCap !== undefined ? Number(t.housingCap).toLocaleString() : "—"}</td>
-                        <td style={{ padding: 6, textAlign: "right", color: room !== null && room <= 0 ? "#e55" : "#7c5" }}>{room !== null ? room.toLocaleString() : "—"}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+            <div style={{ fontWeight: 800, marginBottom: 10, fontSize: 18, fontFamily: FONT_DISPLAY }}>Troop Roster</div>
+            <div style={{ color: TEXT_MUTED, fontSize: 13, marginBottom: 10 }}>
+              Review all troop counts and disband directly from here.
+            </div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {troops.map((t) => {
+                const code = String(t.troopCode || "");
+                const home = Number(t.home || 0);
+                const train = Number(t.train || 0);
+                const away = Number(t.away || 0);
+                const cap = t.housingCap !== null && t.housingCap !== undefined ? Number(t.housingCap) : null;
+                const room = t.housingRoom !== null && t.housingRoom !== undefined ? Number(t.housingRoom) : null;
+                const meta = TROOP_META[code] || {
+                  sigil: code.slice(0, 2).toUpperCase(),
+                  tint: "linear-gradient(180deg, rgba(86,70,48,.72), rgba(42,32,22,.9))",
+                  role: "Kingdom military unit.",
+                };
+                const disbandQty = disbandQtyMap[code] ?? "";
+                const busy = disbandBusyTroop === code;
+                return (
+                  <div key={code} style={{ border: "1px solid rgba(216,176,117,.22)", borderRadius: 10, padding: "10px 12px", background: "rgba(8,8,10,.28)" }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8 }}>
+                      <div style={{ width: 34, height: 34, borderRadius: 6, border: "1px solid rgba(216,176,117,.58)", background: meta.tint, display: "grid", placeItems: "center", color: "#f5e4c9", fontWeight: 800 }}>
+                        {meta.sigil}
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 18, fontWeight: 700, lineHeight: 1.1 }}>{String(t.troopName || code)}</div>
+                        <div style={{ fontSize: 12, color: TEXT_MUTED, overflowWrap: "anywhere" }}>{meta.role}</div>
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(120px,1fr))", gap: 6, marginBottom: 8 }}>
+                      <div style={{ ...CARD, padding: 8 }}>
+                        <div style={{ fontSize: 11, color: TEXT_MUTED }}>Home</div>
+                        <div style={{ fontWeight: 800, color: ACCENT }}>{home.toLocaleString()}</div>
+                      </div>
+                      <div style={{ ...CARD, padding: 8 }}>
+                        <div style={{ fontSize: 11, color: TEXT_MUTED }}>Training</div>
+                        <div style={{ fontWeight: 800 }}>{train.toLocaleString()}</div>
+                      </div>
+                      <div style={{ ...CARD, padding: 8 }}>
+                        <div style={{ fontSize: 11, color: TEXT_MUTED }}>Away</div>
+                        <div style={{ fontWeight: 800 }}>{away.toLocaleString()}</div>
+                      </div>
+                      <div style={{ ...CARD, padding: 8 }}>
+                        <div style={{ fontSize: 11, color: TEXT_MUTED }}>Housing</div>
+                        <div style={{ fontWeight: 800, color: room !== null && room <= 0 ? "#ffae9a" : TEXT_MAIN }}>
+                          {cap !== null ? `${(cap - Math.max(0, room || 0)).toLocaleString()} / ${cap.toLocaleString()}` : "-"}
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, alignItems: "center" }}>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={disbandQty}
+                        onChange={(e) => {
+                          const digits = String(e.target.value || "").replace(/\D+/g, "");
+                          setDisbandQtyMap((prev) => ({ ...prev, [code]: digits }));
+                        }}
+                        placeholder={`Disband up to ${home.toLocaleString()}`}
+                        style={INPUT_STYLE}
+                        disabled={home <= 0 || busy}
+                      />
+                      <div style={{ fontSize: 12, color: TEXT_MUTED, whiteSpace: "nowrap" }}>
+                        Home: {home.toLocaleString()}
+                      </div>
+                      <button
+                        onClick={() => void disbandTroopFromTraining(code, home)}
+                        disabled={home <= 0 || busy}
+                        style={{ ...BTN_STYLE, padding: "6px 10px", fontSize: 12 }}
+                      >
+                        {busy ? "Disbanding..." : "Disband"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
