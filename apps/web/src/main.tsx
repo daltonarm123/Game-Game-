@@ -3059,6 +3059,7 @@ function WarRoomView() {
     defenderLosses: number;
   } | null>(null);
   const [trainOpen, setTrainOpen] = useState(true);
+  const [disbandOpen, setDisbandOpen] = useState(false);
   const [attackOpen, setAttackOpen] = useState(false);
   const [exploreOpen, setExploreOpen] = useState(false);
   const [exploreSentTroops, setExploreSentTroops] = useState<Record<string, number>>({});
@@ -3588,6 +3589,35 @@ function WarRoomView() {
                       </div>
                     )}
                   </form>
+                ) : null}
+
+                <button onClick={() => setDisbandOpen((v) => !v)} style={{ ...BTN_STYLE, width: "100%", textAlign: "left", borderRadius: 0, border: "none", borderTop: "1px solid rgba(216,176,117,.2)" }}>
+                  {disbandOpen ? "-" : "+"} Remove Troops
+                </button>
+                {disbandOpen ? (
+                  <div style={{ padding: 10, display: "grid", gap: 8 }}>
+                    <div style={{ color: TEXT_MUTED, fontSize: 13 }}>
+                      Select a troop and choose how many to disband.
+                    </div>
+                    <div style={{ display: "grid", gap: 6 }}>
+                      {troops.filter((t) => Number(t.home || 0) > 0).map((t) => (
+                        <div key={`dis-${t.troopCode}`} style={{ display: "grid", gridTemplateColumns: sendCols, gap: 8, alignItems: "center" }}>
+                          <div>{t.troopName}</div>
+                          <button
+                            type="button"
+                            onClick={() => void disbandTroop(String(t.troopCode || ""), Number(t.home || 0))}
+                            style={{ ...BTN_STYLE, width: isMobile ? "100%" : undefined }}
+                          >
+                            Disband...
+                          </button>
+                          <div style={{ textAlign: isMobile ? "left" : "right", color: TEXT_MUTED }}>/ {Number(t.home || 0).toLocaleString()}</div>
+                        </div>
+                      ))}
+                      {troops.every((t) => Number(t.home || 0) <= 0) ? (
+                        <div style={{ color: TEXT_MUTED, fontSize: 13 }}>No troops at home to disband.</div>
+                      ) : null}
+                    </div>
+                  </div>
                 ) : null}
 
                 <button onClick={() => setAttackOpen((v) => !v)} style={{ ...BTN_STYLE, width: "100%", textAlign: "left", borderRadius: 0, border: "none", borderTop: "1px solid rgba(216,176,117,.2)" }}>
