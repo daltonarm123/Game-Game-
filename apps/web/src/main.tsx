@@ -576,7 +576,7 @@ function OverviewView() {
           <div style={CARD}>
             <SectionHeader style={{ marginTop: 0 }}>💸 Tax Rate</SectionHeader>
             <div style={{ fontSize: 13, color: TEXT_MUTED, marginBottom: 8 }}>
-              {taxRate < 24 ? "Low tax — peasants arrive quickly" : taxRate > 27 ? "High tax — peasants are leaving!" : "Balanced — stable population"}
+              {taxRate <= 24 ? `Low tax — +${(25 - taxRate) * 50}/hr peasants arriving` : taxRate > 27 ? `High tax — −${(taxRate - 27) * 60}/hr peasants leaving!` : "Balanced — stable population (25–27%)"}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ fontSize: 24, fontWeight: 800, color: taxRate > 27 ? "#ffab9c" : taxRate < 24 ? "#9ddb8f" : TEXT_MAIN, fontVariantNumeric: "tabular-nums" }}>{taxRate}%</span>

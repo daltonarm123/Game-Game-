@@ -2221,9 +2221,18 @@ app.get("/api/kingdom/:name", requireAuth, async (req, res) => {
     };
     const economy = computeEconomyHourly(Number(kingdomSync.land || 0), buildingLevels, economyTroops, Number(kingdomSync.tax_rate || 25), season.modifiers, econResBonus, econSettlementBonus);
 
+    const nwQ = await pool.query(
+      `WITH tn AS (SELECT COALESCE(SUM(kt.amount * ty.nw_value),0) AS troop_nw
+                  FROM kingdom_troops kt JOIN troop_types ty ON ty.code=kt.troop_code WHERE kt.kingdom_id=$1)
+       SELECT ROUND((k.land*0.04 + k.food*0.0001 + k.gold*0.0005 + k.stone*0.0002 + k.wood*0.0002 + tn.troop_nw)::numeric,0)::bigint AS networth
+       FROM kingdoms k, tn WHERE k.id=$1`,
+      [kingdom.id],
+    );
+    const networth = Number(nwQ.rows[0]?.networth || 0);
+
     return res.json({
       ok: true,
-      kingdom: kingdomSync,
+      kingdom: { ...kingdomSync, networth },
       buildings: buildings.rows,
       troops: troops.rows,
       buildQueue: buildQueue.rows,
