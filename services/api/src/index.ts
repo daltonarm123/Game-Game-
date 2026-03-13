@@ -3218,7 +3218,8 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
       const landPct = landPctForResult(result);
       const defenderLand = Number(def.land || 0);
       // Land is based purely on battle result — spoilsScale only gates loot/gems.
-      const landTaken = Math.max(0, Math.floor(defenderLand * landPct));
+      // Hard cap: max 3 000 acres per attack to prevent absurd gains vs huge kingdoms.
+      const landTaken = Math.min(3000, Math.max(0, Math.floor(defenderLand * landPct)));
       const attackerLandNew = Number(atk.land || 0) + landTaken;
       const defenderLandNew = Math.max(0, defenderLand - landTaken);
 

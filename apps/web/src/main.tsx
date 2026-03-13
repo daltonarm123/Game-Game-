@@ -385,6 +385,11 @@ function OverviewView() {
   const manaPerHour = Number(prayData?.manaPerHour || 0);
   const activePrayers: any[] = prayData?.activePrayers ?? [];
 
+  // Compute used land from buildings (same logic as BuildingsView)
+  const ovBuildings = (details?.buildings || []) as Array<any>;
+  const ovUsedLand = ovBuildings.reduce((s: number, b: any) => s + Number(b.level || 0) * Number(b.land_cost || 0), 0);
+  const ovFreeLand = Math.max(0, Number(k?.land || 0) - ovUsedLand);
+
   // Build troop table from war data
   const troops = (war?.troops || []) as Array<any>;
   const activeTroops = troops.filter((t: any) => Number(t.home || 0) + Number(t.train || 0) + Number(t.away || 0) > 0);
@@ -494,12 +499,12 @@ function OverviewView() {
     }
   }
 
-  const STAT_ROW: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid rgba(216,176,117,.1)", fontSize: 15, gap: 8 };
+  const STAT_ROW: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid rgba(216,176,117,.1)", fontSize: 14, gap: 8 };
   const STAT_LABEL: React.CSSProperties = { color: TEXT_MUTED, flexShrink: 0 };
   const STAT_VALUE: React.CSSProperties = { color: TEXT_MAIN, fontWeight: 600, textAlign: "right" };
   const SEC_HDR: React.CSSProperties = { fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, color: ACCENT, marginTop: 14, marginBottom: 6, borderBottom: "1px solid rgba(216,176,117,.25)", paddingBottom: 4 };
-  const TH_S: React.CSSProperties = { padding: "4px 8px", fontSize: 12, color: ACCENT, textAlign: "left", borderBottom: "1px solid rgba(216,176,117,.2)" };
-  const TD_S: React.CSSProperties = { padding: "4px 8px", fontSize: 13, borderBottom: "1px solid rgba(255,255,255,.05)" };
+  const TH_S: React.CSSProperties = { padding: "5px 10px", fontSize: 11, color: ACCENT, textAlign: "left", borderBottom: "1px solid rgba(216,176,117,.25)", textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 };
+  const TD_S: React.CSSProperties = { padding: "6px 10px", fontSize: 13, borderBottom: "1px solid rgba(255,255,255,.05)" };
 
   const fmtNum = (v: number) => Number(v || 0).toLocaleString();
   const fmtRate = (v: number) => {
@@ -531,39 +536,37 @@ function OverviewView() {
         {/* LEFT COLUMN */}
         <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
           <div style={CARD}>
-            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: ACCENT, marginBottom: 10 }}>Kingdom Stats</div>
-            <div style={STAT_ROW}><span style={STAT_LABEL}>Rank / Title</span><span style={STAT_VALUE}>#{rankNum || "N/A"} / {rankTitle}</span></div>
-            <div style={STAT_ROW}><span style={STAT_LABEL}>Religion</span><span style={STAT_VALUE}>Nastfuru</span></div>
-            <div style={STAT_ROW}><span style={STAT_LABEL}>Networth</span><span style={STAT_VALUE}>{fmtNum(Number(war?.kingdom?.networth || 0))}</span></div>
-            <div style={STAT_ROW}><span style={STAT_LABEL}>Land</span><span style={STAT_VALUE}>{fmtNum(Number(k?.land || 0))} / {fmtNum(Number(k?.land || 0))} Acres</span></div>
-            <div style={STAT_ROW}><span style={STAT_LABEL}>Peasants (home / cap)</span><span style={STAT_VALUE}>{fmtNum(peasantsHome)} / {fmtNum(populationCap)}</span></div>
-            <div style={STAT_ROW}><span style={STAT_LABEL}>Total Forces</span><span style={STAT_VALUE}>{fmtNum(populationHome)} home · {fmtNum(populationTotal)} total</span></div>
-            <div style={STAT_ROW}><span style={STAT_LABEL}>Settlement Wellbeing</span><span style={STAT_VALUE}>{fmtNum(Math.floor(Number(k?.land || 0) * 12.5))}</span></div>
-            <div style={STAT_ROW}><span style={STAT_LABEL}>Consecutive Days</span><span style={STAT_VALUE}>{fmtNum(daysPlayed)}</span></div>
+            <SectionHeader style={{ marginTop: 0 }}>👑 Kingdom Stats</SectionHeader>
+            <div style={STAT_ROW}><span style={STAT_LABEL}>Rank / Title</span><span style={{ ...STAT_VALUE, color: rankNum <= 3 ? ACCENT : TEXT_MAIN }}>#{rankNum || "N/A"} · {rankTitle}</span></div>
+            <div style={STAT_ROW}><span style={STAT_LABEL}>Networth</span><span style={{ ...STAT_VALUE, color: "#d4c87a" }}>{fmtNum(Number(war?.kingdom?.networth || 0))}</span></div>
+            <div style={STAT_ROW}>
+              <span style={STAT_LABEL}>🌍 Land</span>
+              <span style={STAT_VALUE}>{fmtNum(Number(k?.land || 0))} total <span style={{ color: TEXT_MUTED, fontWeight: 400 }}>· {fmtNum(ovFreeLand)} free</span></span>
+            </div>
+            <div style={STAT_ROW}>
+              <span style={STAT_LABEL}>👥 Peasants</span>
+              <span style={STAT_VALUE}>{fmtNum(peasantsHome)} <span style={{ color: TEXT_MUTED, fontWeight: 400 }}>/ {fmtNum(populationCap)} cap</span></span>
+            </div>
+            <ProgressBar value={peasantsHome} max={populationCap} height={5} style={{ marginTop: -2, marginBottom: 4 }} />
+            <div style={STAT_ROW}><span style={STAT_LABEL}>⚔ Forces</span><span style={STAT_VALUE}>{fmtNum(populationHome)} home · {fmtNum(populationTotal)} total</span></div>
+            <div style={STAT_ROW}><span style={STAT_LABEL}>⛪ Religion</span><span style={STAT_VALUE}>Nastfuru</span></div>
+            <div style={STAT_ROW}><span style={STAT_LABEL}>📅 Days played</span><span style={STAT_VALUE}>{fmtNum(daysPlayed)}</span></div>
           </div>
 
           <div style={CARD}>
-            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: ACCENT, marginBottom: 8 }}>Shield</div>
-            <div style={{ fontSize: 14, color: TEXT_MUTED, marginBottom: 6 }}>
-              {shield?.status === "pending" ? `Pending: ${formatDuration(Number(shield?.remainingSeconds || 0))}` : null}
-              {shield?.status === "active" ? <span style={{ color: "#a8e6a3" }}>Active: {formatDuration(Number(shield?.remainingSeconds || 0))}</span> : null}
-              {shield?.status === "cooldown" ? `Cooldown: ${formatDuration(Number(shield?.remainingSeconds || 0))} (retaliation only)` : null}
-              {(shield?.status === "none" || !shield) ? "None — no active shield protection" : null}
+            <SectionHeader style={{ marginTop: 0 }}>🛡 Shield</SectionHeader>
+            <div style={{ fontSize: 14, marginBottom: 8 }}>
+              {shield?.status === "pending" && <span style={{ color: "#ffcc88" }}>⏳ Pending activation — {formatDuration(Number(shield?.remainingSeconds || 0))}</span>}
+              {shield?.status === "active" && <span style={{ color: "#a8e6a3", fontWeight: 700 }}>✓ Active — {formatDuration(Number(shield?.remainingSeconds || 0))} remaining</span>}
+              {shield?.status === "cooldown" && <span style={{ color: "#ffab9c" }}>🔄 Cooldown — {formatDuration(Number(shield?.remainingSeconds || 0))} (retaliation only)</span>}
+              {(shield?.status === "none" || !shield) && <span style={{ color: TEXT_MUTED }}>No shield — kingdom is open to attack</span>}
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button
-                style={{ ...BTN_STYLE, fontSize: 13, padding: "7px 14px" }}
-                disabled={shieldBusy || (shield && String(shield.status || "none") !== "none")}
-                onClick={() => void activateShield()}
-              >
-                {shieldBusy ? "..." : "Activate Shield"}
+              <button style={{ ...BTN_STYLE, fontSize: 13, padding: "7px 14px" }} disabled={shieldBusy || (shield && String(shield.status || "none") !== "none")} onClick={() => void activateShield()}>
+                {shieldBusy ? "..." : "🛡 Activate Shield"}
               </button>
               {shield && (String(shield.status || "") === "pending" || String(shield.status || "") === "active") ? (
-                <button
-                  style={{ ...BTN_STYLE, fontSize: 13, padding: "7px 14px", borderColor: "rgba(255,120,120,.5)", background: "rgba(180,50,50,.25)" }}
-                  disabled={shieldBusy}
-                  onClick={() => void cancelShield()}
-                >
+                <button style={{ ...BTN_STYLE, fontSize: 13, padding: "7px 14px", borderColor: "rgba(255,120,120,.5)", background: "rgba(180,50,50,.25)" }} disabled={shieldBusy} onClick={() => void cancelShield()}>
                   {shieldBusy ? "..." : "Cancel Shield"}
                 </button>
               ) : null}
@@ -571,30 +574,44 @@ function OverviewView() {
           </div>
 
           <div style={CARD}>
-            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: ACCENT, marginBottom: 8 }}>Tax Rate</div>
+            <SectionHeader style={{ marginTop: 0 }}>💸 Tax Rate</SectionHeader>
+            <div style={{ fontSize: 13, color: TEXT_MUTED, marginBottom: 8 }}>
+              {taxRate < 24 ? "Low tax — peasants arrive quickly" : taxRate > 27 ? "High tax — peasants are leaving!" : "Balanced — stable population"}
+            </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 20, fontWeight: 700 }}>{taxRate}%</span>
-              <button disabled={taxBusy || taxRate >= 40} onClick={() => void updateTax(taxRate + 1)} style={{ ...BTN_STYLE, padding: "4px 12px", fontSize: 16 }}>+</button>
-              <button disabled={taxBusy || taxRate <= 0} onClick={() => void updateTax(taxRate - 1)} style={{ ...BTN_STYLE, padding: "4px 12px", fontSize: 16 }}>-</button>
+              <span style={{ fontSize: 24, fontWeight: 800, color: taxRate > 27 ? "#ffab9c" : taxRate < 24 ? "#9ddb8f" : TEXT_MAIN, fontVariantNumeric: "tabular-nums" }}>{taxRate}%</span>
+              <button disabled={taxBusy || taxRate >= 40} onClick={() => void updateTax(taxRate + 1)} style={{ ...BTN_STYLE, padding: "5px 14px", fontSize: 16 }}>+</button>
+              <button disabled={taxBusy || taxRate <= 0} onClick={() => void updateTax(taxRate - 1)} style={{ ...BTN_STYLE, padding: "5px 14px", fontSize: 16 }}>−</button>
             </div>
           </div>
 
           <div style={CARD}>
-            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: ACCENT, marginBottom: 6 }}>Season</div>
-            <div style={{ fontSize: 15, fontWeight: 600 }}>{seasonLabel}</div>
-            <div style={{ fontSize: 13, color: TEXT_MUTED, marginTop: 2 }}>{seasonDays}d {seasonHours}h remaining</div>
-            <div style={{ fontSize: 13, fontStyle: "italic", color: "#f0e3ce", marginTop: 4 }}>{String(season?.flavor || "Season effects are active.")}</div>
-            <div style={{ marginTop: 10, fontSize: 14 }}>
-              Next Tick: <span style={{ color: nextTickSecs <= 30 ? "#a8e6a3" : ACCENT, fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{formatCountdown(nextTickSecs)}</span>
-            </div>
+            {(() => {
+              const seasonIcons: Record<string, string> = { spring: "🌸", summer: "☀️", autumn: "🍂", winter: "❄️" };
+              const seasonColors: Record<string, string> = { spring: "#a8e6a3", summer: "#ffd966", autumn: "#d8894a", winter: "#88b4e7" };
+              const sCode = String(season?.code || "spring");
+              const sColor = seasonColors[sCode] || ACCENT;
+              const sIcon = seasonIcons[sCode] || "🌿";
+              return (
+                <>
+                  <SectionHeader style={{ marginTop: 0 }}>{sIcon} Season</SectionHeader>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: sColor, marginBottom: 4 }}>{seasonLabel}</div>
+                  <div style={{ fontSize: 13, color: TEXT_MUTED, marginBottom: 6 }}>{seasonDays}d {seasonHours}h remaining</div>
+                  <div style={{ fontSize: 13, fontStyle: "italic", color: "#f0e3ce", lineHeight: 1.5 }}>{String(season?.flavor || "Season effects are active.")}</div>
+                  <div style={{ marginTop: 10, fontSize: 13, color: TEXT_MUTED }}>
+                    Next resource tick: <span style={{ color: nextTickSecs <= 30 ? "#a8e6a3" : ACCENT, fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{formatCountdown(nextTickSecs)}</span>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
 
         {/* RIGHT COLUMN */}
         <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
           <div style={CARD}>
-            <div style={SEC_HDR}>Resources</div>
-            <div style={{ display: "grid", gap: 4 }}>
+            <SectionHeader style={{ marginTop: 0 }}>Resources</SectionHeader>
+            <div style={{ display: "grid", gap: 8 }}>
               {[
                 { label: "Food",   icon: "🌾", cur: Number(k?.food || 0),   cap: Number(econCaps.food || 0),  rate: Number(econPerHour.food || 0) },
                 { label: "Gold",   icon: "💰", cur: Number(k?.gold || 0),   cap: Number(econCaps.gold || 0),  rate: Number(econPerHour.gold || 0) },
@@ -605,99 +622,106 @@ function OverviewView() {
               ].map((res) => {
                 const isStarving = res.rate < 0 && res.cur === 0;
                 const fillPct = res.cap > 0 ? res.cur / res.cap : 1;
-                const curColor = isStarving ? "#ff5c5c" : res.rate < 0 ? "#ffcc88" : fillPct < 0.2 && res.cap > 0 ? "#ffab9c" : "#9ddb8f";
-                const rowBg = isStarving ? "rgba(255,70,70,.1)" : res.rate < 0 ? "rgba(255,160,80,.06)" : "transparent";
+                const curColor = isStarving ? "#ff5c5c" : res.rate < 0 ? "#ffcc88" : fillPct < 0.2 && res.cap > 0 ? "#ffab9c" : "#c8e7b1";
+                const rowBg = isStarving ? "rgba(255,70,70,.08)" : res.rate < 0 ? "rgba(255,160,80,.05)" : "transparent";
+                const barColor = isStarving ? "#e05c5c" : fillPct < 0.2 && res.cap > 0 ? "#e07c3c" : "#5fba7d";
                 return (
-                  <div key={res.label} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 6px", borderRadius: 6, borderBottom: "1px solid rgba(216,176,117,.1)", fontSize: 14, background: rowBg }}>
-                    <span style={{ fontSize: 18, lineHeight: 1, flexShrink: 0 }}>{res.icon}</span>
-                    <span style={{ width: 44, color: TEXT_MUTED, flexShrink: 0 }}>{res.label}</span>
-                    <span style={{ fontWeight: 700, minWidth: 80, color: curColor }}>{fmtNum(res.cur)}{res.cap > 0 ? <span style={{ color: TEXT_MUTED, fontWeight: 400 }}> / {fmtNum(res.cap)}</span> : ""}</span>
-                    {fmtRate(res.rate)}
-                    {isStarving && <span style={{ fontSize: 12, color: "#ff5c5c", fontWeight: 700, marginLeft: "auto" }}>⚠ STARVING</span>}
+                  <div key={res.label} style={{ padding: "6px 8px", borderRadius: 8, background: rowBg, border: "1px solid rgba(216,176,117,.1)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14 }}>
+                      <span style={{ fontSize: 17, lineHeight: 1, flexShrink: 0 }}>{res.icon}</span>
+                      <span style={{ width: 46, color: TEXT_MUTED, flexShrink: 0, fontSize: 13 }}>{res.label}</span>
+                      <span style={{ fontWeight: 700, color: curColor, minWidth: 70 }}>{fmtNum(res.cur)}</span>
+                      {res.cap > 0 && <span style={{ color: TEXT_MUTED, fontSize: 12 }}>/ {fmtNum(res.cap)}</span>}
+                      <span style={{ marginLeft: "auto" }}>{fmtRate(res.rate)}</span>
+                      {isStarving && <span style={{ fontSize: 11, color: "#ff5c5c", fontWeight: 700, background: "rgba(255,70,70,.2)", padding: "2px 6px", borderRadius: 4 }}>⚠ STARVING</span>}
+                    </div>
+                    {res.cap > 0 && <ProgressBar value={res.cur} max={res.cap} color={barColor} height={5} style={{ marginTop: 5 }} />}
                   </div>
                 );
               })}
             </div>
-            <div style={{ marginTop: 10, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 14 }}>
-              <span style={{ color: TEXT_MUTED }}>Blue Gems: <span style={{ color: "#7eb8ff", fontWeight: 700 }}>{fmtNum(Number(k?.blue_gems || 0))}</span></span>
-              <span style={{ color: TEXT_MUTED }}>Green Gems: <span style={{ color: "#7fdb8a", fontWeight: 700 }}>{fmtNum(Number(k?.green_gems || 0))}</span></span>
+            <div style={{ marginTop: 10, display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13, paddingTop: 6, borderTop: "1px solid rgba(216,176,117,.12)" }}>
+              <span style={{ color: TEXT_MUTED }}>💎 Blue Gems: <span style={{ color: "#7eb8ff", fontWeight: 700 }}>{fmtNum(Number(k?.blue_gems || 0))}</span></span>
+              <span style={{ color: TEXT_MUTED }}>💚 Green Gems: <span style={{ color: "#7fdb8a", fontWeight: 700 }}>{fmtNum(Number(k?.green_gems || 0))}</span></span>
             </div>
           </div>
 
           <div style={CARD}>
-            <div style={SEC_HDR}>Population (home / train / away)</div>
+            <SectionHeader style={{ marginTop: 0 }}>Your Forces</SectionHeader>
             {activeTroops.length === 0 ? (
-              <div style={{ color: TEXT_MUTED, fontSize: 14 }}>No troops data available.</div>
+              <div style={{ color: TEXT_MUTED, fontSize: 14 }}>No troops. Train some in the War Room.</div>
             ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr>
-                      <th style={TH_S}>Troop</th>
-                      <th style={{ ...TH_S, textAlign: "right" }}>Home</th>
-                      <th style={{ ...TH_S, textAlign: "right" }}>Training</th>
-                      <th style={{ ...TH_S, textAlign: "right" }}>Away</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {activeTroops.map((t: any) => (
-                      <tr key={String(t.troop_code || t.code)}>
-                        <td style={TD_S}>{String(t.troopCode || t.troop_code || t.code || "").replace(/_/g, " ")}</td>
-                        <td style={{ ...TD_S, textAlign: "right" }}>{fmtNum(Number(t.home || 0))}</td>
-                        <td style={{ ...TD_S, textAlign: "right" }}>{fmtNum(Number(t.train || 0))}</td>
-                        <td style={{ ...TD_S, textAlign: "right" }}>{fmtNum(Number(t.away || 0))}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div style={{ display: "grid", gap: 4 }}>
+                {activeTroops.map((t: any, idx: number) => {
+                  const code = String(t.troopCode || t.troop_code || t.code || "");
+                  const meta = TROOP_META[code];
+                  const name = code.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+                  return (
+                    <div key={code} style={{ display: "grid", gridTemplateColumns: "28px 1fr auto auto auto", alignItems: "center", gap: 8, padding: "5px 8px", borderRadius: 6, background: meta?.tint || (idx % 2 === 0 ? "rgba(255,255,255,.03)" : "transparent"), fontSize: 13 }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: ACCENT, background: "rgba(0,0,0,.3)", borderRadius: 3, padding: "1px 3px", textAlign: "center", letterSpacing: 0 }}>{meta?.sigil || code.slice(0,2).toUpperCase()}</span>
+                      <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>{name}</span>
+                      <span style={{ color: "#9ddb8f", minWidth: 60, textAlign: "right" }}>{fmtNum(Number(t.home || 0))}<span style={{ color: TEXT_MUTED, fontWeight: 400, fontSize: 11 }}> home</span></span>
+                      {Number(t.train || 0) > 0 && <span style={{ color: "#c8b8f8", minWidth: 60, textAlign: "right" }}>{fmtNum(Number(t.train || 0))}<span style={{ color: TEXT_MUTED, fontWeight: 400, fontSize: 11 }}> train</span></span>}
+                      {Number(t.away || 0) > 0 && <span style={{ color: "#ffcc88", minWidth: 60, textAlign: "right" }}>{fmtNum(Number(t.away || 0))}<span style={{ color: TEXT_MUTED, fontWeight: 400, fontSize: 11 }}> away</span></span>}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 12 }}>
             <div style={CARD}>
-              <div style={SEC_HDR}>Building...</div>
-              {bq.length === 0 ? <div style={{ color: TEXT_MUTED, fontSize: 14 }}>No active build queue.</div> : null}
+              <SectionHeader style={{ marginTop: 0 }}>🏗 Building</SectionHeader>
+              {bq.length === 0 ? <div style={{ color: TEXT_MUTED, fontSize: 13, fontStyle: "italic" }}>No active build queue.</div> : null}
               {bq.map((q: any) => (
-                <div key={`bq-${q.id}`} style={{ marginBottom: 6, fontSize: 14, display: "grid", gridTemplateColumns: isMobileOv ? "1fr" : "1fr auto auto", alignItems: "center", gap: 8 }}>
-                  <span style={{ color: TEXT_MUTED }}>{String(q.building_code || "").replace(/_/g, " ")} {"->"} {Number(q.quantity || 1).toLocaleString()}</span>
-                  <QueueCountdown completesAt={q.completes_at} onComplete={() => void load()} />
-                  <button
-                    onClick={() => void cancelOverviewBuildQueueItem(Number(q.id))}
-                    style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 11 }}
-                    disabled={cancelBuildId === Number(q.id)}
-                  >
-                    {cancelBuildId === Number(q.id) ? "Cancelling..." : "Cancel"}
-                  </button>
+                <div key={`bq-${q.id}`} style={{ marginBottom: 8, padding: "6px 8px", borderRadius: 6, background: "rgba(216,176,117,.06)", border: "1px solid rgba(216,176,117,.12)" }}>
+                  <div style={{ fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>🏰 {String(q.building_code || "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())} → Lv {Number(q.target_level || q.quantity || 1)}</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <QueueCountdown completesAt={q.completes_at} onComplete={() => void load()} />
+                      <button onClick={() => void cancelOverviewBuildQueueItem(Number(q.id))} style={{ ...BTN_STYLE, padding: "2px 7px", fontSize: 11, opacity: 0.7 }} disabled={cancelBuildId === Number(q.id)}>
+                        {cancelBuildId === Number(q.id) ? "..." : "✕"}
+                      </button>
+                    </div>
+                  </div>
+                  <QueueProgressBar startedAt={q.started_at} completesAt={q.completes_at} />
                 </div>
               ))}
             </div>
             <div style={CARD}>
-              <div style={SEC_HDR}>Training...</div>
-              {tq.length === 0 ? <div style={{ color: TEXT_MUTED, fontSize: 14 }}>No active training queue.</div> : null}
-              {tq.map((q: any) => (
-                <div key={`tq-${q.id}`} style={{ marginBottom: 6, fontSize: 14, display: "grid", gridTemplateColumns: isMobileOv ? "1fr" : "1fr auto auto", alignItems: "center", gap: 8 }}>
-                  <span style={{ color: TEXT_MUTED }}>{fmtNum(Number(q.quantity || 0))} x {String(q.troop_code || "").replace(/_/g, " ")}</span>
-                  <QueueCountdown completesAt={q.completes_at} onComplete={() => void load()} />
-                  <button
-                    onClick={() => void cancelOverviewTrainingQueueItem(Number(q.id))}
-                    style={{ ...BTN_STYLE, padding: "3px 8px", fontSize: 11 }}
-                    disabled={cancelTrainId === Number(q.id)}
-                  >
-                    {cancelTrainId === Number(q.id) ? "Cancelling..." : "Cancel"}
-                  </button>
-                </div>
-              ))}
+              <SectionHeader style={{ marginTop: 0 }}>⚔ Training</SectionHeader>
+              {tq.length === 0 ? <div style={{ color: TEXT_MUTED, fontSize: 13, fontStyle: "italic" }}>No active training queue.</div> : null}
+              {tq.map((q: any) => {
+                const code = String(q.troop_code || "");
+                const meta = TROOP_META[code];
+                return (
+                  <div key={`tq-${q.id}`} style={{ marginBottom: 8, padding: "6px 8px", borderRadius: 6, background: meta?.tint || "rgba(255,255,255,.04)", border: "1px solid rgba(255,255,255,.08)" }}>
+                    <div style={{ fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                      <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>{meta?.sigil || "??"} {fmtNum(Number(q.quantity || 0))} × {code.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <QueueCountdown completesAt={q.completes_at} onComplete={() => void load()} />
+                        <button onClick={() => void cancelOverviewTrainingQueueItem(Number(q.id))} style={{ ...BTN_STYLE, padding: "2px 7px", fontSize: 11, opacity: 0.7 }} disabled={cancelTrainId === Number(q.id)}>
+                          {cancelTrainId === Number(q.id) ? "..." : "✕"}
+                        </button>
+                      </div>
+                    </div>
+                    <QueueProgressBar startedAt={q.started_at} completesAt={q.completes_at} />
+                  </div>
+                );
+              })}
             </div>
           </div>
 
           {activePrayers.length > 0 ? (
             <div style={CARD}>
-              <div style={SEC_HDR}>Prayers In Progress...</div>
+              <SectionHeader style={{ marginTop: 0 }}>🙏 Active Prayers</SectionHeader>
               {activePrayers.map((ap: any) => (
-                <div key={ap.id} style={{ marginBottom: 6, fontSize: 14, display: "flex", justifyContent: "space-between", gap: 8 }}>
-                  <span style={{ color: TEXT_MUTED }}>{String(ap.prayer_code || "").replace(/_/g, " ")}</span>
-                  <span style={{ color: ACCENT }}>{formatDuration(Number(ap.remainingSeconds || ap.remaining_seconds || 0))} remaining</span>
+                <div key={ap.id} style={{ marginBottom: 6, padding: "5px 8px", borderRadius: 6, background: "rgba(180,140,255,.08)", border: "1px solid rgba(180,140,255,.15)", fontSize: 13 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "#c8b8f8", fontWeight: 600 }}>{String(ap.prayer_code || "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}</span>
+                    <span style={{ color: ACCENT }}>{formatDuration(Number(ap.remainingSeconds || ap.remaining_seconds || 0))}</span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -969,17 +993,17 @@ function BuildingsView() {
               <col style={{ width: 70 }} />
             </colgroup>
             <thead>
-              <tr>
-                <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.4)", color: ACCENT, fontSize: 13 }}>Building</th>
-                <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.4)", color: ACCENT, fontSize: 13 }}>What it does</th>
-                <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.4)", color: ACCENT, fontSize: 13 }}>Cost per build</th>
-                <th style={{ textAlign: "right", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.4)", color: ACCENT, fontSize: 13 }}>Built</th>
-                <th style={{ textAlign: "right", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.4)", color: ACCENT, fontSize: 13 }}>Building</th>
-                <th style={{ textAlign: "right", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.4)", color: ACCENT, fontSize: 13 }}>Total</th>
+              <tr style={{ background: "rgba(216,176,117,.07)" }}>
+                <th style={{ textAlign: "left", padding: "9px 12px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>Building</th>
+                <th style={{ textAlign: "left", padding: "9px 12px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>What it does</th>
+                <th style={{ textAlign: "left", padding: "9px 12px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>Cost per build</th>
+                <th style={{ textAlign: "right", padding: "9px 12px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>Built</th>
+                <th style={{ textAlign: "right", padding: "9px 12px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>In Queue</th>
+                <th style={{ textAlign: "right", padding: "9px 12px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em", fontWeight: 700 }}>Total</th>
               </tr>
             </thead>
             <tbody>
-              {buildings.map((b) => {
+              {buildings.map((b, idx) => {
                 const code = String(b.building_code);
                 const meta = BUILDING_META[code] || { sigil: code.slice(0, 2).toUpperCase(), summary: "Core kingdom infrastructure.", unlocks: "General growth and economy support." };
                 const prod = BUILDING_PROD[code];
@@ -987,32 +1011,40 @@ function BuildingsView() {
                 const bldg = Number(queueCounts[code] || 0);
                 const total = built + bldg;
                 const rawSec = Number(b.base_build_seconds || 0);
-                const buildTimeTxt = rawSec >= 86400
-                  ? `${Math.floor(rawSec / 86400)}d ${Math.floor((rawSec % 86400) / 3600)}h`
-                  : `${Math.floor(rawSec / 3600)}h`;
+                const buildTimeTxt = rawSec >= 86400 ? `${Math.floor(rawSec / 86400)}d ${Math.floor((rawSec % 86400) / 3600)}h` : `${Math.floor(rawSec / 3600)}h`;
+                // Category color strip
+                const catColor = prod?.income ? "#4a8f5c"   // production → green
+                  : prod?.trains ? "#8f4a4a"                 // military → red/bronze
+                  : code === "houses" || code === "barns" ? "#4a6a8f"   // population/storage → blue
+                  : "#7a6a4a";                               // other → tan
+                const isSelected = buildCode === code;
+                const rowBg = isSelected ? "rgba(216,176,117,.12)" : idx % 2 === 0 ? "rgba(255,255,255,.02)" : "transparent";
                 return (
-                  <tr key={code} style={{ cursor: "pointer" }} onClick={() => setBuildCode(code)}>
-                    <td style={{ padding: "10px 10px", borderBottom: "1px solid rgba(216,176,117,.1)", whiteSpace: "nowrap", minWidth: 220 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 220 }}>
-                        <div style={{ width: 36, height: 36, borderRadius: 6, border: "1px solid rgba(216,176,117,.55)", background: "linear-gradient(180deg, rgba(89,67,37,.82), rgba(35,27,15,.92))", display: "grid", placeItems: "center", fontWeight: 800, color: "#f2dfbf", fontSize: 12, flexShrink: 0 }}>
+                  <tr key={code} style={{ cursor: "pointer", background: rowBg }} onClick={() => setBuildCode(code)}>
+                    <td style={{ padding: "10px 12px", borderBottom: "1px solid rgba(255,255,255,.05)", whiteSpace: "nowrap" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ width: 4, height: 36, borderRadius: 2, background: catColor, flexShrink: 0 }} />
+                        <div style={{ width: 34, height: 34, borderRadius: 6, border: "1px solid rgba(216,176,117,.4)", background: "linear-gradient(180deg, rgba(89,67,37,.82), rgba(35,27,15,.92))", display: "grid", placeItems: "center", fontWeight: 800, color: "#f2dfbf", fontSize: 11, flexShrink: 0 }}>
                           {meta.sigil}
                         </div>
-                        <span style={{ fontWeight: 600, whiteSpace: "nowrap", wordBreak: "normal", overflowWrap: "normal" }}>{String(b.building_name || code)}</span>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 14 }}>{String(b.building_name || code)}</div>
+                          <div style={{ fontSize: 11, color: catColor, fontWeight: 600, marginTop: 1 }}>{prod?.trains ? "⚔ Military" : prod?.income ? "📦 Production" : code === "houses" || code === "barns" ? "🏘 Housing" : "🏗 Support"}</div>
+                        </div>
                       </div>
                     </td>
-                    <td style={{ padding: "10px 10px", borderBottom: "1px solid rgba(216,176,117,.1)" }}>
-                      <div style={{ fontSize: 13, color: TEXT_MAIN }}>{meta.summary}</div>
-                      {prod?.income ? <div style={{ marginTop: 3, fontSize: 12, color: "#9ddb8f", fontWeight: 600 }}>{prod.income} per building</div> : null}
-                      {prod?.trains ? <div style={{ marginTop: 3, fontSize: 12, color: "#c8b8f8" }}>Trains: {prod.trains}</div> : null}
-                      {prod?.special ? <div style={{ marginTop: 3, fontSize: 12, color: TEXT_MUTED }}>{prod.special}</div> : null}
+                    <td style={{ padding: "10px 12px", borderBottom: "1px solid rgba(255,255,255,.05)" }}>
+                      <div style={{ fontSize: 13, color: TEXT_MAIN, lineHeight: 1.4 }}>{meta.summary}</div>
+                      {prod?.income ? <div style={{ marginTop: 4, fontSize: 12, color: "#9ddb8f", fontWeight: 600 }}>📈 {prod.income}</div> : null}
+                      {prod?.trains ? <div style={{ marginTop: 4, fontSize: 12, color: "#c8b8f8", fontWeight: 600 }}>⚔ Trains: {prod.trains}</div> : null}
                     </td>
-                    <td style={{ padding: "10px 10px", borderBottom: "1px solid rgba(216,176,117,.1)", whiteSpace: "nowrap" }}>
+                    <td style={{ padding: "10px 12px", borderBottom: "1px solid rgba(255,255,255,.05)", whiteSpace: "nowrap" }}>
                       <div style={{ fontSize: 12, display: "grid", gap: 3 }}>
                         <div style={{ color: ACCENT, fontWeight: 700 }}>⏱ {buildTimeTxt}</div>
                         <div style={{ display: "flex", gap: 5 }}>
                           <span>🌍</span>
                           <span style={{ color: availableLand >= Number(b.land_cost || 0) ? "#c8b8a0" : "#ff6b47", fontWeight: 600 }}>{Number(b.land_cost || 0)}</span>
-                          <span style={{ color: TEXT_MUTED }}>/ {availableLand.toLocaleString()}</span>
+                          <span style={{ color: TEXT_MUTED }}>avail {availableLand.toLocaleString()}</span>
                         </div>
                         <div style={{ display: "flex", gap: 5 }}>
                           <span>🪨</span>
@@ -1026,9 +1058,9 @@ function BuildingsView() {
                         </div>
                       </div>
                     </td>
-                    <td style={{ padding: "10px 10px", textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.1)", fontSize: 15, fontWeight: 700 }}>{built.toLocaleString()}</td>
-                    <td style={{ padding: "10px 10px", textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.1)", fontSize: 15, color: bldg > 0 ? "#a8e6a3" : TEXT_MUTED }}>{bldg.toLocaleString()}</td>
-                    <td style={{ padding: "10px 10px", textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.1)", fontSize: 15, fontWeight: 700, color: ACCENT }}>{total.toLocaleString()}</td>
+                    <td style={{ padding: "10px 12px", textAlign: "right", borderBottom: "1px solid rgba(255,255,255,.05)", fontSize: 15, fontWeight: 700 }}>{built.toLocaleString()}</td>
+                    <td style={{ padding: "10px 12px", textAlign: "right", borderBottom: "1px solid rgba(255,255,255,.05)", fontSize: 15, color: bldg > 0 ? "#a8e6a3" : TEXT_MUTED }}>{bldg > 0 ? `+${bldg}` : "—"}</td>
+                    <td style={{ padding: "10px 12px", textAlign: "right", borderBottom: "1px solid rgba(255,255,255,.05)", fontSize: 15, fontWeight: 700, color: total > 0 ? ACCENT : TEXT_MUTED }}>{total.toLocaleString()}</td>
                   </tr>
                 );
               })}
@@ -1268,6 +1300,44 @@ function QueueCountdown({ completesAt, onComplete }: { completesAt: string; onCo
 
   if (secs <= 0) return <span style={{ color: "#a8e6a3", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>Processing...</span>;
   return <span style={{ color: ACCENT, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{formatCountdown(secs)}</span>;
+}
+
+// ── ProgressBar ───────────────────────────────────────────────────────────────
+function ProgressBar({ value, max, color, height = 6, style }: {
+  value: number; max: number; color?: string; height?: number; style?: React.CSSProperties;
+}) {
+  const pct = max > 0 ? Math.min(1, Math.max(0, value / max)) : 0;
+  const auto = pct > 0.6 ? "#5fba7d" : pct > 0.2 ? "#d4a843" : "#e05c5c";
+  const fill = color || auto;
+  return (
+    <div style={{ width: "100%", height, background: "rgba(255,255,255,.1)", borderRadius: height, overflow: "hidden", ...style }}>
+      <div style={{ height: "100%", width: `${pct * 100}%`, background: fill, borderRadius: height, transition: "width .4s ease" }} />
+    </div>
+  );
+}
+
+// ── QueueProgressBar — thin bar showing elapsed vs total queue time ────────────
+function QueueProgressBar({ startedAt, completesAt, height = 4 }: { startedAt?: string; completesAt: string; height?: number }) {
+  const total = Math.max(1, secsUntil(startedAt || completesAt) < 0
+    ? 1
+    : (new Date(completesAt).getTime() - new Date(startedAt || completesAt).getTime()) / 1000);
+  const elapsed = total - Math.max(0, secsUntil(completesAt));
+  const pct = Math.min(1, Math.max(0, elapsed / total));
+  return (
+    <div style={{ width: "100%", height, background: "rgba(255,255,255,.08)", borderRadius: height, overflow: "hidden", marginTop: 3 }}>
+      <div style={{ height: "100%", width: `${pct * 100}%`, background: ACCENT, borderRadius: height, transition: "width 1s linear" }} />
+    </div>
+  );
+}
+
+// ── Section header with left accent bar ──────────────────────────────────────
+function SectionHeader({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14, marginBottom: 8, ...style }}>
+      <div style={{ width: 3, height: 18, background: ACCENT, borderRadius: 2, flexShrink: 0 }} />
+      <span style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: ACCENT, letterSpacing: ".03em", textTransform: "uppercase" as const }}>{children}</span>
+    </div>
+  );
 }
 
 function ResearchView() {
@@ -3482,46 +3552,48 @@ function WarRoomView() {
               <div style={{ overflowX: "auto", maxWidth: "100%", WebkitOverflowScrolling: "touch" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 860 }}>
                   <thead>
-                    <tr>
-                      <th style={{ textAlign: "left", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Troop</th>
-                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Att</th>
-                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Def</th>
-                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Food</th>
-                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Gold</th>
-                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>NW</th>
-                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Home</th>
-                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Train</th>
-                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Away</th>
-                      <th style={{ textAlign: "right", padding: 6, borderBottom: "1px solid rgba(216,176,117,.38)" }}>Disband</th>
+                    <tr style={{ background: "rgba(216,176,117,.07)" }}>
+                      <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em" }}>Troop</th>
+                      <th style={{ textAlign: "right", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em" }}>Att</th>
+                      <th style={{ textAlign: "right", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em" }}>Def</th>
+                      <th style={{ textAlign: "right", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em" }}>Upkeep/h</th>
+                      <th style={{ textAlign: "right", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em" }}>NW</th>
+                      <th style={{ textAlign: "right", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em" }}>Home</th>
+                      <th style={{ textAlign: "right", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em" }}>Train</th>
+                      <th style={{ textAlign: "right", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em" }}>Away</th>
+                      <th style={{ textAlign: "right", padding: "8px 10px", borderBottom: "1px solid rgba(216,176,117,.35)", color: ACCENT, fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em" }}>Disband</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {troops.map((t) => {
+                    {troops.map((t, idx) => {
                       const code = String(t.troopCode || "");
                       const meta = TROOP_META[code] || { sigil: code.slice(0, 2).toUpperCase(), tint: "linear-gradient(180deg, rgba(86,70,48,.72), rgba(42,32,22,.9))", role: "Kingdom military unit." };
+                      const rowBg = idx % 2 === 0 ? "rgba(255,255,255,.02)" : "transparent";
                       return (
-                        <tr key={code}>
-                          <td style={{ padding: 6, borderBottom: "1px solid rgba(216,176,117,.16)" }}>
-                            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                              <div style={{ width: 34, height: 34, borderRadius: 6, border: "1px solid rgba(216,176,117,.58)", background: meta.tint, display: "grid", placeItems: "center", color: "#f5e4c9", fontWeight: 800 }}>
+                        <tr key={code} style={{ background: rowBg }}>
+                          <td style={{ padding: "8px 10px", borderBottom: "1px solid rgba(255,255,255,.05)" }}>
+                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                              <div style={{ width: 32, height: 32, borderRadius: 5, border: "1px solid rgba(216,176,117,.5)", background: meta.tint, display: "grid", placeItems: "center", color: "#f5e4c9", fontWeight: 800, fontSize: 10, flexShrink: 0 }}>
                                 {meta.sigil}
                               </div>
                               <div>
-                                <div style={{ fontSize: 24, fontFamily: FONT_DISPLAY, lineHeight: 1.02 }}>{t.troopName}</div>
-                                <div style={{ fontSize: 12, color: "#d8c9b2" }}>{meta.role}</div>
+                                <div style={{ fontSize: 14, fontWeight: 700 }}>{t.troopName}</div>
+                                <div style={{ fontSize: 11, color: TEXT_MUTED }}>{meta.role}</div>
                               </div>
                             </div>
                           </td>
-                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)" }}>{Number(t.att || 0).toLocaleString()}</td>
-                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)" }}>{Number(t.def || 0).toLocaleString()}</td>
-                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)" }}>{Number(t.upkeepFood || 0).toLocaleString()}</td>
-                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)" }}>{Number(t.upkeepGold || 0).toLocaleString()}</td>
-                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)" }}>{Number(t.nw || 0).toLocaleString()}</td>
-                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)", fontFamily: FONT_DISPLAY, fontSize: 25 }}>{Number(t.home || 0).toLocaleString()}</td>
-                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)" }}>{Number(t.train || 0).toLocaleString()}</td>
-                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)" }}>{Number(t.away || 0).toLocaleString()}</td>
-                          <td style={{ padding: 6, textAlign: "right", borderBottom: "1px solid rgba(216,176,117,.16)" }}>
-                            <button style={{ ...BTN_STYLE, padding: "5px 9px" }} onClick={() => void disbandTroop(code, Number(t.home || 0))}>Trash</button>
+                          <td style={{ padding: "8px 10px", textAlign: "right", borderBottom: "1px solid rgba(255,255,255,.05)", color: "#e8a87c", fontWeight: 600 }}>{Number(t.att || 0).toLocaleString()}</td>
+                          <td style={{ padding: "8px 10px", textAlign: "right", borderBottom: "1px solid rgba(255,255,255,.05)", color: "#7eb8e8", fontWeight: 600 }}>{Number(t.def || 0).toLocaleString()}</td>
+                          <td style={{ padding: "8px 10px", textAlign: "right", borderBottom: "1px solid rgba(255,255,255,.05)", fontSize: 12, color: TEXT_MUTED }}>
+                            {Number(t.upkeepFood || 0) > 0 ? `🌾${Number(t.upkeepFood || 0)}` : ""}{Number(t.upkeepFood || 0) > 0 && Number(t.upkeepGold || 0) > 0 ? " " : ""}{Number(t.upkeepGold || 0) > 0 ? `💰${Number(t.upkeepGold || 0)}` : ""}
+                            {Number(t.upkeepFood || 0) === 0 && Number(t.upkeepGold || 0) === 0 ? "—" : ""}
+                          </td>
+                          <td style={{ padding: "8px 10px", textAlign: "right", borderBottom: "1px solid rgba(255,255,255,.05)", color: TEXT_MUTED, fontSize: 12 }}>{Number(t.nw || 0).toLocaleString()}</td>
+                          <td style={{ padding: "8px 10px", textAlign: "right", borderBottom: "1px solid rgba(255,255,255,.05)", fontWeight: 700, fontSize: 15, color: "#9ddb8f" }}>{Number(t.home || 0).toLocaleString()}</td>
+                          <td style={{ padding: "8px 10px", textAlign: "right", borderBottom: "1px solid rgba(255,255,255,.05)", color: "#c8b8f8" }}>{Number(t.train || 0).toLocaleString()}</td>
+                          <td style={{ padding: "8px 10px", textAlign: "right", borderBottom: "1px solid rgba(255,255,255,.05)", color: "#ffcc88" }}>{Number(t.away || 0).toLocaleString()}</td>
+                          <td style={{ padding: "8px 10px", textAlign: "right", borderBottom: "1px solid rgba(255,255,255,.05)" }}>
+                            <button style={{ ...BTN_STYLE, padding: "4px 8px", fontSize: 11, opacity: 0.7 }} onClick={() => void disbandTroop(code, Number(t.home || 0))}>Disband</button>
                           </td>
                         </tr>
                       );
@@ -3634,21 +3706,27 @@ function WarRoomView() {
                       />
                     </div>
                     <div style={{ fontWeight: 700 }}>Troops To Send...</div>
-                    <div style={{ display: "grid", gap: 6 }}>
-                      {troops.map((t) => (
-                        <div key={`atk-${t.troopCode}`} style={{ display: "grid", gridTemplateColumns: sendCols, gap: 8, alignItems: "center" }}>
-                          <div>{t.troopName}</div>
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            pattern="[0-9]*"
-                            value={sentTroops[t.troopCode] === undefined ? "" : String(sentTroops[t.troopCode])}
-                            onChange={(e) => updateSent(t.troopCode, e.target.value, Number(t.home || 0))}
-                            style={INPUT_STYLE}
-                          />
-                          <div style={{ textAlign: isMobile ? "left" : "right" }}>/ {Number(t.home || 0).toLocaleString()}</div>
-                        </div>
-                      ))}
+                    <div style={{ display: "grid", gap: 4 }}>
+                      {troops.map((t) => {
+                        const atkMeta = TROOP_META[String(t.troopCode || "")];
+                        return (
+                          <div key={`atk-${t.troopCode}`} style={{ display: "grid", gridTemplateColumns: sendCols, gap: 8, alignItems: "center", background: atkMeta?.tint || "transparent", borderRadius: 4, padding: "4px 8px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              {atkMeta && <span style={{ fontSize: 10, fontWeight: 800, background: "rgba(0,0,0,.35)", borderRadius: 3, padding: "1px 4px", letterSpacing: 1 }}>{atkMeta.sigil}</span>}
+                              <span>{t.troopName}</span>
+                            </div>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              value={sentTroops[t.troopCode] === undefined ? "" : String(sentTroops[t.troopCode])}
+                              onChange={(e) => updateSent(t.troopCode, e.target.value, Number(t.home || 0))}
+                              style={INPUT_STYLE}
+                            />
+                            <div style={{ textAlign: isMobile ? "left" : "right", color: Number(t.home || 0) === 0 ? TEXT_MUTED : TEXT_MAIN }}>/ {Number(t.home || 0).toLocaleString()}</div>
+                          </div>
+                        );
+                      })}
                     </div>
                     <div style={{ color: TEXT_MUTED, fontSize: 13 }}>Total AP sent: <strong style={{ color: ACCENT }}>{Number(attackApTotal || 0).toLocaleString()}</strong></div>
                     <button type="submit" style={BTN_STYLE}>Send Attack</button>
