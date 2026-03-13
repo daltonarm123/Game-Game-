@@ -6390,6 +6390,8 @@ function RankingsView() {
     return { width: W, height: H, padL, padR, plotted, linePath, areaPath, yTicks };
   }, [chartItems]);
 
+  const isMobileRank = typeof window !== "undefined" && window.innerWidth < 700;
+
   const TH: React.CSSProperties = {
     padding: "9px 12px", textAlign: "left", color: ACCENT, fontSize: 11, fontWeight: 700,
     letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap",
@@ -6482,7 +6484,7 @@ function RankingsView() {
           <>
             {/* ── Top 3 Podium ── */}
             {showPodium && podiumItems.length === 3 && (
-              <div style={{ display: "flex", gap: 10, marginBottom: 24, alignItems: "flex-end", justifyContent: "center", flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 10, marginBottom: 24, alignItems: isMobileRank ? "stretch" : "flex-end", justifyContent: "center", flexWrap: "wrap" }}>
                 {/* 2nd place */}
                 {(() => {
                   const a = podiumItems[1];
@@ -6582,8 +6584,44 @@ function RankingsView() {
               {showPodium && podiumItems.length === 3 ? <span style={{ marginLeft: 6, opacity: .7 }}>(top 3 shown above)</span> : null}
             </div>
 
-            {/* ── Kingdoms Table ── */}
+            {/* ── Kingdoms Table / Mobile List ── */}
             {tab === "kingdoms" ? (
+              isMobileRank ? (
+                /* Mobile: stacked rows */
+                <div style={{ display: "grid", gap: 6 }}>
+                  {tableItems.map((k: any, i: number) => {
+                    const rank = showPodium ? i + 4 : page * PAGE_SIZE + i + 1;
+                    const tag = String(k.allianceTag || k.alliance_tag || "").trim();
+                    const isMe = k.name === myKingdom;
+                    return (
+                      <div key={k.id} style={{ background: isMe ? "rgba(216,176,117,.12)" : "rgba(255,255,255,.03)", border: isMe ? "1px solid rgba(216,176,117,.3)" : "1px solid rgba(255,255,255,.06)", borderRadius: 8, padding: "10px 12px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                          <span style={{ fontSize: 15, minWidth: 26, fontVariantNumeric: "tabular-nums", color: rank <= 3 ? rankColor(rank) : TEXT_MUTED, fontWeight: rank <= 3 ? 700 : 400 }}>
+                            {rankMedal(rank) || `#${rank}`}
+                          </span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            {tag ? <span style={{ background: "rgba(216,176,117,.15)", color: ACCENT, padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700, marginRight: 5 }}>[{tag}]</span> : null}
+                            <span style={{ fontWeight: isMe ? 700 : 500, color: isMe ? ACCENT : TEXT_MAIN, fontSize: 14, wordBreak: "break-word" }}>{k.name}</span>
+                            {isMe ? <span style={{ fontSize: 11, color: ACCENT, opacity: .7, marginLeft: 5 }}>(you)</span> : null}
+                          </div>
+                          <span style={{ fontSize: 13, fontVariantNumeric: "tabular-nums", color: rank <= 3 ? rankColor(rank) : TEXT_MAIN, fontWeight: rank <= 3 ? 700 : 400, whiteSpace: "nowrap" }}>
+                            {Number(k.networth || 0).toLocaleString()} NW
+                          </span>
+                        </div>
+                        {!isMe ? (
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button title={premiumActive ? "NW Chart" : "Premium required"} disabled={!premiumActive} onClick={() => { const t = String(k.name || ""); setChartKingdom(t); void loadChart(t, chartWindow); }} style={{ ...BTN_STYLE, flex: 1, padding: "5px 0", fontSize: 13, opacity: premiumActive ? 1 : 0.4 }}>📊</button>
+                            <button title="Spy" onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "guildhall" })); }} style={{ ...BTN_STYLE, flex: 1, padding: "5px 0", fontSize: 13 }}>🕵️</button>
+                            <button title="Attack" onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "attack-kingdom" })); }} style={{ ...BTN_STYLE, flex: 1, padding: "5px 0", fontSize: 13 }}>⚔️</button>
+                            <button title="Pigeon" onClick={() => { localStorage.setItem("gg:prefill-compose-to", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "pigeons" })); }} style={{ ...BTN_STYLE, flex: 1, padding: "5px 0", fontSize: 13 }}>🕊️</button>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+              /* Desktop: table */
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
@@ -6646,6 +6684,7 @@ function RankingsView() {
                   </tbody>
                 </table>
               </div>
+              )
             ) : (
               /* ── Alliances Table ── */
               <div style={{ overflowX: "auto" }}>
