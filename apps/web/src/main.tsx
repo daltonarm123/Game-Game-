@@ -298,6 +298,7 @@ function OverviewView() {
   const [seasonRemainingSec, setSeasonRemainingSec] = useState(0);
   const [taxBusy, setTaxBusy] = useState(false);
   const [shieldBusy, setShieldBusy] = useState(false);
+  const [vacationBusy, setVacationBusy] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
   const [cancelBuildId, setCancelBuildId] = useState<number | null>(null);
   const [cancelTrainId, setCancelTrainId] = useState<number | null>(null);
@@ -377,6 +378,7 @@ function OverviewView() {
   const seasonHours = Math.floor((seasonRemaining % 86400) / 3600);
   const seasonLabel = String(season?.name || "Spring");
   const shield = details?.shield || war?.shield;
+  const vacation = war?.vacation;
   const daysPlayed = Math.max(1, Math.floor((Date.now() - new Date(String(k?.created_at || Date.now())).getTime()) / 86400000));
   const rankNum = Number(war?.kingdom?.rank || 0);
   const rankTitle = rankNum <= 3 ? "Prince" : rankNum <= 10 ? "Duke" : rankNum <= 25 ? "Count" : "Lord";
@@ -451,6 +453,46 @@ function OverviewView() {
       setStatusMsg(`Shield cancel failed: ${String(e?.message || e)}`);
     } finally {
       setShieldBusy(false);
+    }
+  }
+
+  async function startVacation() {
+    if (!window.confirm("Enter vacation mode? You will be protected for up to 14 days but cannot attack or be attacked. A 7-day cooldown applies after you return.")) return;
+    setVacationBusy(true);
+    setStatusMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/vacation/start`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setStatusMsg("Vacation mode activated. Your kingdom is protected for up to 14 days.");
+      await load();
+    } catch (e: any) {
+      setStatusMsg(`Vacation failed: ${String(e?.message || e)}`);
+    } finally {
+      setVacationBusy(false);
+    }
+  }
+
+  async function endVacation() {
+    if (!window.confirm("End vacation early? A 7-day cooldown will start before you can use vacation again.")) return;
+    setVacationBusy(true);
+    setStatusMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/vacation/end`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setStatusMsg("Vacation ended. 7-day cooldown started before next vacation.");
+      await load();
+    } catch (e: any) {
+      setStatusMsg(`End vacation failed: ${String(e?.message || e)}`);
+    } finally {
+      setVacationBusy(false);
     }
   }
 
@@ -574,15 +616,79 @@ function OverviewView() {
           </div>
 
           <div style={CARD}>
+            <SectionHeader style={{ marginTop: 0 }}>🏖 Vacation Mode</SectionHeader>
+            <div style={{ fontSize: 14, marginBottom: 8 }}>
+              {vacation?.onVacation && (
+                <span style={{ color: "#a8e6a3", fontWeight: 700 }}>
+                  ✓ On vacation — protected for {formatDuration(Number(vacation?.remainingSeconds || 0))} more
+                </span>
+              )}
+              {!vacation?.onVacation && vacation?.inCooldown && (
+                <span style={{ color: "#ffab9c" }}>
+                  🔄 Cooldown — available in {formatDuration(Number(vacation?.cooldownRemainingSeconds || 0))}
+                </span>
+              )}
+              {!vacation?.onVacation && !vacation?.inCooldown && (
+                <span style={{ color: TEXT_MUTED }}>Not on vacation — kingdom is active</span>
+              )}
+            </div>
+            <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 8 }}>
+              Vacation protects your kingdom for up to 14 days. No attacks in or out. 7-day cooldown applies after returning. Troops must be home to enter.
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {!vacation?.onVacation && !vacation?.inCooldown && (
+                <button
+                  style={{ ...BTN_STYLE, fontSize: 13, padding: "7px 14px" }}
+                  disabled={vacationBusy}
+                  onClick={() => void startVacation()}
+                >
+                  {vacationBusy ? "..." : "🏖 Enter Vacation"}
+                </button>
+              )}
+              {vacation?.onVacation && (
+                <button
+                  style={{ ...BTN_STYLE, fontSize: 13, padding: "7px 14px", borderColor: "rgba(255,120,120,.5)", background: "rgba(180,50,50,.25)" }}
+                  disabled={vacationBusy}
+                  onClick={() => void endVacation()}
+                >
+                  {vacationBusy ? "..." : "End Vacation Early"}
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div style={CARD}>
             <SectionHeader style={{ marginTop: 0 }}>💸 Tax Rate</SectionHeader>
-            <div style={{ fontSize: 13, color: TEXT_MUTED, marginBottom: 8 }}>
-              {taxRate <= 24 ? `Low tax — +${(25 - taxRate) * 50}/hr peasants arriving` : taxRate > 27 ? `High tax — −${(taxRate - 27) * 60}/hr peasants leaving!` : "Balanced — stable population (25–27%)"}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 24, fontWeight: 800, color: taxRate > 27 ? "#ffab9c" : taxRate < 24 ? "#9ddb8f" : TEXT_MAIN, fontVariantNumeric: "tabular-nums" }}>{taxRate}%</span>
-              <button disabled={taxBusy || taxRate >= 40} onClick={() => void updateTax(taxRate + 1)} style={{ ...BTN_STYLE, padding: "5px 14px", fontSize: 16 }}>+</button>
-              <button disabled={taxBusy || taxRate <= 0} onClick={() => void updateTax(taxRate - 1)} style={{ ...BTN_STYLE, padding: "5px 14px", fontSize: 16 }}>−</button>
-            </div>
+            {(() => {
+              // Laffer-curve gold multiplier (matches server shared/index.ts taxGoldMultiplier)
+              const goldMult = taxRate <= 25
+                ? 0.40 + (taxRate / 25) * 0.60
+                : (() => { const t = (taxRate - 25) / 15; return Math.min(2.0, Math.max(1.0, 1.0 + t * 0.60 - t * t * 0.18)); })();
+              const wellbeing = taxRate <= 10 ? "Beloved — peasants flock to you"
+                : taxRate <= 20 ? "Popular — steady growth"
+                : taxRate <= 24 ? "Favorable — slow growth"
+                : taxRate <= 27 ? "Neutral — stable population"
+                : taxRate <= 32 ? "Strained — slow exodus"
+                : taxRate <= 36 ? "Unhappy — notable exodus"
+                : "Oppressive — heavy desertion";
+              const peasantDelta = taxRate <= 24 ? `+${(25 - taxRate) * 50}/hr` : taxRate > 27 ? `−${(taxRate - 27) * 60}/hr` : "stable";
+              const wellbeingColor = taxRate <= 24 ? "#9ddb8f" : taxRate > 32 ? "#ffab9c" : TEXT_MUTED;
+              return (
+                <>
+                  <div style={{ fontSize: 13, color: wellbeingColor, marginBottom: 6 }}>{wellbeing}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                    <span style={{ fontSize: 24, fontWeight: 800, color: taxRate > 27 ? "#ffab9c" : taxRate <= 24 ? "#9ddb8f" : TEXT_MAIN, fontVariantNumeric: "tabular-nums" }}>{taxRate}%</span>
+                    <button disabled={taxBusy || taxRate >= 40} onClick={() => void updateTax(taxRate + 1)} style={{ ...BTN_STYLE, padding: "5px 14px", fontSize: 16 }}>+</button>
+                    <button disabled={taxBusy || taxRate <= 0} onClick={() => void updateTax(taxRate - 1)} style={{ ...BTN_STYLE, padding: "5px 14px", fontSize: 16 }}>−</button>
+                  </div>
+                  <div style={{ display: "flex", gap: 16, fontSize: 12, color: TEXT_MUTED, flexWrap: "wrap" }}>
+                    <span>Gold: <strong style={{ color: ACCENT }}>{goldMult.toFixed(2)}×</strong></span>
+                    <span>Peasants: <strong style={{ color: taxRate <= 24 ? "#9ddb8f" : taxRate > 27 ? "#ffab9c" : TEXT_MAIN }}>{peasantDelta}</strong></span>
+                    <span style={{ color: TEXT_MUTED, fontSize: 11, fontStyle: "italic" }}>Peak gold ~35%</span>
+                  </div>
+                </>
+              );
+            })()}
           </div>
 
           <div style={CARD}>
@@ -3140,6 +3246,7 @@ function WarRoomView() {
   const [sentTroops, setSentTroops] = useState<Record<string, number>>({});
   const [targetHints, setTargetHints] = useState<Array<string>>([]);
   const [reports, setReports] = useState<Array<any>>([]);
+  const [warAttackCooldowns, setWarAttackCooldowns] = useState<Record<string, number>>({});
   const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
 
   useEffect(() => {
@@ -3160,6 +3267,16 @@ function WarRoomView() {
       const rr = await fetch(`${API_BASE}/api/war-room/reports/${encodeURIComponent(kingdom)}?limit=12`, { headers: authHeaders() });
       const rj = await rr.json();
       if (rr.ok && rj?.ok) setReports(Array.isArray(rj.items) ? rj.items : []);
+      // Load attack cooldowns so the attack form can show them
+      fetch(`${API_BASE}/api/war-room/${encodeURIComponent(kingdom)}/attack-cooldowns`, { headers: authHeaders() })
+        .then((cr) => cr.json())
+        .then((cj) => {
+          if (!cj?.ok) return;
+          const map: Record<string, number> = {};
+          for (const cd of (cj.cooldowns || [])) map[String(cd.defenderName || "").toLowerCase()] = Number(cd.secondsRemaining || 0);
+          setWarAttackCooldowns(map);
+        })
+        .catch(() => {});
     } catch (e: any) {
       setError(String(e?.message || e));
       if (!background) { setData(null); setReports([]); }
@@ -3729,6 +3846,17 @@ function WarRoomView() {
                       })}
                     </div>
                     <div style={{ color: TEXT_MUTED, fontSize: 13 }}>Total AP sent: <strong style={{ color: ACCENT }}>{Number(attackApTotal || 0).toLocaleString()}</strong></div>
+                    {(() => {
+                      const cdSecs = warAttackCooldowns[String(attackTarget || "").toLowerCase().trim()] || 0;
+                      if (!cdSecs || !attackTarget.trim()) return null;
+                      const hrs = Math.floor(cdSecs / 3600);
+                      const mins = Math.ceil((cdSecs % 3600) / 60);
+                      return (
+                        <div style={{ color: "#ffab9c", fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+                          ⏳ <strong>Attack on cooldown</strong> — you can attack again in {hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`}
+                        </div>
+                      );
+                    })()}
                     <button type="submit" style={BTN_STYLE}>Send Attack</button>
                   </form>
                 ) : null}
@@ -6285,6 +6413,8 @@ function RankingsView() {
   const [chartLoading, setChartLoading] = useState(false);
   const [chartError, setChartError] = useState("");
   const [hoveredRow, setHoveredRow] = useState<string | number | null>(null);
+  // attack cooldowns: map of defenderName (lowercase) → secondsRemaining
+  const [attackCooldowns, setAttackCooldowns] = useState<Record<string, number>>({});
   const PAGE_SIZE = 20;
   const pageWindow = paginationWindow(total, page, PAGE_SIZE);
 
@@ -6328,6 +6458,25 @@ function RankingsView() {
     void load(page, search, tab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, page]);
+
+  // Load attack cooldowns for the logged-in player so we can show them in the rankings
+  useEffect(() => {
+    if (!myKingdom || !authToken) return;
+    fetch(`${API_BASE}/api/war-room/${encodeURIComponent(myKingdom)}/attack-cooldowns`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (!j?.ok) return;
+        const map: Record<string, number> = {};
+        for (const c of (j.cooldowns || [])) {
+          map[String(c.defenderName || "").toLowerCase()] = Number(c.secondsRemaining || 0);
+        }
+        setAttackCooldowns(map);
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myKingdom, authToken]);
 
   // Auto-refresh every 30s so rankings stay current between ticks
   useEffect(() => {
@@ -6603,19 +6752,33 @@ function RankingsView() {
                             {tag ? <span style={{ background: "rgba(216,176,117,.15)", color: ACCENT, padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700, marginRight: 5 }}>[{tag}]</span> : null}
                             <span style={{ fontWeight: isMe ? 700 : 500, color: isMe ? ACCENT : TEXT_MAIN, fontSize: 14, wordBreak: "break-word" }}>{k.name}</span>
                             {isMe ? <span style={{ fontSize: 11, color: ACCENT, opacity: .7, marginLeft: 5 }}>(you)</span> : null}
+                            {k.onVacation ? <span title="On vacation" style={{ fontSize: 10, background: "rgba(100,180,255,.18)", color: "#88ccff", borderRadius: 4, padding: "1px 5px", fontWeight: 700, marginLeft: 4 }}>🏖</span> : null}
                           </div>
                           <span style={{ fontSize: 13, fontVariantNumeric: "tabular-nums", color: rank <= 3 ? rankColor(rank) : TEXT_MAIN, fontWeight: rank <= 3 ? 700 : 400, whiteSpace: "nowrap" }}>
                             {Number(k.networth || 0).toLocaleString()} NW
                           </span>
                         </div>
-                        {!isMe ? (
-                          <div style={{ display: "flex", gap: 6 }}>
-                            <button title={premiumActive ? "NW Chart" : "Premium required"} disabled={!premiumActive} onClick={() => { const t = String(k.name || ""); setChartKingdom(t); void loadChart(t, chartWindow); }} style={{ ...BTN_STYLE, flex: 1, padding: "5px 0", fontSize: 13, opacity: premiumActive ? 1 : 0.4 }}>📊</button>
-                            <button title="Spy" onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "guildhall" })); }} style={{ ...BTN_STYLE, flex: 1, padding: "5px 0", fontSize: 13 }}>🕵️</button>
-                            <button title="Attack" onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "attack-kingdom" })); }} style={{ ...BTN_STYLE, flex: 1, padding: "5px 0", fontSize: 13 }}>⚔️</button>
-                            <button title="Pigeon" onClick={() => { localStorage.setItem("gg:prefill-compose-to", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "pigeons" })); }} style={{ ...BTN_STYLE, flex: 1, padding: "5px 0", fontSize: 13 }}>🕊️</button>
-                          </div>
-                        ) : null}
+                        {!isMe ? (() => {
+                          const cdSecs = attackCooldowns[String(k.name || "").toLowerCase()] || 0;
+                          const onCooldown = cdSecs > 0;
+                          const cdHrs = Math.floor(cdSecs / 3600);
+                          const cdMins = Math.ceil((cdSecs % 3600) / 60);
+                          const cdLabel = cdHrs > 0 ? `${cdHrs}h ${cdMins}m` : `${cdMins}m`;
+                          return (
+                            <div style={{ display: "flex", gap: 6 }}>
+                              <button title={premiumActive ? "NW Chart" : "Premium required"} disabled={!premiumActive} onClick={() => { const t = String(k.name || ""); setChartKingdom(t); void loadChart(t, chartWindow); }} style={{ ...BTN_STYLE, flex: 1, padding: "5px 0", fontSize: 13, opacity: premiumActive ? 1 : 0.4 }}>📊</button>
+                              <button title="Spy" onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "guildhall" })); }} style={{ ...BTN_STYLE, flex: 1, padding: "5px 0", fontSize: 13 }}>🕵️</button>
+                              <button
+                                title={onCooldown ? `Cooldown: ${cdLabel}` : k.onVacation ? "On vacation" : "Attack"}
+                                onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "attack-kingdom" })); }}
+                                style={{ ...BTN_STYLE, flex: 1, padding: "5px 0", fontSize: 13, opacity: (onCooldown || k.onVacation) ? 0.5 : 1 }}
+                              >
+                                {onCooldown ? `⏳ ${cdLabel}` : "⚔️"}
+                              </button>
+                              <button title="Pigeon" onClick={() => { localStorage.setItem("gg:prefill-compose-to", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "pigeons" })); }} style={{ ...BTN_STYLE, flex: 1, padding: "5px 0", fontSize: 13 }}>🕊️</button>
+                            </div>
+                          );
+                        })() : null}
                       </div>
                     );
                   })}
@@ -6658,25 +6821,39 @@ function RankingsView() {
                               ) : null}
                               <span style={{ fontWeight: isMe ? 700 : 400, color: isMe ? ACCENT : TEXT_MAIN }}>{k.name}</span>
                               {isMe ? <span style={{ fontSize: 11, color: ACCENT, opacity: .7 }}>(you)</span> : null}
+                              {k.onVacation ? <span title="On vacation — cannot be attacked" style={{ fontSize: 10, background: "rgba(100,180,255,.18)", color: "#88ccff", borderRadius: 4, padding: "1px 6px", fontWeight: 700 }}>🏖 Vacation</span> : null}
                             </div>
                           </td>
                           <td style={{ ...TD, textAlign: "right", fontVariantNumeric: "tabular-nums", color: rank <= 3 ? rankColor(rank) : TEXT_MAIN, fontWeight: rank <= 3 ? 700 : 400 }}>
                             {Number(k.networth || 0).toLocaleString()}
                           </td>
                           <td style={{ ...TD, textAlign: "center" }}>
-                            {!isMe ? (
-                              <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
-                                <button
-                                  title={premiumActive ? "Networth chart" : "Premium required"}
-                                  disabled={!premiumActive}
-                                  onClick={() => { const t = String(k.name || ""); setChartKingdom(t); void loadChart(t, chartWindow); }}
-                                  style={{ ...BTN_STYLE, padding: "4px 9px", fontSize: 14, opacity: premiumActive ? 1 : 0.45, minWidth: 0 }}
-                                >📊</button>
-                                <button title="Spy" onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "guildhall" })); }} style={{ ...BTN_STYLE, padding: "4px 9px", fontSize: 14, minWidth: 0 }}>🕵️</button>
-                                <button title="Attack" onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "attack-kingdom" })); }} style={{ ...BTN_STYLE, padding: "4px 9px", fontSize: 14, minWidth: 0 }}>⚔️</button>
-                                <button title="Pigeon" onClick={() => { localStorage.setItem("gg:prefill-compose-to", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "pigeons" })); }} style={{ ...BTN_STYLE, padding: "4px 9px", fontSize: 14, minWidth: 0 }}>🕊️</button>
-                              </div>
-                            ) : null}
+                            {!isMe ? (() => {
+                              const cdSecs = attackCooldowns[String(k.name || "").toLowerCase()] || 0;
+                              const onCooldown = cdSecs > 0;
+                              const cdHrs = Math.floor(cdSecs / 3600);
+                              const cdMins = Math.ceil((cdSecs % 3600) / 60);
+                              const cdLabel = cdHrs > 0 ? `${cdHrs}h ${cdMins}m` : `${cdMins}m`;
+                              return (
+                                <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+                                  <button
+                                    title={premiumActive ? "Networth chart" : "Premium required"}
+                                    disabled={!premiumActive}
+                                    onClick={() => { const t = String(k.name || ""); setChartKingdom(t); void loadChart(t, chartWindow); }}
+                                    style={{ ...BTN_STYLE, padding: "4px 9px", fontSize: 14, opacity: premiumActive ? 1 : 0.45, minWidth: 0 }}
+                                  >📊</button>
+                                  <button title="Spy" onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "guildhall" })); }} style={{ ...BTN_STYLE, padding: "4px 9px", fontSize: 14, minWidth: 0 }}>🕵️</button>
+                                  <button
+                                    title={onCooldown ? `Attack cooldown: ${cdLabel} remaining` : k.onVacation ? "On vacation — cannot be attacked" : "Attack"}
+                                    onClick={() => { localStorage.setItem("gg:prefill-target", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "attack-kingdom" })); }}
+                                    style={{ ...BTN_STYLE, padding: "4px 9px", fontSize: 14, minWidth: 0, opacity: (onCooldown || k.onVacation) ? 0.5 : 1, position: "relative" }}
+                                  >
+                                    {onCooldown ? `⏳ ${cdLabel}` : "⚔️"}
+                                  </button>
+                                  <button title="Pigeon" onClick={() => { localStorage.setItem("gg:prefill-compose-to", k.name); window.dispatchEvent(new CustomEvent("gg:navigate", { detail: "pigeons" })); }} style={{ ...BTN_STYLE, padding: "4px 9px", fontSize: 14, minWidth: 0 }}>🕊️</button>
+                                </div>
+                              );
+                            })() : null}
                           </td>
                         </tr>
                       );
@@ -8089,10 +8266,154 @@ function HowToPlayView() {
   );
 }
 
+const DAILY_MODAL_KEY = "gg:daily-modal-date";
+
+function DailyLoginModal({ onClose, kingdom, isPremium }: { onClose: () => void; kingdom: string; isPremium: boolean }) {
+  const [phase, setPhase] = useState<"ad" | "bonus" | "claimed">(isPremium ? "bonus" : "ad");
+  const [countdown, setCountdown] = useState(15);
+  const [claiming, setClaiming] = useState(false);
+  const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (phase !== "ad") return;
+    if (countdown <= 0) return;
+    const t = setInterval(() => setCountdown((c) => c - 1), 1000);
+    return () => clearInterval(t);
+  }, [phase, countdown]);
+
+  async function claim() {
+    if (!kingdom) return;
+    setClaiming(true);
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/daily-bonus/claim`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setResult(j);
+      setPhase("claimed");
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
+      setClaiming(false);
+    }
+  }
+
+  const overlay: React.CSSProperties = {
+    position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", display: "flex",
+    alignItems: "center", justifyContent: "center", zIndex: 9999, padding: 16,
+  };
+  const box: React.CSSProperties = {
+    ...CARD, maxWidth: 480, width: "100%", position: "relative",
+    background: "linear-gradient(180deg, rgba(30,28,32,0.97), rgba(18,17,20,0.98))",
+  };
+
+  return (
+    <div style={overlay}>
+      <div style={box}>
+        {phase === "ad" && (
+          <>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 800, color: ACCENT, marginBottom: 10 }}>
+              Today's Message from Our Sponsors
+            </div>
+            <div style={{
+              background: "rgba(255,255,255,0.04)", border: "1px dashed rgba(216,176,117,.3)",
+              borderRadius: 8, minHeight: 120, display: "flex", flexDirection: "column",
+              alignItems: "center", justifyContent: "center", padding: 20, marginBottom: 14, gap: 8,
+            }}>
+              <div style={{ fontSize: 32 }}>📣</div>
+              <div style={{ color: TEXT_MUTED, fontSize: 13, textAlign: "center" }}>
+                Advertisement — Support Crownforge by upgrading to Premium for an ad-free experience.
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ color: TEXT_MUTED, fontSize: 13 }}>
+                {countdown > 0 ? `Continue in ${countdown}s…` : ""}
+              </div>
+              <button
+                disabled={countdown > 0}
+                onClick={() => setPhase("bonus")}
+                style={{ ...BTN_STYLE, opacity: countdown > 0 ? 0.4 : 1, cursor: countdown > 0 ? "not-allowed" : "pointer" }}
+              >
+                Continue →
+              </button>
+            </div>
+          </>
+        )}
+
+        {phase === "bonus" && (
+          <>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 22, fontWeight: 800, color: "#fff7ec", marginBottom: 4 }}>
+              🎁 Daily Bonus
+            </div>
+            {isPremium && (
+              <div style={{ color: "#a8e6a3", fontSize: 13, marginBottom: 10 }}>
+                ✨ Premium member — no ads + 50% bonus rewards!
+              </div>
+            )}
+            <div style={{ color: TEXT_MUTED, fontSize: 14, marginBottom: 16 }}>
+              Claim your daily login reward. Consecutive days increase your rewards!
+            </div>
+            {error && <div style={{ color: "#e87070", marginBottom: 10, fontSize: 14 }}>{error}</div>}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={onClose} style={{ ...BTN_STYLE, background: "rgba(255,255,255,0.06)" }}>
+                Skip
+              </button>
+              <button onClick={claim} disabled={claiming} style={{ ...BTN_STYLE }}>
+                {claiming ? "Claiming…" : "Claim Bonus"}
+              </button>
+            </div>
+          </>
+        )}
+
+        {phase === "claimed" && result && (
+          <>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 22, fontWeight: 800, color: "#a8e6a3", marginBottom: 4 }}>
+              ✅ Bonus Claimed!
+            </div>
+            {result.premiumBonus && (
+              <div style={{ color: "#a8e6a3", fontSize: 13, marginBottom: 8 }}>✨ Premium +50% applied</div>
+            )}
+            <div style={{ color: TEXT_MUTED, fontSize: 13, marginBottom: 12 }}>
+              Day streak: <strong style={{ color: TEXT_MAIN }}>{result.streak}</strong>
+            </div>
+            {result.claimed && result.rewards && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 12px", fontSize: 14, marginBottom: 16 }}>
+                {[
+                  ["💰 Gold", result.rewards.gold],
+                  ["🌾 Food", result.rewards.food],
+                  ["🪵 Wood", result.rewards.wood],
+                  ["🪨 Stone", result.rewards.stone],
+                  ["🐴 Horses", result.rewards.horses],
+                ].map(([label, val]) => (
+                  <div key={String(label)} style={{ display: "flex", justifyContent: "space-between", padding: "4px 8px", background: "rgba(255,255,255,0.04)", borderRadius: 6 }}>
+                    <span style={{ color: TEXT_MUTED }}>{label}</span>
+                    <span style={{ color: ACCENT, fontWeight: 700 }}>+{Number(val).toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {!result.claimed && (
+              <div style={{ color: TEXT_MUTED, fontSize: 14, marginBottom: 16 }}>You already claimed today's bonus.</div>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button onClick={onClose} style={{ ...BTN_STYLE }}>Close</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [activeId, setActiveId] = useState("overview");
   const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
   const [navOpen, setNavOpen] = useState(() => (typeof window !== "undefined" ? window.innerWidth >= 980 : true));
+  const [showDailyModal, setShowDailyModal] = useState(false);
   const [auth, setAuth] = useState<AuthState | null>(() => {
     try {
       const raw = localStorage.getItem(AUTH_STORAGE_KEY);
@@ -8166,6 +8487,12 @@ function App() {
         setAuth(nextAuth);
         localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(nextAuth));
         if (j?.kingdom?.name) localStorage.setItem(KINGDOM_STORAGE_KEY, String(j.kingdom.name));
+        // Show daily modal once per calendar day
+        const today = new Date().toDateString();
+        if (localStorage.getItem(DAILY_MODAL_KEY) !== today) {
+          localStorage.setItem(DAILY_MODAL_KEY, today);
+          if (!cancelled) setShowDailyModal(true);
+        }
       } catch {
         // Network error — server may be cold-starting or temporarily unreachable.
         // Do NOT clear auth here; the token may still be valid.
@@ -8188,8 +8515,19 @@ function App() {
     return null;
   }
 
+  const isPremium = Boolean(auth?.user?.premium?.active);
+  const kingdomName = auth?.kingdom?.name || localStorage.getItem(KINGDOM_STORAGE_KEY) || "";
+
   return (
-    <main
+    <>
+      {showDailyModal && (
+        <DailyLoginModal
+          isPremium={isPremium}
+          kingdom={kingdomName}
+          onClose={() => setShowDailyModal(false)}
+        />
+      )}
+      <main
       style={{
         minHeight: "100vh",
         color: TEXT_MAIN,
@@ -8372,7 +8710,8 @@ function App() {
         <span>Mode: {BUILD_MODE}</span>
         <span>Fast Demo: {FAST_FLAG}</span>
       </footer>
-    </main>
+      </main>
+    </>
   );
 }
 

@@ -24,6 +24,7 @@ const MAX_CATCHUP_TICKS = Math.max(1, Number(process.env.MAX_CATCHUP_TICKS || 24
 const SEASON_LENGTH_SECONDS = Math.max(30, Number(process.env.SEASON_LENGTH_SECONDS || (LOCAL_DEMO_FAST ? 60 : 7 * 24 * 3600)));
 const TAX_MIN = 0;
 const TAX_MAX = 40;
+const VACATION_COOLDOWN_SECONDS = Math.max(3600, Number(process.env.VACATION_COOLDOWN_SECONDS || 7 * 24 * 3600));
 
 type SeasonState = {
   index: number;
@@ -328,6 +329,22 @@ async function processShieldStateTick(): Promise<number> {
       `,
     );
     return Number(pendingToActive.rowCount || 0) + Number(activeToCooldown.rowCount || 0) + Number(cooldownToNone.rowCount || 0);
+  });
+}
+
+async function processVacationTick(): Promise<number> {
+  return withTx(async (c) => {
+    const expired = await c.query(
+      `UPDATE kingdoms
+       SET vacation_mode=FALSE,
+           vacation_ends_at=NULL,
+           vacation_cooldown_ends_at=now()+($1*INTERVAL'1 second')
+       WHERE vacation_mode=TRUE
+         AND vacation_ends_at IS NOT NULL
+         AND vacation_ends_at <= now()`,
+      [VACATION_COOLDOWN_SECONDS],
+    );
+    return Number(expired.rowCount || 0);
   });
 }
 
@@ -720,11 +737,12 @@ async function runTick() {
   const research = await processResearchQueueTick();
   const settlementBuilds = await processSettlementBuildQueueTick();
   const shieldTransitions = await processShieldStateTick();
+  const vacationExpiries = await processVacationTick();
   const returns = await processTroopReturnsTick();
   const economies = await processEconomyTick(season);
-  if (builds > 0 || trains > 0 || research > 0 || settlementBuilds > 0 || shieldTransitions > 0 || returns > 0 || economies > 0) {
+  if (builds > 0 || trains > 0 || research > 0 || settlementBuilds > 0 || shieldTransitions > 0 || vacationExpiries > 0 || returns > 0 || economies > 0) {
     console.log(
-      `[tick] ${new Date().toISOString()} season=${season.code}(${season.remainingSeconds}s) completed builds=${builds}, trainings=${trains}, research=${research}, settlement_builds=${settlementBuilds}, shields=${shieldTransitions}, returns=${returns}, economy=${economies}`,
+      `[tick] ${new Date().toISOString()} season=${season.code}(${season.remainingSeconds}s) completed builds=${builds}, trainings=${trains}, research=${research}, settlement_builds=${settlementBuilds}, shields=${shieldTransitions}, vacations=${vacationExpiries}, returns=${returns}, economy=${economies}`,
     );
   }
   return {
@@ -735,6 +753,7 @@ async function runTick() {
     research,
     settlementBuilds,
     shieldTransitions,
+    vacationExpiries,
     returns,
     economies,
     durationMs: Date.now() - startedAt,

@@ -581,6 +581,7 @@ export async function ensureSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS train_queue_kingdom_due_idx ON train_queue(kingdom_id, status, completes_at);
     CREATE INDEX IF NOT EXISTS attack_reports_defender_idx ON attack_reports(defender_kingdom_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS attack_reports_attacker_idx ON attack_reports(attacker_kingdom_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS attack_reports_pair_idx ON attack_reports(attacker_kingdom_id, defender_kingdom_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS troop_movements_due_idx ON troop_movements(status, returns_at);
     CREATE INDEX IF NOT EXISTS troop_movements_owner_idx ON troop_movements(owner_kingdom_id, status, returns_at DESC);
     CREATE INDEX IF NOT EXISTS troop_movements_owner_due_idx ON troop_movements(owner_kingdom_id, status, returns_at);
@@ -928,6 +929,14 @@ export async function ensureSchema(): Promise<void> {
       )
   `);
   await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS registration_ip TEXT`);
+
+  // Vacation mode: protect inactive players (max 14 days, 7-day cooldown after)
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS vacation_mode BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS vacation_started_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS vacation_ends_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS vacation_cooldown_ends_at TIMESTAMPTZ`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS kingdoms_vacation_idx ON kingdoms(vacation_mode, vacation_ends_at) WHERE vacation_mode = TRUE`);
+
   // Reduce elite upkeep — they're hard to earn, shouldn't punish players who farm them
   await pool.query(`UPDATE troop_types SET upkeep_food=18, upkeep_gold=7 WHERE code='elites'`);
   // Diplomats: make trainable, cap per Embassy, passive gold generation

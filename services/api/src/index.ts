@@ -180,6 +180,8 @@ const FAST_BUILD_SECONDS = Math.max(1, Number(process.env.FAST_BUILD_SECONDS || 
 const FAST_TRAIN_SECONDS = Math.max(1, Number(process.env.FAST_TRAIN_SECONDS || 30));
 const FAST_RESEARCH_SECONDS = Math.max(5, Number(process.env.FAST_RESEARCH_SECONDS || 15));
 const SHIELD_CANCEL_COOLDOWN_SECONDS = Math.max(60, Number(process.env.SHIELD_CANCEL_COOLDOWN_SECONDS || 24 * 3600));
+const VACATION_MAX_SECONDS = Math.max(3600, Number(process.env.VACATION_MAX_SECONDS || 14 * 24 * 3600)); // 14 days
+const VACATION_COOLDOWN_SECONDS = Math.max(3600, Number(process.env.VACATION_COOLDOWN_SECONDS || 7 * 24 * 3600)); // 7-day cooldown
 const ATTACK_RETURN_SECONDS = Math.max(
   1,
   Number(process.env.ATTACK_RETURN_SECONDS || (LOCAL_DEMO_FAST ? 20 : ATTACK_RETURN_MINUTES * 60)),
@@ -1225,6 +1227,50 @@ async function normalizeShieldStateTx(c: PoolClient, kingdomId: number) {
   }
 
   return row;
+}
+
+async function normalizeVacationTx(c: PoolClient, kingdomId: number) {
+  const q = await c.query(
+    `SELECT id, vacation_mode, vacation_starts_at, vacation_ends_at, vacation_cooldown_ends_at FROM kingdoms WHERE id=$1 FOR UPDATE`,
+    [kingdomId],
+  );
+  if (!q.rowCount) return null;
+  const row = q.rows[0];
+  const now = new Date();
+  const onVacation = Boolean(row.vacation_mode);
+  const vacationEndsAt = row.vacation_ends_at ? new Date(row.vacation_ends_at) : null;
+  const cooldownEndsAt = row.vacation_cooldown_ends_at ? new Date(row.vacation_cooldown_ends_at) : null;
+
+  if (onVacation && vacationEndsAt && vacationEndsAt.getTime() <= now.getTime()) {
+    // Auto-end expired vacation and start cooldown
+    await c.query(
+      `UPDATE kingdoms SET vacation_mode=FALSE, vacation_ends_at=NULL, vacation_cooldown_ends_at=now()+($2*INTERVAL'1 second') WHERE id=$1`,
+      [kingdomId, VACATION_COOLDOWN_SECONDS],
+    );
+    row.vacation_mode = false;
+    row.vacation_ends_at = null;
+    row.vacation_cooldown_ends_at = new Date(now.getTime() + VACATION_COOLDOWN_SECONDS * 1000).toISOString();
+  }
+  return row;
+}
+
+function vacationStateFromRow(row: any) {
+  const now = Date.now();
+  const onVacation = Boolean(row.vacation_mode);
+  const endsAt = row.vacation_ends_at ? new Date(row.vacation_ends_at) : null;
+  const cooldownEndsAt = row.vacation_cooldown_ends_at ? new Date(row.vacation_cooldown_ends_at) : null;
+  const inCooldown = !onVacation && cooldownEndsAt !== null && cooldownEndsAt.getTime() > now;
+  const remainingSeconds = onVacation && endsAt ? Math.max(0, Math.ceil((endsAt.getTime() - now) / 1000)) : 0;
+  const cooldownRemainingSeconds = inCooldown && cooldownEndsAt ? Math.max(0, Math.ceil((cooldownEndsAt.getTime() - now) / 1000)) : 0;
+  return {
+    onVacation,
+    inCooldown,
+    endsAt: endsAt ? endsAt.toISOString() : null,
+    cooldownEndsAt: cooldownEndsAt ? cooldownEndsAt.toISOString() : null,
+    remainingSeconds,
+    cooldownRemainingSeconds,
+    maxSeconds: VACATION_MAX_SECONDS,
+  };
 }
 
 function sanitizeAllianceSlug(input: string) {
@@ -2926,6 +2972,78 @@ app.post("/api/kingdom/:name/shield/cancel", requireAuth, async (req, res) => {
   }
 });
 
+// ── Vacation Mode ─────────────────────────────────────────────────────────────
+app.post("/api/kingdom/:name/vacation/start", requireAuth, async (req, res) => {
+  const name = String(req.params.name || "").trim();
+  if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  const session = (req as any).authSession;
+  try {
+    const out = await withTx(async (c) => {
+      const kq = await c.query(
+        `SELECT id, user_id, vacation_mode, vacation_ends_at, vacation_cooldown_ends_at FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        [name],
+      );
+      if (!kq.rowCount) throw new Error("kingdom not found");
+      const k = kq.rows[0];
+      if (String(k.user_id) !== String(session.user_id)) throw new Error("cannot modify another kingdom");
+      await normalizeVacationTx(c, Number(k.id));
+      const refreshed = await c.query(`SELECT vacation_mode, vacation_cooldown_ends_at FROM kingdoms WHERE id=$1`, [k.id]);
+      const rf = refreshed.rows[0];
+      if (Boolean(rf.vacation_mode)) throw new Error("Already on vacation.");
+      if (rf.vacation_cooldown_ends_at && new Date(rf.vacation_cooldown_ends_at) > new Date()) {
+        const secs = Math.ceil((new Date(rf.vacation_cooldown_ends_at).getTime() - Date.now()) / 1000);
+        const hrs = Math.floor(secs / 3600);
+        const mins = Math.ceil((secs % 3600) / 60);
+        throw new Error(`Vacation cooldown active — available in ${hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`}.`);
+      }
+      // Block if troops are currently away (prevent using vacation to dodge retaliation)
+      const awayQ = await c.query(
+        `SELECT COUNT(*) AS cnt FROM troop_movements WHERE owner_kingdom_id=$1 AND status='out' AND returns_at > now()`,
+        [k.id],
+      );
+      if (Number(awayQ.rows[0]?.cnt || 0) > 0) {
+        throw new Error("Cannot enter vacation mode while troops are away. Wait for them to return.");
+      }
+      const up = await c.query(
+        `UPDATE kingdoms SET vacation_mode=TRUE, vacation_started_at=now(), vacation_ends_at=now()+($2*INTERVAL'1 second'), vacation_cooldown_ends_at=NULL WHERE id=$1
+         RETURNING vacation_mode, vacation_started_at, vacation_ends_at, vacation_cooldown_ends_at`,
+        [k.id, VACATION_MAX_SECONDS],
+      );
+      return up.rows[0];
+    });
+    return res.json({ ok: true, vacation: vacationStateFromRow(out), maxDays: Math.floor(VACATION_MAX_SECONDS / 86400) });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/kingdom/:name/vacation/end", requireAuth, async (req, res) => {
+  const name = String(req.params.name || "").trim();
+  if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  const session = (req as any).authSession;
+  try {
+    const out = await withTx(async (c) => {
+      const kq = await c.query(
+        `SELECT id, user_id, vacation_mode FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        [name],
+      );
+      if (!kq.rowCount) throw new Error("kingdom not found");
+      const k = kq.rows[0];
+      if (String(k.user_id) !== String(session.user_id)) throw new Error("cannot modify another kingdom");
+      if (!Boolean(k.vacation_mode)) throw new Error("Not currently on vacation.");
+      const up = await c.query(
+        `UPDATE kingdoms SET vacation_mode=FALSE, vacation_ends_at=NULL, vacation_cooldown_ends_at=now()+($2*INTERVAL'1 second') WHERE id=$1
+         RETURNING vacation_mode, vacation_started_at, vacation_ends_at, vacation_cooldown_ends_at`,
+        [k.id, VACATION_COOLDOWN_SECONDS],
+      );
+      return up.rows[0];
+    });
+    return res.json({ ok: true, vacation: vacationStateFromRow(out), cooldownDays: Math.floor(VACATION_COOLDOWN_SECONDS / 86400) });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
   const attackerName = String(req.params.attacker || "").trim();
   const parsed = attackBody.safeParse(req.body);
@@ -2963,15 +3081,30 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
       );
       if (sameAllianceQ.rowCount) throw new Error("cannot attack a member of your own alliance");
 
+      // Vacation mode blocks
+      await normalizeVacationTx(c, Number(atk.id));
+      await normalizeVacationTx(c, Number(def.id));
+      const atkVacRow = await c.query(`SELECT vacation_mode FROM kingdoms WHERE id=$1`, [atk.id]);
+      const defVacRow = await c.query(`SELECT vacation_mode FROM kingdoms WHERE id=$1`, [def.id]);
+      if (Boolean(atkVacRow.rows[0]?.vacation_mode)) throw new Error("You cannot attack while on vacation mode.");
+      if (Boolean(defVacRow.rows[0]?.vacation_mode)) throw new Error("This kingdom is on vacation and cannot be attacked.");
+
       // Anti-cheat: 24-hour cooldown per attacker-defender pair (1 hit then wait)
-      const recentAttackCount = await c.query(
-        `SELECT COUNT(*) AS cnt FROM attack_reports
+      const recentAttackRow = await c.query(
+        `SELECT created_at FROM attack_reports
          WHERE attacker_kingdom_id=$1 AND defender_kingdom_id=$2
-           AND created_at > now() - interval '24 hours'`,
+           AND created_at > now() - interval '24 hours'
+         ORDER BY created_at DESC LIMIT 1`,
         [atk.id, def.id],
       );
-      if (Number(recentAttackCount.rows[0]?.cnt || 0) >= 1) {
-        throw new Error("You have already attacked this kingdom in the last 24 hours. You must wait before attacking them again.");
+      if (recentAttackRow.rowCount && recentAttackRow.rowCount >= 1) {
+        const lastAttackAt = new Date(recentAttackRow.rows[0].created_at);
+        const availableAt = new Date(lastAttackAt.getTime() + 24 * 60 * 60 * 1000);
+        const secondsRemaining = Math.ceil((availableAt.getTime() - Date.now()) / 1000);
+        const hrs = Math.floor(secondsRemaining / 3600);
+        const mins = Math.ceil((secondsRemaining % 3600) / 60);
+        const timeMsg = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
+        throw new Error(`You have already attacked this kingdom in the last 24 hours. You can attack again in ${timeMsg}.`);
       }
 
       const atkShieldRow = await normalizeShieldStateTx(c, Number(atk.id));
@@ -3666,6 +3799,10 @@ app.post("/api/war-room/:attacker/spy", requireAuth, async (req, res) => {
       const def = d.rows[0];
       if (Number(atk.id) === Number(def.id)) throw new Error("cannot spy yourself");
 
+      await normalizeVacationTx(c, Number(atk.id));
+      const atkVacSpyRow = await c.query(`SELECT vacation_mode FROM kingdoms WHERE id=$1`, [atk.id]);
+      if (Boolean(atkVacSpyRow.rows[0]?.vacation_mode)) throw new Error("You cannot spy while on vacation mode.");
+
       const atkSpy = await c.query(
         `SELECT amount FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='spies' LIMIT 1`,
         [atk.id],
@@ -3867,7 +4004,7 @@ app.get("/api/war-room/:kingdom", requireAuth, async (req, res) => {
 
     const season = await getSeasonSnapshot();
     const k = await pool.query(
-      `SELECT id, name, land, food, gold, horses, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, created_at FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`,
+      `SELECT id, name, land, food, gold, horses, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, vacation_mode, vacation_started_at, vacation_ends_at, vacation_cooldown_ends_at, created_at FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`,
       [kingdom],
     );
     if (!k.rowCount) return res.status(404).json({ ok: false, error: "kingdom not found" });
@@ -3877,7 +4014,7 @@ app.get("/api/war-room/:kingdom", requireAuth, async (req, res) => {
       return 0;
     });
     const kr = await pool.query(
-      `SELECT id, name, land, food, gold, horses, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, created_at FROM kingdoms WHERE id=$1 LIMIT 1`,
+      `SELECT id, name, land, food, gold, horses, tax_rate, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at, vacation_mode, vacation_started_at, vacation_ends_at, vacation_cooldown_ends_at, created_at FROM kingdoms WHERE id=$1 LIMIT 1`,
       [row.id],
     );
     row = kr.rows[0] || row;
@@ -4117,6 +4254,7 @@ app.get("/api/war-room/:kingdom", requireAuth, async (req, res) => {
       },
       season,
       shield: shieldStateFromRow(row),
+      vacation: vacationStateFromRow(row),
       explore: {
         landCap: EXPLORE_LAND_CAP,
         remaining: Math.max(0, EXPLORE_LAND_CAP - Number(row.land || 0)),
@@ -4126,6 +4264,37 @@ app.get("/api/war-room/:kingdom", requireAuth, async (req, res) => {
       tickIntervalSeconds: LOCAL_DEMO_FAST ? 5 : 300,
       actions: ["Train Troops", "Attack Kingdom", "Explore"],
     });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+// Returns kingdoms this attacker has hit in the last 24h, with time until cooldown expires
+app.get("/api/war-room/:attacker/attack-cooldowns", requireAuth, async (req, res) => {
+  const attackerName = String(req.params.attacker || "").trim();
+  if (!attackerName) return res.status(400).json({ ok: false, error: "attacker kingdom required" });
+  const session = (req as any).authSession;
+  try {
+    const ownQ = await pool.query(
+      `SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1`,
+      [attackerName, session.user_id],
+    );
+    if (!ownQ.rowCount) return res.status(403).json({ ok: false, error: "not your kingdom" });
+    const rows = await pool.query(
+      `SELECT defender_name, MAX(created_at) AS last_attack_at
+       FROM attack_reports
+       WHERE attacker_kingdom_id=$1 AND created_at > now() - interval '24 hours'
+       GROUP BY defender_name`,
+      [ownQ.rows[0].id],
+    );
+    const now = Date.now();
+    const cooldowns = rows.rows.map((r) => {
+      const lastAt = new Date(r.last_attack_at).getTime();
+      const expiresAt = new Date(lastAt + 24 * 60 * 60 * 1000);
+      const secondsRemaining = Math.max(0, Math.ceil((expiresAt.getTime() - now) / 1000));
+      return { defenderName: String(r.defender_name), expiresAt: expiresAt.toISOString(), secondsRemaining };
+    });
+    return res.json({ ok: true, cooldowns });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
@@ -4205,6 +4374,7 @@ app.get("/api/rankings/kingdoms", async (req, res) => {
           k.id,
           k.name,
           COALESCE(a.slug, '') AS alliance_tag,
+          k.vacation_mode,
           (k.land * 0.04 + k.food * 0.0001 + k.gold * 0.0005 + k.stone * 0.0002 + k.wood * 0.0002 + COALESCE(tn.troop_nw, 0)) AS networth
         FROM kingdoms k
         LEFT JOIN troop_nw tn ON tn.kingdom_id = k.id
@@ -4212,14 +4382,14 @@ app.get("/api/rankings/kingdoms", async (req, res) => {
         LEFT JOIN alliances a ON a.id = am.alliance_id
       ),
       ranked AS (
-        SELECT id, name, alliance_tag, networth, ROW_NUMBER() OVER (ORDER BY networth DESC, id ASC) AS rank
+        SELECT id, name, alliance_tag, vacation_mode, networth, ROW_NUMBER() OVER (ORDER BY networth DESC, id ASC) AS rank
         FROM raw
       ),
       filtered AS (
         SELECT * FROM ranked
         WHERE ($1 = '' OR LOWER(name) LIKE $2 OR LOWER(alliance_tag) LIKE $2)
       )
-      SELECT id, name, alliance_tag, networth, rank,
+      SELECT id, name, alliance_tag, vacation_mode, networth, rank,
              COUNT(*) OVER()::int AS total_filtered
       FROM filtered
       ORDER BY rank ASC
@@ -4234,6 +4404,7 @@ app.get("/api/rankings/kingdoms", async (req, res) => {
       name: String(r.name || ""),
       allianceTag: String(r.alliance_tag || ""),
       networth: Number(r.networth || 0),
+      onVacation: Boolean(r.vacation_mode),
     }));
     const total = Number(rows.rows[0]?.total_filtered || 0);
     return res.json({ ok: true, items, total, limit, offset });
@@ -4560,8 +4731,11 @@ app.post("/api/kingdom/:name/daily-bonus/claim", requireAuth, async (req, res) =
   try {
     const out = await withTx(async (c) => {
       const k = await c.query(
-        `SELECT id, name, gold, food, wood, stone, daily_login_streak, daily_last_claimed_at
-         FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        `SELECT k.id, k.name, k.gold, k.food, k.wood, k.stone, k.daily_login_streak, k.daily_last_claimed_at,
+                u.premium_ends_at
+         FROM kingdoms k
+         JOIN app_users u ON u.id = k.user_id
+         WHERE LOWER(k.name)=LOWER($1) FOR UPDATE`,
         [name],
       );
       if (!k.rowCount) throw new Error("kingdom not found");
@@ -4578,12 +4752,13 @@ app.post("/api/kingdom/:name/daily-bonus/claim", requireAuth, async (req, res) =
       const streakUsed = clamp(nextStreak, 1, DAILY_STREAK_CAP);
       const scale = 1 + Math.log2(1 + streakUsed) * 0.2;
       const randomMult = 0.9 + Math.random() * 0.2;
+      const premiumBonus = isPremiumActive(row) ? 1.5 : 1.0;
 
-      const gold = Math.min(900000, Math.floor(3500 * scale * randomMult));
-      const food = Math.min(1200000, Math.floor(4500 * scale * randomMult));
-      const wood = Math.min(500000, Math.floor(1700 * scale * randomMult));
-      const stone = Math.min(500000, Math.floor(1700 * scale * randomMult));
-      const horses = Math.min(12000, Math.floor(25 * Math.sqrt(streakUsed) * randomMult));
+      const gold = Math.min(900000, Math.floor(3500 * scale * randomMult * premiumBonus));
+      const food = Math.min(1200000, Math.floor(4500 * scale * randomMult * premiumBonus));
+      const wood = Math.min(500000, Math.floor(1700 * scale * randomMult * premiumBonus));
+      const stone = Math.min(500000, Math.floor(1700 * scale * randomMult * premiumBonus));
+      const horses = Math.min(12000, Math.floor(25 * Math.sqrt(streakUsed) * randomMult * premiumBonus));
 
       await c.query(
         `UPDATE kingdoms
@@ -4593,10 +4768,10 @@ app.post("/api/kingdom/:name/daily-bonus/claim", requireAuth, async (req, res) =
         [row.id, gold, food, wood, stone, horses, nextStreak],
       );
       const subject = `Daily Bonus Day ${nextStreak}`;
-      const body = `Daily bonus granted.\nStreak: ${nextStreak}\nGold +${gold.toLocaleString()}\nFood +${food.toLocaleString()}\nWood +${wood.toLocaleString()}\nStone +${stone.toLocaleString()}\nHorses +${horses.toLocaleString()}`;
+      const body = `Daily bonus granted${premiumBonus > 1 ? " (Premium +50%)" : ""}.\nStreak: ${nextStreak}\nGold +${gold.toLocaleString()}\nFood +${food.toLocaleString()}\nWood +${wood.toLocaleString()}\nStone +${stone.toLocaleString()}\nHorses +${horses.toLocaleString()}`;
       await sendMailTx(c, Number(row.id), "system", subject, body);
-      await sendNoticeTx(c, Number(row.id), "success", `Daily bonus claimed: +${gold.toLocaleString()} gold, +${food.toLocaleString()} food`, { streak: nextStreak });
-      return { claimed: true, streak: nextStreak, rewards: { gold, food, wood, stone, horses } };
+      await sendNoticeTx(c, Number(row.id), "success", `Daily bonus claimed: +${gold.toLocaleString()} gold, +${food.toLocaleString()} food${premiumBonus > 1 ? " (Premium +50%)" : ""}`, { streak: nextStreak });
+      return { claimed: true, streak: nextStreak, premiumBonus: premiumBonus > 1, rewards: { gold, food, wood, stone, horses } };
     });
     return res.json({ ok: true, ...out });
   } catch (e: any) {

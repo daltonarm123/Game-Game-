@@ -142,8 +142,39 @@ export function computeStorageCaps(buildingLevels: Record<string, number>) {
   };
 }
 
-export function taxGoldMultiplier(taxRate: number) {
-  return clampNumber(1 + (taxRate - 25) * 0.04, 0.2, 2.2);
+/**
+ * Full tax model — Laffer-ish curve with two bands:
+ *
+ * Low band  (0–25): scales from 0.40 → 1.00. Low tax means less direct
+ *   revenue but peasants are happy and arrive faster.
+ * High band (26–40): diminishing returns — each extra % yields less than
+ *   the previous because economic drag (trade suppression) accelerates.
+ *   Peaks around rate 37 at ~1.45, then falls slightly to 1.40 at 40.
+ *
+ * Rate 25 is still the neutral baseline (1.0×) so existing kingdoms are
+ * unaffected.  Low-tax kingdoms see a significant buff vs the old linear
+ * model (old rate=10 → 0.4×, new → 0.64×).
+ */
+export function taxGoldMultiplier(taxRate: number): number {
+  const r = clampNumber(taxRate, 0, 40);
+  if (r <= 25) {
+    // Linear: 0.40 at 0%, 1.00 at 25%
+    return 0.40 + (r / 25) * 0.60;
+  }
+  // Diminishing above 25%: quadratic drag
+  const t = (r - 25) / 15; // 0→1 over range 25→40
+  return clampNumber(1.0 + t * 0.60 - t * t * 0.18, 1.0, 2.0);
+}
+
+/** Human-readable label for how tax affects citizens' wellbeing. */
+export function taxWellbeingLabel(taxRate: number): string {
+  if (taxRate <= 10) return "Beloved — peasants flock to your kingdom";
+  if (taxRate <= 20) return "Popular — steady population growth";
+  if (taxRate <= 24) return "Favorable — slow but positive growth";
+  if (taxRate <= 27) return "Neutral — population stable";
+  if (taxRate <= 32) return "Strained — peasants slowly leaving";
+  if (taxRate <= 36) return "Unhappy — notable exodus";
+  return "Oppressive — heavy desertion";
 }
 
 export function researchGoldCost(baseGold: number, currentLevel: number) {
