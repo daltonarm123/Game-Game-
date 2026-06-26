@@ -1,7 +1,8 @@
 import dotenv from "dotenv";
 import express from "express";
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import Stripe from "stripe";
 import type { PoolClient } from "pg";
 import { z } from "zod";
 import {
@@ -62,6 +63,7 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") return res.status(204).end();
   return next();
 });
+app.post("/api/payments/stripe/webhook", express.raw({ type: "application/json" }), stripeWebhookHandler);
 app.use(express.json());
 
 type RouteSample = { ms: number; at: number; status: number };
@@ -136,7 +138,7 @@ app.use((req, res, next) => {
 const limiterKey = (req: express.Request) => {
   const token = String(req.headers.authorization || "").trim().replace(/^Bearer\s+/i, "");
   if (token) return `tok:${token.slice(0, 32)}`;
-  return `ip:${String(req.ip || req.socket.remoteAddress || "unknown")}`;
+  return `ip:${ipKeyGenerator(req.ip || req.socket.remoteAddress || "unknown")}`;
 };
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -179,7 +181,6 @@ const LOCAL_DEMO_FAST = String(process.env.LOCAL_DEMO_FAST || "").trim() === "1"
 const FAST_BUILD_SECONDS = Math.max(1, Number(process.env.FAST_BUILD_SECONDS || 60));
 const FAST_TRAIN_SECONDS = Math.max(1, Number(process.env.FAST_TRAIN_SECONDS || 30));
 const FAST_RESEARCH_SECONDS = Math.max(5, Number(process.env.FAST_RESEARCH_SECONDS || 15));
-const SHIELD_CANCEL_COOLDOWN_SECONDS = Math.max(60, Number(process.env.SHIELD_CANCEL_COOLDOWN_SECONDS || 24 * 3600));
 const VACATION_MAX_SECONDS = Math.max(3600, Number(process.env.VACATION_MAX_SECONDS || 14 * 24 * 3600)); // 14 days
 const VACATION_COOLDOWN_SECONDS = Math.max(3600, Number(process.env.VACATION_COOLDOWN_SECONDS || 7 * 24 * 3600)); // 7-day cooldown
 const ATTACK_RETURN_SECONDS = Math.max(
@@ -205,8 +206,31 @@ const EXPLORE_SMALL_KINGDOM_MIN_LAND = Math.max(0, Number(process.env.EXPLORE_SM
 const EXPLORE_KG_BONUS_AT_MIN_LAND = Math.max(0.2, Number(process.env.EXPLORE_KG_BONUS_AT_MIN_LAND || 1.8) || 1.8);
 const EXPLORE_KG_BONUS_AT_CAP_LAND = Math.max(0.1, Number(process.env.EXPLORE_KG_BONUS_AT_CAP_LAND || 0.35) || 0.35);
 const SPY_RETURN_SECONDS = LOCAL_DEMO_FAST ? 15 : 25 * 60;
+const SABOTAGE_RETURN_SECONDS = LOCAL_DEMO_FAST ? 18 : 30 * 60;
 const DAILY_STREAK_CAP = 365;
 const OBS_TICK_INTERVAL_SECONDS = Math.max(1, Number(process.env.TICK_INTERVAL_SECONDS || (LOCAL_DEMO_FAST ? 5 : 300)));
+
+const SHIELD_GEM_COST_BY_DAYS: Record<number, number> = {
+  1: 5,
+  2: 10,
+  7: 25,
+  14: 50,
+  30: 100,
+};
+
+const GREEN_GEM_STORE_PACKS = [
+  { code: "gg_5", gems: 5, priceUsd: 1.99 },
+  { code: "gg_10", gems: 10, priceUsd: 3.99 },
+  { code: "gg_25", gems: 25, priceUsd: 8.99 },
+  { code: "gg_50", gems: 50, priceUsd: 16.99 },
+  { code: "gg_100", gems: 100, priceUsd: 31.99 },
+  { code: "gg_200", gems: 200, priceUsd: 54.99 },
+] as const;
+const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || "").trim();
+const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || "").trim();
+const PUBLIC_WEB_URL = String(process.env.PUBLIC_WEB_URL || process.env.WEB_PUBLIC_URL || "http://localhost:5173").replace(/\/$/, "");
+const ALLOW_SIMULATED_GEM_PURCHASES = String(process.env.ALLOW_SIMULATED_GEM_PURCHASES || "").trim() === "1";
+const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
 
 const registerBody = z.object({
   userId: z.string().min(1),
@@ -328,6 +352,14 @@ const settlementGarrisonBody = z.object({
 
 const taxUpdateBody = z.object({
   taxRate: z.number().int().min(0).max(40),
+});
+
+const shieldActivateBody = z.object({
+  days: z.union([z.literal(1), z.literal(2), z.literal(7), z.literal(14), z.literal(30)]).optional().default(1),
+});
+
+const greenGemBuyBody = z.object({
+  packCode: z.enum(["gg_5", "gg_10", "gg_25", "gg_50", "gg_100", "gg_200"]),
 });
 
 const allianceCreateBody = z.object({
@@ -789,11 +821,8 @@ function shieldStateFromRow(row: any, now = new Date()) {
   if (status === "cooldown" && cooldownEndsAt) activeUntil = cooldownEndsAt;
 
   const remainingSeconds = activeUntil ? Math.max(0, Math.floor((activeUntil.getTime() - now.getTime()) / 1000)) : 0;
-  // pending  = no first strike, retaliation allowed, can be attacked, market open
-  // active   = fully locked — no attacks, cannot be attacked, no market
-  // cooldown = no first strike, retaliation allowed, can be attacked, market open
-  const retaliationOnly = status === "pending" || status === "cooldown";
-  const canAttack = status === "none";
+  const retaliationOnly = false;
+  const canAttack = status !== "active";
   const canBeAttacked = status !== "active";
   return {
     status,
@@ -861,6 +890,71 @@ function premiumStatusFromRow(row: any, now = new Date()) {
     lastShieldUsedAt: lastShieldUse ? lastShieldUse.toISOString() : null,
     nextShieldAt: nextShieldAt ? nextShieldAt.toISOString() : null,
   };
+}
+
+function pickWeighted<T extends { weight: number }>(items: T[], random: () => number) {
+  const total = items.reduce((acc, i) => acc + Math.max(0, Number(i.weight || 0)), 0);
+  if (total <= 0) return items[0];
+  let roll = random() * total;
+  for (const item of items) {
+    roll -= Math.max(0, Number(item.weight || 0));
+    if (roll <= 0) return item;
+  }
+  return items[items.length - 1];
+}
+
+function rollDailyRandomReward(streak: number, random: () => number) {
+  const s = Math.max(1, Math.floor(Number(streak || 1)));
+  const gemBoost = s >= 30 ? 1.35 : s >= 14 ? 1.2 : s >= 7 ? 1.1 : 1;
+  const table = [
+    { kind: "green_gems", amount: 5, weight: 55 * gemBoost },
+    { kind: "green_gems", amount: 10, weight: 30 * gemBoost },
+    { kind: "green_gems", amount: 25, weight: 12 * gemBoost },
+    { kind: "green_gems", amount: 50, weight: 4 * gemBoost },
+    { kind: "green_gems", amount: 100, weight: 1.2 * gemBoost },
+  ] as const;
+  const picked = pickWeighted(table as unknown as Array<{ kind: "green_gems"; amount: number; weight: number }>, random);
+  return { kind: picked.kind, amount: picked.amount };
+}
+
+function greenGemPackByCode(code: string) {
+  return GREEN_GEM_STORE_PACKS.find((p) => p.code === code) || null;
+}
+
+async function completeGreenGemOrderBySession(c: PoolClient, stripeSessionId: string) {
+  const orderQ = await c.query(
+    `SELECT id, kingdom_id, gems, status FROM green_gem_orders WHERE stripe_session_id=$1 FOR UPDATE`,
+    [stripeSessionId],
+  );
+  if (!orderQ.rowCount) throw new Error("green gem order not found");
+  const order = orderQ.rows[0];
+  if (String(order.status || "pending") === "completed") return { credited: false, gems: Number(order.gems || 0) };
+  await c.query(`UPDATE kingdoms SET green_gems=COALESCE(green_gems,0)+$2 WHERE id=$1`, [order.kingdom_id, order.gems]);
+  await c.query(`UPDATE green_gem_orders SET status='completed', completed_at=now() WHERE id=$1`, [order.id]);
+  return { credited: true, gems: Number(order.gems || 0) };
+}
+
+async function stripeWebhookHandler(req: express.Request, res: express.Response) {
+  if (!stripe || !STRIPE_WEBHOOK_SECRET) return res.status(503).json({ ok: false, error: "stripe webhook is not configured" });
+  const signature = String(req.headers["stripe-signature"] || "");
+  let event: Stripe.Event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, signature, STRIPE_WEBHOOK_SECRET);
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: `invalid stripe signature: ${String(e?.message || e)}` });
+  }
+
+  try {
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object as Stripe.Checkout.Session;
+      if (session.payment_status === "paid" && session.id) {
+        await withTx((c) => completeGreenGemOrderBySession(c, session.id));
+      }
+    }
+    return res.json({ ok: true, received: true });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
 }
 
 function combatResultFromRatio(ratio: number): string {
@@ -1205,24 +1299,28 @@ async function normalizeShieldStateTx(c: PoolClient, kingdomId: number) {
   let status = String(row.shield_status || "none");
   const startsAt = row.shield_starts_at ? new Date(row.shield_starts_at) : null;
   const endsAt = row.shield_ends_at ? new Date(row.shield_ends_at) : null;
-  const cooldownEndsAt = row.shield_cooldown_ends_at ? new Date(row.shield_cooldown_ends_at) : null;
   let changed = false;
 
   if (status === "pending" && startsAt && startsAt.getTime() <= now.getTime()) {
     status = "active";
-    changed = true;
   }
+  if (status === "cooldown") status = "none";
   if (status === "active" && endsAt && endsAt.getTime() <= now.getTime()) {
-    status = "cooldown";
-    changed = true;
-  }
-  if (status === "cooldown" && cooldownEndsAt && cooldownEndsAt.getTime() <= now.getTime()) {
     status = "none";
-    changed = true;
   }
 
+  changed = String(status) !== String(row.shield_status || "none");
+
   if (changed) {
-    await c.query(`UPDATE kingdoms SET shield_status=$2 WHERE id=$1`, [kingdomId, status]);
+    await c.query(
+      `UPDATE kingdoms
+       SET shield_status=$2,
+           shield_starts_at=CASE WHEN $2='active' THEN COALESCE(shield_starts_at, now()) ELSE NULL END,
+           shield_ends_at=CASE WHEN $2='active' THEN shield_ends_at ELSE NULL END,
+           shield_cooldown_ends_at=NULL
+       WHERE id=$1`,
+      [kingdomId, status],
+    );
     row.shield_status = status;
   }
 
@@ -1231,7 +1329,7 @@ async function normalizeShieldStateTx(c: PoolClient, kingdomId: number) {
 
 async function normalizeVacationTx(c: PoolClient, kingdomId: number) {
   const q = await c.query(
-    `SELECT id, vacation_mode, vacation_starts_at, vacation_ends_at, vacation_cooldown_ends_at FROM kingdoms WHERE id=$1 FOR UPDATE`,
+    `SELECT id, vacation_mode, vacation_started_at, vacation_ends_at, vacation_cooldown_ends_at FROM kingdoms WHERE id=$1 FOR UPDATE`,
     [kingdomId],
   );
   if (!q.rowCount) return null;
@@ -1579,6 +1677,88 @@ app.get("/api/premium/plans", async (_req, res) => {
     paymentEnabled: false,
     plans: premiumPlansPayload(),
   });
+});
+
+app.get("/api/gems/green/packs", async (_req, res) => {
+  return res.json({
+    ok: true,
+    paymentEnabled: Boolean(stripe),
+    simulatedPurchasesEnabled: ALLOW_SIMULATED_GEM_PURCHASES,
+    packs: GREEN_GEM_STORE_PACKS.map((p) => ({ ...p })),
+  });
+});
+
+app.post("/api/gems/:kingdom/green/buy", requireAuth, async (req, res) => {
+  const kingdom = String(req.params.kingdom || "").trim();
+  const parsed = greenGemBuyBody.safeParse(req.body || {});
+  if (!kingdom) return res.status(400).json({ ok: false, error: "kingdom required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
+  const session = (req as any).authSession;
+  const pack = greenGemPackByCode(parsed.data.packCode);
+  if (!pack) return res.status(400).json({ ok: false, error: "unknown gem pack" });
+
+  try {
+    const out = await withTx(async (c) => {
+      const q = await c.query(
+        `SELECT id, user_id, green_gems FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        [kingdom],
+      );
+      if (!q.rowCount) throw new Error("kingdom not found");
+      const k = q.rows[0];
+      if (String(k.user_id) !== String(session.user_id)) throw new Error("cannot modify another kingdom");
+
+      if (!stripe) {
+        if (!ALLOW_SIMULATED_GEM_PURCHASES) {
+          throw new Error("green gem checkout is not configured");
+        }
+        const up = await c.query(
+          `UPDATE kingdoms SET green_gems=COALESCE(green_gems,0)+$2 WHERE id=$1 RETURNING green_gems`,
+          [k.id, pack.gems],
+        );
+        return { simulatedPayment: true, greenGems: Number(up.rows[0]?.green_gems || 0) };
+      }
+
+      const checkout = await stripe.checkout.sessions.create({
+        mode: "payment",
+        payment_method_types: ["card"],
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: "usd",
+              unit_amount: Math.round(pack.priceUsd * 100),
+              product_data: {
+                name: `${pack.gems} Green Gems`,
+                description: "Crownforge green gem pack",
+              },
+            },
+          },
+        ],
+        metadata: {
+          kind: "green_gems",
+          packCode: pack.code,
+          kingdomId: String(k.id),
+          userId: String(session.user_id),
+          gems: String(pack.gems),
+        },
+        success_url: `${PUBLIC_WEB_URL}/?payment=success&pack=${encodeURIComponent(pack.code)}`,
+        cancel_url: `${PUBLIC_WEB_URL}/?payment=cancelled&pack=${encodeURIComponent(pack.code)}`,
+      });
+      await c.query(
+        `INSERT INTO green_gem_orders(kingdom_id, user_id, pack_code, gems, price_usd, stripe_session_id, status)
+         VALUES ($1,$2,$3,$4,$5,$6,'pending')`,
+        [k.id, session.user_id, pack.code, pack.gems, pack.priceUsd, checkout.id],
+      );
+      return { simulatedPayment: false, checkoutUrl: checkout.url, checkoutSessionId: checkout.id };
+    });
+    return res.json({
+      ok: true,
+      purchased: { code: pack.code, gems: pack.gems, priceUsd: pack.priceUsd },
+      ...out,
+    });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
 });
 
 app.get("/api/stream/:kingdom", async (req, res) => {
@@ -2877,13 +3057,18 @@ app.post("/api/kingdom/:name/tax", requireAuth, async (req, res) => {
 
 app.post("/api/kingdom/:name/shield/activate", requireAuth, async (req, res) => {
   const name = String(req.params.name || "").trim();
+  const parsed = shieldActivateBody.safeParse(req.body || {});
   if (!name) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
   const session = (req as any).authSession;
+  const shieldDays = Number(parsed.data.days || 1);
+  const gemCost = Number(SHIELD_GEM_COST_BY_DAYS[shieldDays] || 0);
+  if (gemCost <= 0) return res.status(400).json({ ok: false, error: "invalid shield duration" });
 
   try {
     const out = await withTx(async (c) => {
       const kq = await c.query(
-        `SELECT id, user_id, name, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        `SELECT id, user_id, name, green_gems, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
         [name],
       );
       if (!kq.rowCount) throw new Error("kingdom not found");
@@ -2893,38 +3078,32 @@ app.post("/api/kingdom/:name/shield/activate", requireAuth, async (req, res) => 
       const current = normalized || k;
       const status = String(current.shield_status || "none");
       if (status !== "none") throw new Error(`shield unavailable while status is ${status}`);
-
-      const uq = await c.query(
-        `SELECT id, premium_started_at, premium_ends_at, premium_shield_last_used_at
-         FROM app_users
-         WHERE id=$1
-         LIMIT 1
-         FOR UPDATE`,
-        [session.user_id],
-      );
-      const user = uq.rows[0] || null;
-      const premium = premiumStatusFromRow(user);
-      const usePremiumShield = Boolean(premium.active && premium.monthlyShieldReady);
+      const greenGems = Number(k.green_gems || 0);
+      if (greenGems < gemCost) throw new Error(`not enough green gems (need ${gemCost}, have ${greenGems})`);
 
       const up = await c.query(
         `
         UPDATE kingdoms
-        SET shield_status=$2,
+        SET shield_status='active',
             shield_requested_at=now(),
-            shield_starts_at=CASE WHEN $3 THEN now() ELSE now() + interval '24 hours' END,
-            shield_ends_at=now() + interval '48 hours',
-            shield_cooldown_ends_at=now() + interval '72 hours'
+            shield_starts_at=now(),
+            shield_ends_at=now() + ($3 * INTERVAL '1 day'),
+            shield_cooldown_ends_at=NULL,
+            green_gems=COALESCE(green_gems,0)-$2
         WHERE id=$1
-        RETURNING id, name, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
+        RETURNING id, name, green_gems, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
         `,
-        [k.id, usePremiumShield ? "active" : "pending", usePremiumShield],
+        [k.id, gemCost, shieldDays],
       );
-      if (usePremiumShield) {
-        await c.query(`UPDATE app_users SET premium_shield_last_used_at=now() WHERE id=$1`, [session.user_id]);
-      }
-      return { ...up.rows[0], premiumShieldUsed: usePremiumShield };
+      return { ...up.rows[0], gemCost, shieldDays };
     });
-    return res.json({ ok: true, shield: shieldStateFromRow(out), premiumShieldUsed: Boolean(out.premiumShieldUsed) });
+    return res.json({
+      ok: true,
+      shield: shieldStateFromRow(out),
+      shieldDays: Number(out.shieldDays || shieldDays),
+      gemCost: Number(out.gemCost || gemCost),
+      greenGems: Number(out.green_gems || 0),
+    });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });
   }
@@ -2947,26 +3126,26 @@ app.post("/api/kingdom/:name/shield/cancel", requireAuth, async (req, res) => {
       const normalized = await normalizeShieldStateTx(c, Number(k.id));
       const current = normalized || k;
       const status = String(current.shield_status || "none");
-      if (status !== "pending" && status !== "active") {
+      if (status !== "active" && status !== "pending") {
         throw new Error(`shield cannot be cancelled while status is ${status}`);
       }
 
       const up = await c.query(
         `
         UPDATE kingdoms
-        SET shield_status='cooldown',
-            shield_requested_at=COALESCE(shield_requested_at, now()),
+        SET shield_status='none',
+            shield_requested_at=NULL,
             shield_starts_at=NULL,
             shield_ends_at=NULL,
-            shield_cooldown_ends_at=now() + ($2 * INTERVAL '1 second')
+            shield_cooldown_ends_at=NULL
         WHERE id=$1
         RETURNING id, name, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
         `,
-        [k.id, SHIELD_CANCEL_COOLDOWN_SECONDS],
+        [k.id],
       );
       return up.rows[0];
     });
-    return res.json({ ok: true, shield: shieldStateFromRow(out), cooldownSeconds: SHIELD_CANCEL_COOLDOWN_SECONDS });
+    return res.json({ ok: true, shield: shieldStateFromRow(out) });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });
   }
@@ -3800,8 +3979,18 @@ app.post("/api/war-room/:attacker/spy", requireAuth, async (req, res) => {
       if (Number(atk.id) === Number(def.id)) throw new Error("cannot spy yourself");
 
       await normalizeVacationTx(c, Number(atk.id));
+      await normalizeVacationTx(c, Number(def.id));
       const atkVacSpyRow = await c.query(`SELECT vacation_mode FROM kingdoms WHERE id=$1`, [atk.id]);
+      const defVacSpyRow = await c.query(`SELECT vacation_mode FROM kingdoms WHERE id=$1`, [def.id]);
       if (Boolean(atkVacSpyRow.rows[0]?.vacation_mode)) throw new Error("You cannot spy while on vacation mode.");
+      if (Boolean(defVacSpyRow.rows[0]?.vacation_mode)) throw new Error("This kingdom is on vacation and cannot be spied on.");
+
+      const atkShieldRow = await normalizeShieldStateTx(c, Number(atk.id));
+      const defShieldRow = await normalizeShieldStateTx(c, Number(def.id));
+      const atkShield = shieldStateFromRow(atkShieldRow || atk);
+      const defShield = shieldStateFromRow(defShieldRow || def);
+      if (String(atkShield.status) === "active") throw new Error("cannot spy while your shield is active");
+      if (!defShield.canBeAttacked) throw new Error("defender is shielded");
 
       const atkSpy = await c.query(
         `SELECT amount FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='spies' LIMIT 1`,
@@ -4753,25 +4942,34 @@ app.post("/api/kingdom/:name/daily-bonus/claim", requireAuth, async (req, res) =
       const scale = 1 + Math.log2(1 + streakUsed) * 0.2;
       const randomMult = 0.9 + Math.random() * 0.2;
       const premiumBonus = isPremiumActive(row) ? 1.5 : 1.0;
+      const randomReward = rollDailyRandomReward(streakUsed, Math.random);
 
       const gold = Math.min(900000, Math.floor(3500 * scale * randomMult * premiumBonus));
       const food = Math.min(1200000, Math.floor(4500 * scale * randomMult * premiumBonus));
       const wood = Math.min(500000, Math.floor(1700 * scale * randomMult * premiumBonus));
       const stone = Math.min(500000, Math.floor(1700 * scale * randomMult * premiumBonus));
       const horses = Math.min(12000, Math.floor(25 * Math.sqrt(streakUsed) * randomMult * premiumBonus));
+      const greenGems = randomReward.kind === "green_gems" ? Number(randomReward.amount || 0) : 0;
 
       await c.query(
         `UPDATE kingdoms
          SET gold=gold+$2, food=food+$3, wood=wood+$4, stone=stone+$5, horses=horses+$6,
-             daily_login_streak=$7, daily_last_claimed_at=now()
+             green_gems=COALESCE(green_gems,0)+$7,
+             daily_login_streak=$8, daily_last_claimed_at=now()
          WHERE id=$1`,
-        [row.id, gold, food, wood, stone, horses, nextStreak],
+        [row.id, gold, food, wood, stone, horses, greenGems, nextStreak],
       );
       const subject = `Daily Bonus Day ${nextStreak}`;
-      const body = `Daily bonus granted${premiumBonus > 1 ? " (Premium +50%)" : ""}.\nStreak: ${nextStreak}\nGold +${gold.toLocaleString()}\nFood +${food.toLocaleString()}\nWood +${wood.toLocaleString()}\nStone +${stone.toLocaleString()}\nHorses +${horses.toLocaleString()}`;
+      const body = `Daily bonus granted${premiumBonus > 1 ? " (Premium +50%)" : ""}.\nStreak: ${nextStreak}\nGold +${gold.toLocaleString()}\nFood +${food.toLocaleString()}\nWood +${wood.toLocaleString()}\nStone +${stone.toLocaleString()}\nHorses +${horses.toLocaleString()}\nGreen Gems +${greenGems.toLocaleString()}`;
       await sendMailTx(c, Number(row.id), "system", subject, body);
-      await sendNoticeTx(c, Number(row.id), "success", `Daily bonus claimed: +${gold.toLocaleString()} gold, +${food.toLocaleString()} food${premiumBonus > 1 ? " (Premium +50%)" : ""}`, { streak: nextStreak });
-      return { claimed: true, streak: nextStreak, premiumBonus: premiumBonus > 1, rewards: { gold, food, wood, stone, horses } };
+      await sendNoticeTx(
+        c,
+        Number(row.id),
+        "success",
+        `Daily bonus claimed: +${gold.toLocaleString()} gold, +${food.toLocaleString()} food, +${greenGems.toLocaleString()} green gems${premiumBonus > 1 ? " (Premium +50%)" : ""}`,
+        { streak: nextStreak, greenGems },
+      );
+      return { claimed: true, streak: nextStreak, premiumBonus: premiumBonus > 1, rewards: { gold, food, wood, stone, horses, greenGems } };
     });
     return res.json({ ok: true, ...out });
   } catch (e: any) {
@@ -6912,6 +7110,19 @@ app.post("/api/guildhall/:kingdom/sabotage", requireAuth, async (req, res) => {
 
       await cleanupExpiredEffectsTx(c, attackerId);
       await cleanupExpiredEffectsTx(c, defenderId);
+      await normalizeVacationTx(c, attackerId);
+      await normalizeVacationTx(c, defenderId);
+      const atkVacRow = await c.query(`SELECT vacation_mode FROM kingdoms WHERE id=$1`, [attackerId]);
+      const defVacRow = await c.query(`SELECT vacation_mode FROM kingdoms WHERE id=$1`, [defenderId]);
+      if (Boolean(atkVacRow.rows[0]?.vacation_mode)) throw new Error("You cannot sabotage while on vacation mode.");
+      if (Boolean(defVacRow.rows[0]?.vacation_mode)) throw new Error("This kingdom is on vacation and cannot be sabotaged.");
+
+      const atkShieldRow = await normalizeShieldStateTx(c, attackerId);
+      const defShieldRow = await normalizeShieldStateTx(c, defenderId);
+      const atkShield = shieldStateFromRow(atkShieldRow || atk.rows[0]);
+      const defShield = shieldStateFromRow(defShieldRow || def.rows[0]);
+      if (String(atkShield.status) === "active") throw new Error("cannot sabotage while your shield is active");
+      if (!defShield.canBeAttacked) throw new Error("defender is shielded");
 
       const spiesAtk = await c.query(`SELECT amount FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='spies' FOR UPDATE`, [attackerId]);
       const spiesDef = await c.query(`SELECT amount FROM kingdom_troops WHERE kingdom_id=$1 AND troop_code='spies' FOR UPDATE`, [defenderId]);
@@ -6931,10 +7142,18 @@ app.post("/api/guildhall/:kingdom/sabotage", requireAuth, async (req, res) => {
       });
       let { success, spyLosses, survivors } = outcome;
       await c.query(`UPDATE kingdom_troops SET amount=amount-$2 WHERE kingdom_id=$1 AND troop_code='spies'`, [attackerId, parsed.data.spiesToSend]);
-      if (survivors > 0) await c.query(`UPDATE kingdom_troops SET amount=amount+$2 WHERE kingdom_id=$1 AND troop_code='spies'`, [attackerId, survivors]);
+      if (survivors > 0) {
+        await c.query(
+          `INSERT INTO troop_movements(owner_kingdom_id, owner_kingdom_name, target_kingdom_id, target_kingdom_name, troop_code, quantity, departed_at, returns_at, status)
+           VALUES ($1,$2,$3,$4,'spies',$5,now(), now() + ($6 * INTERVAL '1 second'), 'out')`,
+          [attackerId, atk.rows[0].name, defenderId, def.rows[0].name, survivors, SABOTAGE_RETURN_SECONDS],
+        );
+      }
 
       let stolen = 0;
       let priestsLost = 0;
+      let successBonusGold = 0;
+      let successBonusGreenGems = 0;
       if (success && parsed.data.operation === "resource_heist") {
         const defResQ = await c.query(`SELECT ${parsed.data.resource} AS amount FROM kingdoms WHERE id=$1 FOR UPDATE`, [defenderId]);
         const defAmt = Number(defResQ.rows[0]?.amount || 0);
@@ -6953,6 +7172,11 @@ app.post("/api/guildhall/:kingdom/sabotage", requireAuth, async (req, res) => {
           await c.query(`UPDATE kingdom_troops SET amount=amount-$2 WHERE kingdom_id=$1 AND troop_code='priests'`, [defenderId, priestsLost]);
         }
       }
+      if (success) {
+        successBonusGold = Math.max(250, Math.min(12_000, Math.floor(parsed.data.spiesToSend * 2.25)));
+        successBonusGreenGems = parsed.data.spiesToSend >= 400 ? 2 : 1;
+        await c.query(`UPDATE kingdoms SET gold=gold+$2, green_gems=COALESCE(green_gems,0)+$3 WHERE id=$1`, [attackerId, successBonusGold, successBonusGreenGems]);
+      }
       await sendNoticeTx(
         c,
         defenderId,
@@ -6968,6 +7192,9 @@ app.post("/api/guildhall/:kingdom/sabotage", requireAuth, async (req, res) => {
         priestsLost,
         spyLosses,
         survivors,
+        returnSeconds: survivors > 0 ? SABOTAGE_RETURN_SECONDS : 0,
+        successBonusGold,
+        successBonusGreenGems,
         attackBonus,
         defenseBonus,
       };
@@ -8164,6 +8391,8 @@ app.post("/api/market/:kingdom/cancel", requireAuth, async (req, res) => {
   } catch (e: any) { return res.status(400).json({ ok: false, error: String(e?.message || e) }); }
 });
 
+export { app };
+
 async function bootstrap() {
   await ensureSchema();
   const adminUsernames = String(process.env.ADMIN_USERNAME || "")
@@ -8179,7 +8408,9 @@ async function bootstrap() {
   });
 }
 
-bootstrap().catch((e) => {
-  console.error("API bootstrap failed", e);
-  process.exit(1);
-});
+if (process.env.NODE_ENV !== "test") {
+  bootstrap().catch((e) => {
+    console.error("API bootstrap failed", e);
+    process.exit(1);
+  });
+}

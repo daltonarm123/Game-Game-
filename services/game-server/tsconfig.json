@@ -5,11 +5,12 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "esModuleInterop": true,
+    "rootDir": "${configDir}/../..",
     "outDir": "dist",
     "skipLibCheck": true,
     "paths": {
       "@game-game/shared": ["../../packages/shared/src/index.ts"]
     }
   },
-  "include": ["src"]
+  "include": ["src", "../../packages/shared/src"]
 }

@@ -937,6 +937,23 @@ export async function ensureSchema(): Promise<void> {
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS vacation_cooldown_ends_at TIMESTAMPTZ`);
   await pool.query(`CREATE INDEX IF NOT EXISTS kingdoms_vacation_idx ON kingdoms(vacation_mode, vacation_ends_at) WHERE vacation_mode = TRUE`);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS green_gem_orders (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+      pack_code TEXT NOT NULL,
+      gems INT NOT NULL,
+      price_usd NUMERIC(8,2) NOT NULL,
+      stripe_session_id TEXT UNIQUE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completed_at TIMESTAMPTZ,
+      CHECK (status IN ('pending','completed','cancelled'))
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS green_gem_orders_kingdom_idx ON green_gem_orders(kingdom_id, created_at DESC)`);
+
   // Reduce elite upkeep — they're hard to earn, shouldn't punish players who farm them
   await pool.query(`UPDATE troop_types SET upkeep_food=18, upkeep_gold=7 WHERE code='elites'`);
   // Diplomats: make trainable, cap per Embassy, passive gold generation

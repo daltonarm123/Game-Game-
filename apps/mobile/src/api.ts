@@ -68,8 +68,8 @@ export const kingdomApi = {
   setTax: (name: string, taxRate: number, token: string) =>
     post(`/api/kingdom/${encodeURIComponent(name)}/tax`, { taxRate }, token),
 
-  activateShield: (name: string, token: string) =>
-    post(`/api/kingdom/${encodeURIComponent(name)}/shield/activate`, {}, token),
+  activateShield: (name: string, token: string, days: 1 | 2 | 7 | 14 | 30 = 1) =>
+    post(`/api/kingdom/${encodeURIComponent(name)}/shield/activate`, { days }, token),
 
   cancelShield: (name: string, token: string) =>
     post(`/api/kingdom/${encodeURIComponent(name)}/shield/cancel`, {}, token),

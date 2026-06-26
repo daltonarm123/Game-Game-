@@ -14,6 +14,14 @@ function formatShieldCountdown(totalSeconds: number) {
   return `${h}h ${m}m ${sec}s`;
 }
 
+const SHIELD_OPTIONS: Array<{ days: 1 | 2 | 7 | 14 | 30; gems: number; label: string }> = [
+  { days: 1, gems: 5, label: "1 day (5 gems)" },
+  { days: 2, gems: 10, label: "2 days (10 gems)" },
+  { days: 7, gems: 25, label: "7 days (25 gems)" },
+  { days: 14, gems: 50, label: "14 days (50 gems)" },
+  { days: 30, gems: 100, label: "30 days (100 gems)" },
+];
+
 export function AccountScreen({ navigation }: any) {
   const { auth, setAuth } = useAuth();
   const [kData, setKData] = useState<any>(null);
@@ -35,17 +43,29 @@ export function AccountScreen({ navigation }: any) {
   useEffect(() => { void load(); }, [load]);
 
   async function activateShield() {
-    setShieldBusy(true); setMsg("");
-    try {
-      await kingdomApi.activateShield(kName, auth!.token);
-      setMsg("Shield activated!");
-      void load();
-    } catch (e: any) { setMsg(String(e?.message || e)); }
-    finally { setShieldBusy(false); }
+    Alert.alert(
+      "Activate Shield",
+      "Choose a shield duration. Shield blocks all attacks, spying, and sabotage against your kingdom while active.",
+      [
+        ...SHIELD_OPTIONS.map((opt) => ({
+          text: opt.label,
+          onPress: async () => {
+            setShieldBusy(true); setMsg("");
+            try {
+              await kingdomApi.activateShield(kName, auth!.token, opt.days);
+              setMsg(`Shield activated for ${opt.days} day(s) at ${opt.gems} gems.`);
+              void load();
+            } catch (e: any) { setMsg(String(e?.message || e)); }
+            finally { setShieldBusy(false); }
+          },
+        })),
+        { text: "Cancel", style: "cancel" },
+      ],
+    );
   }
 
   async function cancelShield() {
-    Alert.alert("Cancel Shield", "Cancel shield now? This starts a 24-hour cooldown.", [
+    Alert.alert("Cancel Shield", "Cancel shield now? Remaining shield time is forfeited.", [
       { text: "Keep", style: "cancel" },
       {
         text: "Cancel Shield",
@@ -54,7 +74,7 @@ export function AccountScreen({ navigation }: any) {
           setShieldBusy(true); setMsg("");
           try {
             await kingdomApi.cancelShield(kName, auth!.token);
-            setMsg("Shield cancelled. 24-hour cooldown started.");
+            setMsg("Shield cancelled.");
             void load();
           } catch (e: any) { setMsg(String(e?.message || e)); }
           finally { setShieldBusy(false); }
@@ -79,7 +99,8 @@ export function AccountScreen({ navigation }: any) {
     setMsg("");
     try {
       const j = await kingdomApi.claimDailyBonus(kName, auth!.token);
-      setMsg(`Daily bonus claimed! +${j.goldBonus || 0} gold`);
+      const rewards = j?.rewards || {};
+      setMsg(`Daily bonus claimed! +${Number(rewards.gold || 0).toLocaleString()} gold, +${Number(rewards.greenGems || 0).toLocaleString()} gems`);
     } catch (e: any) { setMsg(String(e?.message || e)); }
   }
 
@@ -154,6 +175,9 @@ export function AccountScreen({ navigation }: any) {
           {shieldStatus !== "none" ? (
             <Text style={[styles.muted, { marginTop: 6 }]}>Timer: {formatShieldCountdown(shieldSeconds)}</Text>
           ) : null}
+            {shieldStatus === "none" ? (
+              <Text style={[styles.muted, { marginTop: 6 }]}>Costs: 1d/5, 2d/10, 7d/25, 14d/50, 30d/100 green gems.</Text>
+            ) : null}
           {shieldStatus === "none" && (
             <Btn label="Activate Shield" onPress={activateShield} loading={shieldBusy} style={{ marginTop: 10 }} />
           )}

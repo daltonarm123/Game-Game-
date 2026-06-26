@@ -78,6 +78,16 @@ const KINGDOM_STORAGE_KEY = "gg:kingdom";
 const BUILD_SHA = (import.meta as any).env?.VITE_GIT_SHA || "dev";
 const BUILD_MODE = (import.meta as any).env?.MODE || "development";
 const FAST_FLAG = (import.meta as any).env?.VITE_LOCAL_DEMO_FAST || "unknown";
+const SHIELD_OPTIONS = [
+  { days: 1, gems: 5, label: "1 day" },
+  { days: 2, gems: 10, label: "2 days" },
+  { days: 7, gems: 25, label: "7 days" },
+  { days: 14, gems: 50, label: "14 days" },
+  { days: 30, gems: 100, label: "30 days" },
+] as const;
+type ShieldDays = typeof SHIELD_OPTIONS[number]["days"];
+
+type GreenGemPack = { code: string; gems: number; priceUsd: number };
 const INPUT_STYLE: React.CSSProperties = {
   padding: "10px 12px",
   borderRadius: 8,
@@ -298,6 +308,7 @@ function OverviewView() {
   const [seasonRemainingSec, setSeasonRemainingSec] = useState(0);
   const [taxBusy, setTaxBusy] = useState(false);
   const [shieldBusy, setShieldBusy] = useState(false);
+  const [shieldDays, setShieldDays] = useState<ShieldDays>(1);
   const [vacationBusy, setVacationBusy] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
   const [cancelBuildId, setCancelBuildId] = useState<number | null>(null);
@@ -424,10 +435,11 @@ function OverviewView() {
       const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/shield/activate`, {
         method: "POST",
         headers: authHeaders(),
+        body: JSON.stringify({ days: shieldDays }),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setStatusMsg("Shield queued. It will activate in 24 hours.");
+      setStatusMsg(`Shield activated for ${Number(j?.shieldDays || shieldDays)} day(s). Cost: ${Number(j?.gemCost || 0)} gems.`);
       await load();
     } catch (e: any) {
       setStatusMsg(`Shield failed: ${String(e?.message || e)}`);
@@ -437,7 +449,7 @@ function OverviewView() {
   }
 
   async function cancelShield() {
-    if (!window.confirm("Cancel shield now? This will start a 24-hour shield cooldown.")) return;
+    if (!window.confirm("Cancel shield now? Remaining shield time will be forfeited.")) return;
     setShieldBusy(true);
     setStatusMsg("");
     try {
@@ -447,7 +459,7 @@ function OverviewView() {
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setStatusMsg("Shield cancelled. 24-hour cooldown started.");
+      setStatusMsg("Shield cancelled.");
       await load();
     } catch (e: any) {
       setStatusMsg(`Shield cancel failed: ${String(e?.message || e)}`);
@@ -604,6 +616,14 @@ function OverviewView() {
               {(shield?.status === "none" || !shield) && <span style={{ color: TEXT_MUTED }}>No shield — kingdom is open to attack</span>}
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <select
+                value={shieldDays}
+                disabled={shieldBusy || (shield && String(shield.status || "none") !== "none")}
+                onChange={(e) => setShieldDays(Number(e.target.value) as ShieldDays)}
+                style={{ ...INPUT_STYLE, width: 150, fontSize: 13, padding: "7px 10px" }}
+              >
+                {SHIELD_OPTIONS.map((opt) => <option key={opt.days} value={opt.days}>{opt.label} / {opt.gems} gems</option>)}
+              </select>
               <button style={{ ...BTN_STYLE, fontSize: 13, padding: "7px 14px" }} disabled={shieldBusy || (shield && String(shield.status || "none") !== "none")} onClick={() => void activateShield()}>
                 {shieldBusy ? "..." : "🛡 Activate Shield"}
               </button>
@@ -7845,11 +7865,14 @@ function AccountView() {
   const [kingdom, setKingdom] = useState(() => localStorage.getItem(KINGDOM_STORAGE_KEY) || "");
   const [shieldData, setShieldData] = useState<any>(null);
   const [gemsData, setGemsData] = useState<any>(null);
+  const [gemPacks, setGemPacks] = useState<GreenGemPack[]>([]);
   const [premiumData, setPremiumData] = useState<any>(null);
   const [premiumPlans, setPremiumPlans] = useState<PremiumPlan[]>([]);
   const [referralData, setReferralData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [shieldBusy, setShieldBusy] = useState(false);
+  const [gemBuyBusy, setGemBuyBusy] = useState<string | null>(null);
+  const [shieldDays, setShieldDays] = useState<ShieldDays>(1);
   const [statusMsg, setStatusMsg] = useState("");
 
   async function load() {
@@ -7875,6 +7898,11 @@ function AccountView() {
         setPremiumData(premiumJson?.premium || null);
         setPremiumPlans(Array.isArray(premiumJson?.plans) ? premiumJson.plans : []);
       }
+      const gemRes = await fetch(`${API_BASE}/api/gems/green/packs`, { headers: authHeaders() });
+      const gemJson = await gemRes.json();
+      if (gemRes.ok && gemJson?.ok) {
+        setGemPacks(Array.isArray(gemJson?.packs) ? gemJson.packs : []);
+      }
     } catch {}
     finally { setLoading(false); }
   }
@@ -7888,10 +7916,11 @@ function AccountView() {
       const r = await fetch(`${API_BASE}/api/kingdom/${encodeURIComponent(kingdom)}/shield/activate`, {
         method: "POST",
         headers: authHeaders(),
+        body: JSON.stringify({ days: shieldDays }),
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setStatusMsg(j?.premiumShieldUsed ? "Premium shield activated immediately for 48 hours." : "Shield queued. It will activate in 24 hours.");
+      setStatusMsg(`Shield activated for ${Number(j?.shieldDays || shieldDays)} day(s). Cost: ${Number(j?.gemCost || 0)} gems.`);
       await load();
     } catch (e: any) {
       setStatusMsg(`Shield failed: ${String(e?.message || e)}`);
@@ -7900,8 +7929,32 @@ function AccountView() {
     }
   }
 
+  async function buyGreenGemPack(pack: GreenGemPack) {
+    setGemBuyBusy(pack.code);
+    setStatusMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/gems/${encodeURIComponent(kingdom)}/green/buy`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ packCode: pack.code }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      if (j.checkoutUrl) {
+        window.location.assign(String(j.checkoutUrl));
+        return;
+      }
+      setStatusMsg(`Green gems added: +${Number(pack.gems || 0).toLocaleString()}`);
+      await load();
+    } catch (e: any) {
+      setStatusMsg(`Gem purchase failed: ${String(e?.message || e)}`);
+    } finally {
+      setGemBuyBusy(null);
+    }
+  }
+
   async function cancelShield() {
-    if (!window.confirm("Cancel shield now? This will start a 24-hour shield cooldown.")) return;
+    if (!window.confirm("Cancel shield now? Remaining shield time will be forfeited.")) return;
     setShieldBusy(true);
     setStatusMsg("");
     try {
@@ -7911,7 +7964,7 @@ function AccountView() {
       });
       const j = await r.json();
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setStatusMsg("Shield cancelled. 24-hour cooldown started.");
+      setStatusMsg("Shield cancelled.");
       await load();
     } catch (e: any) {
       setStatusMsg(`Shield cancel failed: ${String(e?.message || e)}`);
@@ -7974,9 +8027,7 @@ function AccountView() {
       <div style={CARD}>
         <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, marginBottom: 10 }}>Kingdom Shield</div>
         <div style={{ fontSize: 14, color: TEXT_MUTED, marginBottom: 12, lineHeight: 1.8 }}>
-          <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>Pending (24h):</span> Shield is queuing. You cannot start an attack, but can retaliate if hit, and the market stays open.<br />
-          <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>Active:</span> Full lockdown — you cannot be attacked or attack, and the market is closed.<br />
-          <span style={{ color: TEXT_MAIN, fontWeight: 600 }}>Cooldown (24h):</span> Shield has ended. You may use the market and defend yourself if attacked, but cannot send the first strike.
+          Shields activate immediately and block attacks, spying, and sabotage against your kingdom for the selected duration.
         </div>
         <div style={{ marginBottom: 10, fontSize: 14 }}>
           Status:{" "}
@@ -7988,6 +8039,14 @@ function AccountView() {
           </span>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <select
+            value={shieldDays}
+            disabled={shieldBusy || (shieldData && String(shieldData.status || "none") !== "none")}
+            onChange={(e) => setShieldDays(Number(e.target.value) as ShieldDays)}
+            style={{ ...INPUT_STYLE, width: 170, fontSize: 13 }}
+          >
+            {SHIELD_OPTIONS.map((opt) => <option key={opt.days} value={opt.days}>{opt.label} / {opt.gems} gems</option>)}
+          </select>
           <button
             style={{ ...BTN_STYLE, fontSize: 13 }}
             disabled={shieldBusy || (shieldData && String(shieldData.status || "none") !== "none")}
@@ -8014,9 +8073,19 @@ function AccountView() {
           <div style={{ fontSize: 16 }}>Green Gems: <span style={{ color: "#7fdb8a", fontWeight: 700 }}>{Number(gemsData?.green_gems || 0).toLocaleString()}</span></div>
         </div>
         <div style={{ fontSize: 14, color: TEXT_MUTED, lineHeight: 1.6 }}>
-          Blue Gems are the premium currency of Crownforge. They can be earned through gameplay milestones,
-          special events, and purchases. Use them to unlock premium features and bonuses.
-          Green Gems are earned through alliance contributions and special missions.
+          Green Gems are earned through daily rewards, successful sabotage, and purchases. Use them to activate shields.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8, marginTop: 12 }}>
+          {gemPacks.map((pack) => (
+            <button
+              key={pack.code}
+              style={{ ...BTN_STYLE, fontSize: 13, padding: "10px 12px" }}
+              disabled={gemBuyBusy !== null}
+              onClick={() => void buyGreenGemPack(pack)}
+            >
+              {gemBuyBusy === pack.code ? "..." : `${pack.gems} gems · $${Number(pack.priceUsd || 0).toFixed(2)}`}
+            </button>
+          ))}
         </div>
       </div>
 
