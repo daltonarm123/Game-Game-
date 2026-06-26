@@ -40,6 +40,19 @@ powershell -ExecutionPolicy Bypass -File .\scripts\reset-demo.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\seed-elixer-dev-kingdom.ps1
 ```
 
+## Hidden admin monitor account
+
+Set these API environment variables before startup to create or update a hidden admin account. The kingdom is usable for login/admin monitoring, but is filtered from player search, rankings, and direct attack/spy/sabotage targets.
+
+```powershell
+$env:HIDDEN_ADMIN_USERNAME = "elixer-admin"
+$env:HIDDEN_ADMIN_EMAIL = "admin@example.com"
+$env:HIDDEN_ADMIN_PASSWORD = "set-a-private-password-here"
+$env:HIDDEN_ADMIN_KINGDOM = "ElixerAdmin"
+```
+
+Do not commit the password. Keep it in the deployment environment or local shell only.
+
 ## Run smoke test
 
 ```powershell

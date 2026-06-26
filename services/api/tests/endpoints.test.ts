@@ -63,7 +63,7 @@ test("shield blocks spy endpoint against protected defender", async () => {
     if (sql.includes("SELECT id, name FROM kingdoms") && String(params?.[0]).toLowerCase() === "attacker") {
       return rows([{ id: 1, name: "Attacker" }]);
     }
-    if (sql.includes("SELECT id, name, land, gold") && String(params?.[0]).toLowerCase() === "defender") {
+    if (sql.includes("FROM kingdoms k") && sql.includes("k.gold") && String(params?.[0]).toLowerCase() === "defender") {
       return rows([{ id: 2, name: "Defender", land: 1000, gold: 50000, food: 50000, wood: 5000, stone: 5000, horses: 0, blue_gems: 0, green_gems: 0 }]);
     }
     if (sql.includes("vacation_started_at")) return rows([{ id: params?.[0], vacation_mode: false }]);
@@ -100,7 +100,7 @@ test("successful sabotage sends surviving spies on a return timer and grants rew
     if (sql.includes("SELECT id, name FROM kingdoms") && String(params?.[0]).toLowerCase() === "attacker") {
       return rows([{ id: 1, name: "Attacker" }]);
     }
-    if (sql.includes("SELECT id, name FROM kingdoms") && String(params?.[0]).toLowerCase() === "defender") {
+    if ((sql.includes("SELECT id, name FROM kingdoms") || sql.includes("FROM kingdoms k")) && String(params?.[0]).toLowerCase() === "defender") {
       return rows([{ id: 2, name: "Defender" }]);
     }
     if (sql.startsWith("DELETE FROM kingdom_status_effects")) return rows([]);

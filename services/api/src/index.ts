@@ -231,6 +231,10 @@ const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || "").tr
 const PUBLIC_WEB_URL = String(process.env.PUBLIC_WEB_URL || process.env.WEB_PUBLIC_URL || "http://localhost:5173").replace(/\/$/, "");
 const ALLOW_SIMULATED_GEM_PURCHASES = String(process.env.ALLOW_SIMULATED_GEM_PURCHASES || "").trim() === "1";
 const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
+const HIDDEN_ADMIN_USERNAME = String(process.env.HIDDEN_ADMIN_USERNAME || "").trim();
+const HIDDEN_ADMIN_EMAIL = normalizeEmail(process.env.HIDDEN_ADMIN_EMAIL || "");
+const HIDDEN_ADMIN_PASSWORD = String(process.env.HIDDEN_ADMIN_PASSWORD || "");
+const HIDDEN_ADMIN_KINGDOM = String(process.env.HIDDEN_ADMIN_KINGDOM || HIDDEN_ADMIN_USERNAME || "").trim();
 
 const registerBody = z.object({
   userId: z.string().min(1),
@@ -561,7 +565,7 @@ async function createAuthSession(c: PoolClient, userId: string) {
 async function getAuthSession(token: string) {
   const q = await pool.query(
     `SELECT s.token, s.user_id, s.created_at, s.expires_at,
-            u.username, u.email, u.email_verified, u.is_admin, u.is_banned,
+            u.username, u.email, u.email_verified, u.is_admin, u.is_banned, u.hidden_from_players,
             u.premium_started_at, u.premium_ends_at, u.premium_shield_last_used_at
      FROM auth_sessions s
      JOIN app_users u ON u.id = s.user_id
@@ -1466,6 +1470,63 @@ async function seedKingdom(c: PoolClient, opts: {
   return kingdom;
 }
 
+async function ensureHiddenAdminAccount() {
+  if (!HIDDEN_ADMIN_USERNAME && !HIDDEN_ADMIN_EMAIL && !HIDDEN_ADMIN_PASSWORD && !HIDDEN_ADMIN_KINGDOM) return;
+  if (!HIDDEN_ADMIN_USERNAME || !HIDDEN_ADMIN_EMAIL || !HIDDEN_ADMIN_PASSWORD || !HIDDEN_ADMIN_KINGDOM) {
+    throw new Error("HIDDEN_ADMIN_USERNAME, HIDDEN_ADMIN_EMAIL, HIDDEN_ADMIN_PASSWORD, and HIDDEN_ADMIN_KINGDOM are all required to create a hidden admin account");
+  }
+
+  await withTx(async (c) => {
+    const existing = await c.query(
+      `SELECT id FROM app_users WHERE LOWER(username)=LOWER($1) OR LOWER(email)=LOWER($2) LIMIT 1`,
+      [HIDDEN_ADMIN_USERNAME, HIDDEN_ADMIN_EMAIL],
+    );
+    const userId = existing.rows[0]?.id ? String(existing.rows[0].id) : `admin_${HIDDEN_ADMIN_USERNAME.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || randomBytes(6).toString("hex")}`;
+    const nameConflict = await c.query(
+      `SELECT user_id FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id<>$2 LIMIT 1`,
+      [HIDDEN_ADMIN_KINGDOM, userId],
+    );
+    if (nameConflict.rowCount) throw new Error(`hidden admin kingdom name is already in use: ${HIDDEN_ADMIN_KINGDOM}`);
+
+    await c.query(
+      `INSERT INTO app_users(id, username, email, password_hash, email_verified, is_admin, hidden_from_players)
+       VALUES ($1,$2,$3,$4,true,true,true)
+       ON CONFLICT (id) DO UPDATE SET
+         username=EXCLUDED.username,
+         email=EXCLUDED.email,
+         password_hash=EXCLUDED.password_hash,
+         email_verified=true,
+         is_admin=true,
+         hidden_from_players=true`,
+      [userId, HIDDEN_ADMIN_USERNAME, HIDDEN_ADMIN_EMAIL, hashPassword(HIDDEN_ADMIN_PASSWORD)],
+    );
+
+    const existingKingdom = await c.query(`SELECT id FROM kingdoms WHERE user_id=$1 LIMIT 1`, [userId]);
+    const kingdom = existingKingdom.rowCount
+      ? await c.query(`UPDATE kingdoms SET name=$2 WHERE id=$1 RETURNING id`, [existingKingdom.rows[0].id, HIDDEN_ADMIN_KINGDOM])
+      : await c.query(
+          `INSERT INTO kingdoms(user_id, name, gold, food, wood, stone, land, horses)
+           VALUES ($1,$2,50000,50000,5000,5000,1000,0)
+           RETURNING id`,
+          [userId, HIDDEN_ADMIN_KINGDOM],
+        );
+    const kingdomId = Number(kingdom.rows[0].id);
+    await c.query(
+      `INSERT INTO kingdom_buildings(kingdom_id, building_code, level)
+       SELECT $1::bigint, code, 0 FROM building_types
+       ON CONFLICT (kingdom_id, building_code) DO NOTHING`,
+      [kingdomId],
+    );
+    await c.query(
+      `INSERT INTO kingdom_troops(kingdom_id, troop_code, amount)
+       SELECT $1::bigint, code, 0 FROM troop_types
+       ON CONFLICT (kingdom_id, troop_code) DO NOTHING`,
+      [kingdomId],
+    );
+    await ensureSettlementsForKingdom(c, kingdomId, HIDDEN_ADMIN_KINGDOM, 1000);
+  });
+}
+
 // Ownership guard for authenticated kingdom write routes.
 app.use("/api/kingdom/:name", requireOwnedKingdomParam("name"));
 app.use("/api/war-room/:attacker/attack", requireOwnedKingdomParam("attacker"));
@@ -1620,6 +1681,7 @@ app.post("/api/auth/login", async (req, res) => {
           email: String(user.email || ""),
           emailVerified: Boolean(user.email_verified),
           isAdmin: Boolean(user.is_admin),
+          hiddenFromPlayers: Boolean(user.hidden_from_players),
           premium: premiumStatusFromRow(user),
         },
         kingdom: { id: Number(k.rows[0].id), name: String(k.rows[0].name) },
@@ -1652,6 +1714,7 @@ app.get("/api/auth/me", async (req, res) => {
         email: String(session.email || ""),
         emailVerified: Boolean(session.email_verified),
         isAdmin: Boolean(session.is_admin),
+        hiddenFromPlayers: Boolean(session.hidden_from_players),
         premium: premiumStatusFromRow(session),
       },
       kingdom: kingdom.rowCount ? { id: Number(kingdom.rows[0].id), name: String(kingdom.rows[0].name) } : null,
@@ -3013,16 +3076,21 @@ app.get("/api/kingdom-search", async (req, res) => {
   const limit = clamp(Number(req.query.limit || 8), 1, 20);
   try {
     if (!q) {
-      const rows = await pool.query(`SELECT name FROM kingdoms ORDER BY created_at DESC LIMIT $1`, [limit]);
+      const rows = await pool.query(
+        `SELECT k.name FROM kingdoms k JOIN app_users u ON u.id=k.user_id WHERE u.hidden_from_players=false ORDER BY k.created_at DESC LIMIT $1`,
+        [limit],
+      );
       return res.json({ ok: true, items: rows.rows.map((r) => String(r.name)) });
     }
     const rows = await pool.query(
       `
-      SELECT name
-      FROM kingdoms
-      WHERE LOWER(name) LIKE LOWER($1 || '%')
-         OR LOWER(name) LIKE LOWER('%' || $1 || '%')
-      ORDER BY CASE WHEN LOWER(name) LIKE LOWER($1 || '%') THEN 0 ELSE 1 END, name ASC
+      SELECT k.name
+      FROM kingdoms k
+      JOIN app_users u ON u.id=k.user_id
+      WHERE u.hidden_from_players=false
+        AND (LOWER(k.name) LIKE LOWER($1 || '%')
+          OR LOWER(k.name) LIKE LOWER('%' || $1 || '%'))
+      ORDER BY CASE WHEN LOWER(k.name) LIKE LOWER($1 || '%') THEN 0 ELSE 1 END, k.name ASC
       LIMIT $2
       `,
       [q, limit],
@@ -3242,7 +3310,10 @@ app.post("/api/war-room/:attacker/attack", requireAuth, async (req, res) => {
       );
       if (!a.rowCount) throw new Error("attacker kingdom not found");
       const d = await c.query(
-        `SELECT id, name, land, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        `SELECT k.id, k.name, k.land, k.shield_status, k.shield_requested_at, k.shield_starts_at, k.shield_ends_at, k.shield_cooldown_ends_at
+         FROM kingdoms k
+         JOIN app_users u ON u.id=k.user_id AND u.hidden_from_players=false
+         WHERE LOWER(k.name)=LOWER($1) FOR UPDATE OF k`,
         [defenderName],
       );
       if (!d.rowCount) throw new Error("defender kingdom not found");
@@ -3970,7 +4041,10 @@ app.post("/api/war-room/:attacker/spy", requireAuth, async (req, res) => {
       );
       if (!a.rowCount) throw new Error("attacker kingdom not found");
       const d = await c.query(
-        `SELECT id, name, land, gold, food, wood, stone, horses, blue_gems, green_gems FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`,
+        `SELECT k.id, k.name, k.land, k.gold, k.food, k.wood, k.stone, k.horses, k.blue_gems, k.green_gems
+         FROM kingdoms k
+         JOIN app_users u ON u.id=k.user_id AND u.hidden_from_players=false
+         WHERE LOWER(k.name)=LOWER($1) FOR UPDATE OF k`,
         [defenderName],
       );
       if (!d.rowCount) throw new Error("defender kingdom not found");
@@ -4566,6 +4640,7 @@ app.get("/api/rankings/kingdoms", async (req, res) => {
           k.vacation_mode,
           (k.land * 0.04 + k.food * 0.0001 + k.gold * 0.0005 + k.stone * 0.0002 + k.wood * 0.0002 + COALESCE(tn.troop_nw, 0)) AS networth
         FROM kingdoms k
+        JOIN app_users u ON u.id = k.user_id AND u.hidden_from_players=false
         LEFT JOIN troop_nw tn ON tn.kingdom_id = k.id
         LEFT JOIN alliance_members am ON am.kingdom_id = k.id
         LEFT JOIN alliances a ON a.id = am.alliance_id
@@ -7102,7 +7177,13 @@ app.post("/api/guildhall/:kingdom/sabotage", requireAuth, async (req, res) => {
     const out = await withTx(async (c) => {
       const atk = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [kingdom]);
       if (!atk.rowCount) throw new Error("attacker kingdom not found");
-      const def = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE`, [parsed.data.defenderKingdom]);
+      const def = await c.query(
+        `SELECT k.id, k.name
+         FROM kingdoms k
+         JOIN app_users u ON u.id=k.user_id AND u.hidden_from_players=false
+         WHERE LOWER(k.name)=LOWER($1) FOR UPDATE OF k`,
+        [parsed.data.defenderKingdom],
+      );
       if (!def.rowCount) throw new Error("defender kingdom not found");
       if (Number(atk.rows[0].id) === Number(def.rows[0].id)) throw new Error("cannot sabotage your own kingdom");
       const attackerId = Number(atk.rows[0].id);
@@ -7212,7 +7293,7 @@ app.get("/api/admin/kingdoms", requireAdmin, async (req, res) => {
   const search = String(req.query.search || "").trim();
   try {
     const q = await pool.query(
-      `SELECT k.id, k.name, k.land, k.gold, k.food, k.wood, k.stone, u.id AS user_id, u.username, u.email, u.is_admin, u.is_banned, u.banned_reason, k.created_at
+      `SELECT k.id, k.name, k.land, k.gold, k.food, k.wood, k.stone, u.id AS user_id, u.username, u.email, u.is_admin, u.hidden_from_players, u.is_banned, u.banned_reason, k.created_at
        FROM kingdoms k JOIN app_users u ON u.id = k.user_id
        WHERE ($1='' OR LOWER(k.name) LIKE '%'||LOWER($1)||'%' OR LOWER(u.username) LIKE '%'||LOWER($1)||'%')
        ORDER BY k.land DESC LIMIT $2 OFFSET $3`,
@@ -7229,7 +7310,7 @@ app.get("/api/admin/users", requireAdmin, async (req, res) => {
   const search = String(req.query.search || "").trim();
   try {
     const q = await pool.query(
-      `SELECT u.id, u.username, u.email, u.email_verified, u.is_admin, u.is_banned, u.banned_reason,
+      `SELECT u.id, u.username, u.email, u.email_verified, u.is_admin, u.hidden_from_players, u.is_banned, u.banned_reason,
               u.premium_started_at, u.premium_ends_at, u.created_at, u.registration_ip, k.name AS kingdom_name
        FROM app_users u LEFT JOIN kingdoms k ON k.user_id = u.id
        WHERE ($1='' OR LOWER(u.username) LIKE '%'||LOWER($1)||'%' OR LOWER(u.email) LIKE '%'||LOWER($1)||'%')
@@ -8395,6 +8476,7 @@ export { app };
 
 async function bootstrap() {
   await ensureSchema();
+  await ensureHiddenAdminAccount();
   const adminUsernames = String(process.env.ADMIN_USERNAME || "")
     .split(",")
     .map((s) => s.trim())

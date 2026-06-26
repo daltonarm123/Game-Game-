@@ -5735,13 +5735,14 @@ function AdminView() {
   const token = auth?.token || "";
 
   type StatsData = { totalUsers: number; totalKingdoms: number; activeSessions: number; bannedUsers: number };
-  type KingdomRow = { id: number; name: string; land: number; gold: number; user_id: string; username: string; email: string; is_admin: boolean; is_banned: boolean; banned_reason: string | null };
+  type KingdomRow = { id: number; name: string; land: number; gold: number; user_id: string; username: string; email: string; is_admin: boolean; hidden_from_players: boolean; is_banned: boolean; banned_reason: string | null };
   type UserRow = {
     id: string;
     username: string;
     email: string;
     email_verified: boolean;
     is_admin: boolean;
+    hidden_from_players: boolean;
     is_banned: boolean;
     banned_reason: string | null;
     created_at: string;
@@ -6045,8 +6046,8 @@ function AdminView() {
                         <td style={{ ...TD, color: k.is_admin ? ACCENT : TEXT_MAIN }}>{k.username}{k.is_admin ? " ★" : ""}</td>
                         <td style={TD}>{Number(k.land).toLocaleString()}</td>
                         <td style={TD}>{Number(k.gold).toLocaleString()}</td>
-                        <td style={{ ...TD, color: k.is_banned ? "#ff7f7f" : "#a8e6a3" }}>
-                          {k.is_banned ? `Banned${k.banned_reason ? ": " + k.banned_reason : ""}` : "Active"}
+                        <td style={{ ...TD, color: k.is_banned ? "#ff7f7f" : k.hidden_from_players ? ACCENT : "#a8e6a3" }}>
+                          {k.is_banned ? `Banned${k.banned_reason ? ": " + k.banned_reason : ""}` : k.hidden_from_players ? "Hidden" : "Active"}
                         </td>
                         <td style={TD}>
                           <div style={{ display: "flex", gap: 6 }}>
@@ -6188,7 +6189,7 @@ function AdminView() {
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr>
-                      {["Username", "Email", "Kingdom", "Verified", "Admin", "Premium", "Status", "Actions"].map((h) => (
+                      {["Username", "Email", "Kingdom", "Verified", "Admin", "Visibility", "Premium", "Status", "Actions"].map((h) => (
                         <th key={h} style={TH}>{h}</th>
                       ))}
                     </tr>
@@ -6201,6 +6202,7 @@ function AdminView() {
                         <td style={TD}>{u.kingdom_name || "—"}</td>
                         <td style={{ ...TD, color: u.email_verified ? "#a8e6a3" : "#ffb5a5" }}>{u.email_verified ? "Yes" : "No"}</td>
                         <td style={{ ...TD, color: u.is_admin ? ACCENT : TEXT_MUTED }}>{u.is_admin ? "Yes" : "No"}</td>
+                        <td style={{ ...TD, color: u.hidden_from_players ? ACCENT : TEXT_MUTED }}>{u.hidden_from_players ? "Hidden" : "Public"}</td>
                         <td style={{ ...TD, color: TEXT_MUTED, fontSize: 12 }}>
                           {(() => {
                             const premiumEndsAt = u.premium_ends_at ? new Date(String(u.premium_ends_at)) : null;
