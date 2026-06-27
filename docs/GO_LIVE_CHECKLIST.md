@@ -27,7 +27,7 @@ Owner: Engineering + Live Ops
 ## Security and Dependency Hygiene
 - [ ] Triage and fix npm vulnerabilities from `npm audit` output.
 - [x] Add CI security gate for dependency checks.
-- [ ] Document key rotation and secret rollover process.
+- [x] Document key rotation and secret rollover process.
 - [ ] Review session controls and anti-abuse limits for launch traffic.
 
 ## Payments and Platform Compliance

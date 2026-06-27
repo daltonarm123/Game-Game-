@@ -50,6 +50,11 @@ All reconcile endpoints support `dryRun: true` first.
 ./scripts/backup-db.ps1
 ```
 
+## Security Rotation
+
+- Secret rotation runbook:
+  - `docs/SECURITY_SECRETS_ROTATION.md`
+
 Optional:
 
 ```powershell
