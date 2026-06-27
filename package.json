@@ -12,7 +12,8 @@
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "go-live:check": "./scripts/go-live-check.sh"
+    "go-live:check": "./scripts/go-live-check.sh",
+    "test:api:integration": "npm --workspace services/api run test:integration"
   },
   "engines": {
     "node": ">=20.0.0"

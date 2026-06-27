@@ -13,6 +13,7 @@ Owner: Engineering + Live Ops
 ## Testing and Release Confidence
 - [x] Workspace unit tests run green (`npm test`).
 - [x] CI workflow added for test/build/audit gates (`.github/workflows/ci.yml`).
+- [x] Initial API transient-DB integration harness added (`scripts/run-api-integration-with-transient-db.sh`) with shield cooldown integration coverage.
 - [ ] Add API integration tests against a transient Postgres instance for war, market, settlements, alliances.
 - [ ] Add browser E2E tests for register/login, build/train, war-room, market, premium flows.
 - [ ] Add soak tests for tick catch-up and long-running queue processing.

@@ -87,3 +87,5 @@ Modern, maintained, tick-based kingdom strategy game platform.
   - `docs/GO_LIVE_CHECKLIST.md`
 - Product roadmap status:
   - `docs/ROADMAP.md`
+- API transient-DB integration test runner:
+  - `scripts/run-api-integration-with-transient-db.sh`
