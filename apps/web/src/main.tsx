@@ -151,7 +151,7 @@ function BrokenWagonFallback({
         }}
       >
         <img
-          src="/broken-wagon.svg"
+          src="/broken-wagon.jpg"
           alt="Broken wagon"
           style={{
             width: "100%",
