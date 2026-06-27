@@ -78,6 +78,9 @@ const DEFAULT_DAILY_INTERSTITIAL_AD_URL = typeof window !== "undefined"
   : "/interstitial-ad.html";
 const DAILY_INTERSTITIAL_AD_URL = String((import.meta as any).env?.VITE_DAILY_INTERSTITIAL_AD_URL || "").trim() || DEFAULT_DAILY_INTERSTITIAL_AD_URL;
 const DAILY_AD_DURATION_SECONDS = 12;
+const SERVICE_HEALTH_POLL_MS = 10000;
+const SERVICE_HEALTH_TIMEOUT_MS = 4000;
+const SERVICE_HEALTH_FAILURE_THRESHOLD = 3;
 const AUTH_STORAGE_KEY = "gg:auth";
 const KINGDOM_STORAGE_KEY = "gg:kingdom";
 const BUILD_SHA = (import.meta as any).env?.VITE_GIT_SHA || "dev";
@@ -8637,6 +8640,9 @@ function App() {
   const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
   const [navOpen, setNavOpen] = useState(() => (typeof window !== "undefined" ? window.innerWidth >= 980 : true));
   const [showDailyModal, setShowDailyModal] = useState(false);
+  const [serviceDown, setServiceDown] = useState(false);
+  const [serviceDownReason, setServiceDownReason] = useState("The realm servers are not responding right now.");
+  const serviceFailCountRef = useRef(0);
   const [auth, setAuth] = useState<AuthState | null>(() => {
     try {
       const raw = localStorage.getItem(AUTH_STORAGE_KEY);
@@ -8656,6 +8662,60 @@ function App() {
     onResize();
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    async function checkServiceHealth() {
+      if (cancelled) return;
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        serviceFailCountRef.current = SERVICE_HEALTH_FAILURE_THRESHOLD;
+        if (!cancelled) {
+          setServiceDownReason("You appear to be offline. Reconnect to continue your campaign.");
+          setServiceDown(true);
+        }
+        return;
+      }
+
+      const ctrl = new AbortController();
+      const timeoutId = setTimeout(() => ctrl.abort(), SERVICE_HEALTH_TIMEOUT_MS);
+      try {
+        const r = await fetch(`${API_BASE}/healthz`, { signal: ctrl.signal });
+        if (!r.ok) throw new Error(`Health HTTP ${r.status}`);
+        serviceFailCountRef.current = 0;
+        if (!cancelled) {
+          setServiceDown(false);
+          setServiceDownReason("The realm servers are not responding right now.");
+        }
+      } catch {
+        serviceFailCountRef.current += 1;
+        if (!cancelled && serviceFailCountRef.current >= SERVICE_HEALTH_FAILURE_THRESHOLD) {
+          setServiceDownReason("Crownforge is temporarily unreachable. Please try again shortly.");
+          setServiceDown(true);
+        }
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    void checkServiceHealth();
+    intervalId = setInterval(() => { void checkServiceHealth(); }, SERVICE_HEALTH_POLL_MS);
+    const onOnline = () => { void checkServiceHealth(); };
+    const onOffline = () => {
+      serviceFailCountRef.current = SERVICE_HEALTH_FAILURE_THRESHOLD;
+      setServiceDownReason("You appear to be offline. Reconnect to continue your campaign.");
+      setServiceDown(true);
+    };
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      cancelled = true;
+      if (intervalId) clearInterval(intervalId);
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
   }, []);
 
   useEffect(() => {
@@ -8726,6 +8786,17 @@ function App() {
       cancelled = true;
     };
   }, [auth?.token]);
+
+  if (serviceDown) {
+    return (
+      <BrokenWagonFallback
+        title="The wagon broke on the main road."
+        message={serviceDownReason}
+        actionLabel="Retry"
+        onAction={() => window.location.reload()}
+      />
+    );
+  }
 
   if (!auth) {
     return <AuthGate onAuthenticated={(a) => setAuth(a)} />;
