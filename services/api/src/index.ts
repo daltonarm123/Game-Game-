@@ -35,6 +35,8 @@ import { evaluateOpsAlerts } from "./ops.js";
 
 dotenv.config();
 
+const IS_PRODUCTION = String(process.env.NODE_ENV || "").trim() === "production";
+
 /** Convert a ZodError into a readable string for API responses. */
 function zodMsg(e: z.ZodError): string {
   const flat = e.flatten();
@@ -230,7 +232,7 @@ const GREEN_GEM_STORE_PACKS = [
 const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || "").trim();
 const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || "").trim();
 const PUBLIC_WEB_URL = String(process.env.PUBLIC_WEB_URL || process.env.WEB_PUBLIC_URL || "http://localhost:5173").replace(/\/$/, "");
-const ALLOW_SIMULATED_GEM_PURCHASES = String(process.env.ALLOW_SIMULATED_GEM_PURCHASES || "").trim() === "1";
+const ALLOW_SIMULATED_GEM_PURCHASES = !IS_PRODUCTION && String(process.env.ALLOW_SIMULATED_GEM_PURCHASES || "").trim() === "1";
 const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
 const HIDDEN_ADMIN_USERNAME = String(process.env.HIDDEN_ADMIN_USERNAME || "").trim();
 const HIDDEN_ADMIN_EMAIL = normalizeEmail(process.env.HIDDEN_ADMIN_EMAIL || "");

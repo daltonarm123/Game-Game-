@@ -31,7 +31,7 @@ Owner: Engineering + Live Ops
 
 ## Payments and Platform Compliance
 - [ ] Ensure production Stripe keys/webhook secret are configured and validated.
-- [ ] Disable simulated purchase path in production environment.
+- [x] Disable simulated purchase path in production environment.
 - [ ] Confirm mobile billing compliance path (web checkout vs native store billing).
 
 ## Deployment Readiness
