@@ -80,3 +80,10 @@ Modern, maintained, tick-based kingdom strategy game platform.
   - `docs/OPERATIONS_RUNBOOK.md`
   - `scripts/backup-db.ps1`
   - `scripts/restore-db.ps1`
+
+## Launch Readiness
+
+- Go-live checklist and current blocker status:
+  - `docs/GO_LIVE_CHECKLIST.md`
+- Product roadmap status:
+  - `docs/ROADMAP.md`

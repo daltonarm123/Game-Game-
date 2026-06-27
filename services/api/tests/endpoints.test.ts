@@ -151,3 +151,41 @@ test("successful sabotage sends surviving spies on a return timer and grants rew
     restore();
   }
 });
+
+test("shield activation is blocked while cooldown is active", async () => {
+  const restore = installMockDb(async (sql, params) => {
+    if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return rows([]);
+    if (sql.includes("FROM kingdoms WHERE LOWER(name)=LOWER($1) FOR UPDATE")) {
+      return rows([{
+        id: 1,
+        user_id: "user-1",
+        name: "Attacker",
+        green_gems: 100,
+        shield_status: "cooldown",
+        shield_requested_at: null,
+        shield_starts_at: null,
+        shield_ends_at: new Date(Date.now() - 60_000).toISOString(),
+        shield_cooldown_ends_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      }]);
+    }
+    if (sql.includes("SELECT id, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at")) {
+      return rows([{
+        id: 1,
+        shield_status: "cooldown",
+        shield_requested_at: null,
+        shield_starts_at: null,
+        shield_ends_at: new Date(Date.now() - 60_000).toISOString(),
+        shield_cooldown_ends_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      }]);
+    }
+    return rows([]);
+  });
+  try {
+    const res = await post("/api/kingdom/Attacker/shield/activate", { days: 1 });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.ok, false);
+    assert.match(String(res.body.error || ""), /shield unavailable while status is cooldown/i);
+  } finally {
+    restore();
+  }
+});

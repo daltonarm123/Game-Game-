@@ -25,6 +25,7 @@ const SEASON_LENGTH_SECONDS = Math.max(30, Number(process.env.SEASON_LENGTH_SECO
 const TAX_MIN = 0;
 const TAX_MAX = 40;
 const VACATION_COOLDOWN_SECONDS = Math.max(3600, Number(process.env.VACATION_COOLDOWN_SECONDS || 7 * 24 * 3600));
+const SHIELD_COOLDOWN_SECONDS = Math.max(0, Number(process.env.SHIELD_COOLDOWN_SECONDS || 12 * 3600));
 
 type SeasonState = {
   index: number;
@@ -308,11 +309,14 @@ async function processShieldStateTick(): Promise<number> {
     const activeToCooldown = await c.query(
       `
       UPDATE kingdoms
-      SET shield_status='cooldown', last_tick_at=now()
+      SET shield_status='cooldown',
+          shield_cooldown_ends_at=COALESCE(shield_cooldown_ends_at, now() + ($1 * INTERVAL '1 second')),
+          last_tick_at=now()
       WHERE shield_status='active'
         AND shield_ends_at IS NOT NULL
         AND shield_ends_at <= now()
       `,
+      [SHIELD_COOLDOWN_SECONDS],
     );
     const cooldownToNone = await c.query(
       `

@@ -19,6 +19,14 @@ Provision an invisible admin login by setting all four environment variables bef
 
 On boot, the API creates or updates that user as `is_admin=true` and `hidden_from_players=true`. Hidden admin kingdoms remain visible in admin endpoints, but are excluded from public kingdom search, rankings, and direct attack/spy/sabotage targeting.
 
+## Timing and Shield Configuration
+
+- `TICK_INTERVAL_SECONDS` controls server tick cadence.
+- `SEASON_LENGTH_SECONDS` controls season duration.
+- `SHIELD_COOLDOWN_SECONDS` controls cooldown duration after a shield ends or is cancelled.
+
+Season countdowns in API responses are derived from season start + wall clock, so UI timers stay accurate even if worker execution is temporarily delayed.
+
 ## Integrity Reconcile (Admin)
 
 Run as admin from browser console with auth token:

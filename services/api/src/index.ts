@@ -183,6 +183,7 @@ const FAST_TRAIN_SECONDS = Math.max(1, Number(process.env.FAST_TRAIN_SECONDS || 
 const FAST_RESEARCH_SECONDS = Math.max(5, Number(process.env.FAST_RESEARCH_SECONDS || 15));
 const VACATION_MAX_SECONDS = Math.max(3600, Number(process.env.VACATION_MAX_SECONDS || 14 * 24 * 3600)); // 14 days
 const VACATION_COOLDOWN_SECONDS = Math.max(3600, Number(process.env.VACATION_COOLDOWN_SECONDS || 7 * 24 * 3600)); // 7-day cooldown
+const SHIELD_COOLDOWN_SECONDS = Math.max(0, Number(process.env.SHIELD_COOLDOWN_SECONDS || 12 * 3600));
 const ATTACK_RETURN_SECONDS = Math.max(
   1,
   Number(process.env.ATTACK_RETURN_SECONDS || (LOCAL_DEMO_FAST ? 20 : ATTACK_RETURN_MINUTES * 60)),
@@ -743,58 +744,38 @@ function seasonByIndex(index: number) {
 }
 
 async function getSeasonSnapshot() {
-  return withTx(async (c) => {
-    await c.query(
-      `
-      INSERT INTO game_state(id, season_index, season_code, season_started_at, season_ends_at, updated_at)
-      VALUES (1, 0, 'spring', now(), now() + ($1 * INTERVAL '1 second'), now())
-      ON CONFLICT (id) DO NOTHING
-      `,
-      [SEASON_LENGTH_SECONDS],
-    );
-    const q = await c.query(`SELECT season_index, season_started_at, season_ends_at FROM game_state WHERE id=1 FOR UPDATE`);
-    const row = q.rows[0];
+  await pool.query(
+    `
+    INSERT INTO game_state(id, season_index, season_code, season_started_at, season_ends_at, updated_at)
+    VALUES (1, 0, 'spring', now(), now() + ($1 * INTERVAL '1 second'), now())
+    ON CONFLICT (id) DO NOTHING
+    `,
+    [SEASON_LENGTH_SECONDS],
+  );
+  const q = await pool.query(`SELECT season_index, season_started_at FROM game_state WHERE id=1 LIMIT 1`);
+  const row = q.rows[0] || {};
+  const nowMs = Date.now();
+  const baseIndex = Math.max(0, Number(row.season_index || 0));
+  const baseStartMs = new Date(row.season_started_at || nowMs).getTime();
+  const elapsedMs = Math.max(0, nowMs - baseStartMs);
+  const seasonLenMs = SEASON_LENGTH_SECONDS * 1000;
+  const offset = Math.floor(elapsedMs / seasonLenMs);
+  const index = baseIndex + offset;
+  const startsAtMs = baseStartMs + offset * seasonLenMs;
+  const endsAtMs = startsAtMs + seasonLenMs;
+  const season = seasonByIndex(index);
+  const remainingSeconds = Math.max(0, Math.floor((endsAtMs - nowMs) / 1000));
 
-    let index = Math.max(0, Number(row?.season_index || 0));
-    let startsAt = new Date(row?.season_started_at || Date.now());
-    let endsAt = new Date(row?.season_ends_at || Date.now() + SEASON_LENGTH_SECONDS * 1000);
-    const now = new Date();
-    let changed = false;
-
-    while (endsAt.getTime() <= now.getTime()) {
-      index += 1;
-      startsAt = endsAt;
-      endsAt = new Date(startsAt.getTime() + SEASON_LENGTH_SECONDS * 1000);
-      changed = true;
-    }
-
-    if (changed) {
-      const s = seasonByIndex(index);
-      await c.query(
-        `
-        UPDATE game_state
-        SET season_index=$2, season_code=$3, season_started_at=$4, season_ends_at=$5, updated_at=now()
-        WHERE id=$1
-        `,
-        [1, index, s.code, startsAt.toISOString(), endsAt.toISOString()],
-      );
-    } else {
-      await c.query(`UPDATE game_state SET updated_at=now() WHERE id=1`);
-    }
-
-    const season = seasonByIndex(index);
-    const remainingSeconds = Math.max(0, Math.floor((endsAt.getTime() - now.getTime()) / 1000));
-    return {
-      index,
-      code: season.code,
-      name: season.name,
-      flavor: season.flavor,
-      modifiers: season.modifiers,
-      startsAt: startsAt.toISOString(),
-      endsAt: endsAt.toISOString(),
-      remainingSeconds,
-    };
-  });
+  return {
+    index,
+    code: season.code,
+    name: season.name,
+    flavor: season.flavor,
+    modifiers: season.modifiers,
+    startsAt: new Date(startsAtMs).toISOString(),
+    endsAt: new Date(endsAtMs).toISOString(),
+    remainingSeconds,
+  };
 }
 
 function clamp(v: number, min: number, max: number): number {
@@ -1181,7 +1162,7 @@ function computeEconomyHourly(
   const resGoldMult = 1 + Number(researchBonus?.gold ?? 0);
   const foodIncome = foodIncomeRaw * Number(modifiers?.food ?? 1) * resFoodMult;
   const tax = clamp(Math.floor(Number(taxRate ?? 25)), 0, 40);
-  const taxGoldMult = clamp(1 + (tax - 25) * 0.04, 0.2, 2.2);
+  const taxGoldMult = taxGoldMultiplier(tax);
   const goldIncome = goldIncomeRaw * Number(modifiers?.gold ?? 1) * taxGoldMult * resGoldMult;
   const woodIncome = woodIncomeRaw * Number(modifiers?.wood ?? 1);
   const stoneIncome = stoneIncomeRaw * Number(modifiers?.stone ?? 1);
@@ -1303,29 +1284,69 @@ async function normalizeShieldStateTx(c: PoolClient, kingdomId: number) {
   let status = String(row.shield_status || "none");
   const startsAt = row.shield_starts_at ? new Date(row.shield_starts_at) : null;
   const endsAt = row.shield_ends_at ? new Date(row.shield_ends_at) : null;
+  let cooldownEndsAt = row.shield_cooldown_ends_at ? new Date(row.shield_cooldown_ends_at) : null;
   let changed = false;
 
   if (status === "pending" && startsAt && startsAt.getTime() <= now.getTime()) {
     status = "active";
   }
-  if (status === "cooldown") status = "none";
   if (status === "active" && endsAt && endsAt.getTime() <= now.getTime()) {
-    status = "none";
+    if (SHIELD_COOLDOWN_SECONDS > 0) {
+      status = "cooldown";
+      cooldownEndsAt = new Date(endsAt.getTime() + SHIELD_COOLDOWN_SECONDS * 1000);
+    } else {
+      status = "none";
+    }
+  }
+  if (status === "cooldown") {
+    if (!cooldownEndsAt && SHIELD_COOLDOWN_SECONDS > 0) {
+      const anchor = endsAt && Number.isFinite(endsAt.getTime()) ? endsAt : now;
+      cooldownEndsAt = new Date(anchor.getTime() + SHIELD_COOLDOWN_SECONDS * 1000);
+    }
+    if (!cooldownEndsAt || cooldownEndsAt.getTime() <= now.getTime()) {
+      status = "none";
+    }
   }
 
   changed = String(status) !== String(row.shield_status || "none");
+  const cooldownChanged =
+    (row.shield_cooldown_ends_at ? new Date(row.shield_cooldown_ends_at).toISOString() : null)
+    !== (cooldownEndsAt ? cooldownEndsAt.toISOString() : null);
 
-  if (changed) {
-    await c.query(
-      `UPDATE kingdoms
-       SET shield_status=$2,
-           shield_starts_at=CASE WHEN $2='active' THEN COALESCE(shield_starts_at, now()) ELSE NULL END,
-           shield_ends_at=CASE WHEN $2='active' THEN shield_ends_at ELSE NULL END,
-           shield_cooldown_ends_at=NULL
-       WHERE id=$1`,
-      [kingdomId, status],
-    );
+  if (changed || cooldownChanged) {
+    if (status === "active") {
+      await c.query(
+        `UPDATE kingdoms
+         SET shield_status='active',
+             shield_starts_at=COALESCE(shield_starts_at, now()),
+             shield_ends_at=shield_ends_at,
+             shield_cooldown_ends_at=$2
+         WHERE id=$1`,
+        [kingdomId, cooldownEndsAt ? cooldownEndsAt.toISOString() : null],
+      );
+    } else if (status === "cooldown") {
+      await c.query(
+        `UPDATE kingdoms
+         SET shield_status='cooldown',
+             shield_cooldown_ends_at=$2
+         WHERE id=$1`,
+        [kingdomId, cooldownEndsAt ? cooldownEndsAt.toISOString() : null],
+      );
+    } else {
+      await c.query(
+        `UPDATE kingdoms
+         SET shield_status='none',
+             shield_requested_at=NULL,
+             shield_starts_at=NULL,
+             shield_ends_at=NULL,
+             shield_cooldown_ends_at=NULL
+         WHERE id=$1`,
+        [kingdomId],
+      );
+      cooldownEndsAt = null;
+    }
     row.shield_status = status;
+    row.shield_cooldown_ends_at = cooldownEndsAt ? cooldownEndsAt.toISOString() : null;
   }
 
   return row;
@@ -3156,12 +3177,12 @@ app.post("/api/kingdom/:name/shield/activate", requireAuth, async (req, res) => 
             shield_requested_at=now(),
             shield_starts_at=now(),
             shield_ends_at=now() + ($3 * INTERVAL '1 day'),
-            shield_cooldown_ends_at=NULL,
+            shield_cooldown_ends_at=now() + ($3 * INTERVAL '1 day') + ($4 * INTERVAL '1 second'),
             green_gems=COALESCE(green_gems,0)-$2
         WHERE id=$1
         RETURNING id, name, green_gems, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
         `,
-        [k.id, gemCost, shieldDays],
+        [k.id, gemCost, shieldDays, SHIELD_COOLDOWN_SECONDS],
       );
       return { ...up.rows[0], gemCost, shieldDays };
     });
@@ -3201,15 +3222,12 @@ app.post("/api/kingdom/:name/shield/cancel", requireAuth, async (req, res) => {
       const up = await c.query(
         `
         UPDATE kingdoms
-        SET shield_status='none',
-            shield_requested_at=NULL,
-            shield_starts_at=NULL,
-            shield_ends_at=NULL,
-            shield_cooldown_ends_at=NULL
+        SET shield_status='cooldown',
+            shield_cooldown_ends_at=now() + ($2 * INTERVAL '1 second')
         WHERE id=$1
         RETURNING id, name, shield_status, shield_requested_at, shield_starts_at, shield_ends_at, shield_cooldown_ends_at
         `,
-        [k.id],
+        [k.id, SHIELD_COOLDOWN_SECONDS],
       );
       return up.rows[0];
     });
