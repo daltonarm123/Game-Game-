@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Crownforge Sponsor Ad</title>
+    <style>
+      :root {
+        --bg1: #14131a;
+        --bg2: #232236;
+        --gold: #e3b871;
+        --cream: #f8efe2;
+        --muted: #d5c4a9;
+        --accent: #79d7b0;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        font-family: "Trebuchet MS", "Segoe UI", Tahoma, sans-serif;
+        color: var(--cream);
+      }
+
+      body {
+        background:
+          radial-gradient(120% 120% at 100% 0%, rgba(227, 184, 113, 0.2) 0%, rgba(227, 184, 113, 0) 48%),
+          radial-gradient(90% 140% at 0% 100%, rgba(121, 215, 176, 0.2) 0%, rgba(121, 215, 176, 0) 55%),
+          linear-gradient(165deg, var(--bg2), var(--bg1));
+        overflow: hidden;
+      }
+
+      .frame {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        display: grid;
+        place-items: center;
+        padding: 14px;
+      }
+
+      .card {
+        width: min(780px, 100%);
+        border: 1px solid rgba(227, 184, 113, 0.35);
+        border-radius: 14px;
+        background: rgba(14, 13, 20, 0.86);
+        backdrop-filter: blur(2px);
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+        padding: 14px;
+      }
+
+      .label {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+      }
+
+      .title {
+        margin-top: 8px;
+        font-size: clamp(22px, 4vw, 34px);
+        line-height: 1.12;
+        font-weight: 800;
+      }
+
+      .title strong {
+        color: var(--gold);
+      }
+
+      .row {
+        margin-top: 14px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .copy {
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .cta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(227, 184, 113, 0.55);
+        border-radius: 10px;
+        background: linear-gradient(180deg, rgba(227, 184, 113, 0.3), rgba(125, 85, 34, 0.25));
+        color: var(--cream);
+        text-decoration: none;
+        padding: 10px 14px;
+        font-weight: 700;
+        min-width: 150px;
+      }
+
+      .tagline {
+        margin-top: 12px;
+        color: var(--accent);
+        font-size: 13px;
+      }
+
+      .spark {
+        position: absolute;
+        border-radius: 50%;
+        opacity: 0.25;
+        filter: blur(0.5px);
+        animation: float 9s linear infinite;
+      }
+
+      .s1 {
+        width: 10px;
+        height: 10px;
+        background: var(--gold);
+        left: 10%;
+        top: 75%;
+        animation-delay: 0s;
+      }
+
+      .s2 {
+        width: 7px;
+        height: 7px;
+        background: var(--accent);
+        left: 38%;
+        top: 84%;
+        animation-delay: 2s;
+      }
+
+      .s3 {
+        width: 9px;
+        height: 9px;
+        background: #f0a6a6;
+        left: 82%;
+        top: 78%;
+        animation-delay: 4s;
+      }
+
+      @keyframes float {
+        0% {
+          transform: translateY(0px) scale(1);
+          opacity: 0.15;
+        }
+        40% {
+          opacity: 0.3;
+        }
+        100% {
+          transform: translateY(-120px) scale(1.15);
+          opacity: 0;
+        }
+      }
+
+      @media (max-width: 620px) {
+        .row {
+          grid-template-columns: 1fr;
+        }
+
+        .cta {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="frame">
+      <div class="spark s1"></div>
+      <div class="spark s2"></div>
+      <div class="spark s3"></div>
+
+      <section class="card" aria-label="Sponsored content">
+        <div class="label">Sponsored</div>
+        <div class="title">
+          Forge Faster With <strong>Crownforge Premium</strong>
+        </div>
+        <div class="row">
+          <div class="copy">
+            Go ad-free and unlock premium command tools for rankings history and advanced pigeon management.
+          </div>
+          <a class="cta" href="https://crownforge.game/premium" target="_blank" rel="noreferrer">View Premium</a>
+        </div>
+        <div class="tagline">Your support keeps the realm online.</div>
+      </section>
+    </main>
+  </body>
+</html>

@@ -73,6 +73,11 @@ const DEFAULT_API_BASE = (import.meta as any).env?.MODE === "production"
   ? "https://radiant-unity-production-bf62.up.railway.app"
   : "http://localhost:8080";
 const API_BASE = (window as any).__GG_API_BASE || (import.meta as any).env?.VITE_API_BASE || DEFAULT_API_BASE;
+const DEFAULT_DAILY_INTERSTITIAL_AD_URL = typeof window !== "undefined"
+  ? `${window.location.origin}/interstitial-ad.html`
+  : "/interstitial-ad.html";
+const DAILY_INTERSTITIAL_AD_URL = String((import.meta as any).env?.VITE_DAILY_INTERSTITIAL_AD_URL || "").trim() || DEFAULT_DAILY_INTERSTITIAL_AD_URL;
+const DAILY_AD_DURATION_SECONDS = 12;
 const AUTH_STORAGE_KEY = "gg:auth";
 const KINGDOM_STORAGE_KEY = "gg:kingdom";
 const BUILD_SHA = (import.meta as any).env?.VITE_GIT_SHA || "dev";
@@ -8341,15 +8346,24 @@ const DAILY_MODAL_KEY = "gg:daily-modal-date";
 
 function DailyLoginModal({ onClose, kingdom, isPremium }: { onClose: () => void; kingdom: string; isPremium: boolean }) {
   const [phase, setPhase] = useState<"ad" | "bonus" | "claimed">(isPremium ? "bonus" : "ad");
-  const [countdown, setCountdown] = useState(15);
+  const [countdown, setCountdown] = useState(DAILY_AD_DURATION_SECONDS);
   const [claiming, setClaiming] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState("");
+  const hasExternalAd = DAILY_INTERSTITIAL_AD_URL.length > 0;
 
   useEffect(() => {
     if (phase !== "ad") return;
-    if (countdown <= 0) return;
-    const t = setInterval(() => setCountdown((c) => c - 1), 1000);
+    if (countdown <= 0) {
+      setPhase("bonus");
+      return;
+    }
+    const t = setInterval(() => {
+      setCountdown((c) => {
+        const next = c - 1;
+        return next < 0 ? 0 : next;
+      });
+    }, 1000);
     return () => clearInterval(t);
   }, [phase, countdown]);
 
@@ -8387,22 +8401,61 @@ function DailyLoginModal({ onClose, kingdom, isPremium }: { onClose: () => void;
       <div style={box}>
         {phase === "ad" && (
           <>
-            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 800, color: ACCENT, marginBottom: 10 }}>
-              Today's Message from Our Sponsors
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 10 }}>
+              <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 800, color: ACCENT }}>
+                Sponsored Interstitial
+              </div>
+              <button
+                onClick={() => setPhase("bonus")}
+                aria-label="Close ad"
+                title="Close"
+                style={{
+                  width: 30,
+                  height: 30,
+                  borderRadius: 999,
+                  border: "1px solid rgba(216,176,117,.45)",
+                  background: "rgba(255,255,255,.06)",
+                  color: TEXT_MAIN,
+                  cursor: "pointer",
+                  fontWeight: 800,
+                }}
+              >
+                ×
+              </button>
             </div>
             <div style={{
-              background: "rgba(255,255,255,0.04)", border: "1px dashed rgba(216,176,117,.3)",
-              borderRadius: 8, minHeight: 120, display: "flex", flexDirection: "column",
-              alignItems: "center", justifyContent: "center", padding: 20, marginBottom: 14, gap: 8,
+              background: "rgba(255,255,255,0.04)", border: "1px solid rgba(216,176,117,.28)",
+              borderRadius: 8, minHeight: 220, display: "flex", flexDirection: "column",
+              alignItems: "center", justifyContent: "center", padding: 12, marginBottom: 14, gap: 8,
+              overflow: "hidden",
             }}>
-              <div style={{ fontSize: 32 }}>📣</div>
-              <div style={{ color: TEXT_MUTED, fontSize: 13, textAlign: "center" }}>
-                Advertisement — Support Crownforge by upgrading to Premium for an ad-free experience.
-              </div>
+              {hasExternalAd ? (
+                <iframe
+                  title="Crownforge Sponsored Ad"
+                  src={DAILY_INTERSTITIAL_AD_URL}
+                  style={{ width: "100%", minHeight: 220, border: "none", borderRadius: 6, background: "#000" }}
+                  sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+                />
+              ) : (
+                <>
+                  <div style={{ fontSize: 32 }}>📣</div>
+                  <div style={{ color: TEXT_MUTED, fontSize: 13, textAlign: "center", marginBottom: 6 }}>
+                    No ad tag is configured for this environment.
+                  </div>
+                  <a
+                    href="https://crownforge.game/premium"
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ ...BTN_STYLE, textDecoration: "none", fontSize: 13, padding: "8px 12px" }}
+                  >
+                    Learn about Premium (Ad-Free)
+                  </a>
+                </>
+              )}
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div style={{ color: TEXT_MUTED, fontSize: 13 }}>
-                {countdown > 0 ? `Continue in ${countdown}s…` : ""}
+                {countdown > 0 ? `Ad ends in ${countdown}s` : "Ad complete"}
               </div>
               <button
                 disabled={countdown > 0}
