@@ -115,6 +115,93 @@ const BTN_STYLE: React.CSSProperties = {
   fontFamily: FONT_BODY,
 };
 
+function BrokenWagonFallback({
+  title,
+  message,
+  actionLabel,
+  onAction,
+}: {
+  title: string;
+  message: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
+  return (
+    <main
+      style={{
+        minHeight: "100vh",
+        display: "grid",
+        placeItems: "center",
+        padding: 16,
+        color: TEXT_MAIN,
+        background: `
+          radial-gradient(1000px 500px at 82% 14%, rgba(216,176,117,0.2), rgba(216,176,117,0)),
+          linear-gradient(170deg, #1b1d27, #241f1a)
+        `,
+        fontFamily: FONT_BODY,
+      }}
+    >
+      <section
+        style={{
+          ...CARD,
+          width: "min(900px, 100%)",
+          borderColor: "rgba(216,176,117,.34)",
+          background: "rgba(18,18,22,.82)",
+          boxShadow: "0 18px 48px rgba(0,0,0,.5)",
+        }}
+      >
+        <img
+          src="/broken-wagon.svg"
+          alt="Broken wagon"
+          style={{
+            width: "100%",
+            maxHeight: 360,
+            objectFit: "contain",
+            borderRadius: 10,
+            border: "1px solid rgba(216,176,117,.28)",
+            background: "rgba(255,255,255,.03)",
+          }}
+        />
+        <div style={{ marginTop: 14, fontFamily: FONT_DISPLAY, fontSize: "clamp(26px, 4.2vw, 42px)", fontWeight: 800 }}>{title}</div>
+        <div style={{ marginTop: 8, color: TEXT_MUTED, fontSize: 16 }}>{message}</div>
+        {onAction ? (
+          <div style={{ marginTop: 16 }}>
+            <button onClick={onAction} style={BTN_STYLE}>{actionLabel || "Retry"}</button>
+          </div>
+        ) : null}
+      </section>
+    </main>
+  );
+}
+
+type RootErrorBoundaryState = { hasError: boolean };
+
+class RootErrorBoundary extends React.Component<{ children: React.ReactNode }, RootErrorBoundaryState> {
+  state: RootErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch() {
+    // Keep fallback UI stable when runtime rendering errors happen.
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <BrokenWagonFallback
+          title="The wagon broke while loading."
+          message="A runtime error interrupted this page. Reload and try again."
+          actionLabel="Reload"
+          onAction={() => window.location.reload()}
+        />
+      );
+    }
+    return this.props.children;
+  }
+}
+
 type AuthState = {
   token: string;
   user: {
@@ -8534,6 +8621,18 @@ function DailyLoginModal({ onClose, kingdom, isPremium }: { onClose: () => void;
 }
 
 function App() {
+  const path = typeof window !== "undefined" ? window.location.pathname : "/";
+  if (path !== "/" && path !== "/index.html") {
+    return (
+      <BrokenWagonFallback
+        title="This route lost a wheel."
+        message="That page does not exist right now. Return to Crownforge and continue your run."
+        actionLabel="Go to Home"
+        onAction={() => { window.location.href = "/"; }}
+      />
+    );
+  }
+
   const [activeId, setActiveId] = useState("overview");
   const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
   const [navOpen, setNavOpen] = useState(() => (typeof window !== "undefined" ? window.innerWidth >= 980 : true));
@@ -8839,5 +8938,9 @@ function App() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(
+  <RootErrorBoundary>
+    <App />
+  </RootErrorBoundary>,
+);
 

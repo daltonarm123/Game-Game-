@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Crownforge | Broken Wagon</title>
+    <style>
+      :root {
+        --bg-a: #171923;
+        --bg-b: #221d1a;
+        --text: #f8efe2;
+        --muted: #d7c4a4;
+        --accent: #d8b075;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(900px 500px at 85% 10%, rgba(216,176,117,.18), rgba(216,176,117,0)),
+          linear-gradient(170deg, var(--bg-a), var(--bg-b));
+        padding: 18px;
+      }
+      .card {
+        width: min(860px, 100%);
+        border: 1px solid rgba(216,176,117,.35);
+        border-radius: 14px;
+        background: rgba(18,18,22,.78);
+        box-shadow: 0 18px 48px rgba(0,0,0,.45);
+        padding: 18px;
+      }
+      .img {
+        width: 100%;
+        max-height: 360px;
+        object-fit: contain;
+        border-radius: 10px;
+        border: 1px solid rgba(216,176,117,.28);
+        background: rgba(255,255,255,.03);
+      }
+      h1 {
+        margin: 14px 0 8px;
+        font-size: clamp(28px, 4.2vw, 44px);
+        line-height: 1.1;
+      }
+      p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 16px;
+      }
+      .actions {
+        margin-top: 16px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(216,176,117,.55);
+        border-radius: 10px;
+        padding: 10px 14px;
+        text-decoration: none;
+        color: var(--text);
+        background: linear-gradient(180deg, rgba(216,176,117,.28), rgba(120,88,43,.24));
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <img class="img" src="/broken-wagon.svg" alt="Broken wagon" />
+      <h1>This page lost a wheel.</h1>
+      <p>The route you opened is not available right now. Head back to the kingdom gates.</p>
+      <div class="actions">
+        <a class="btn" href="/">Return to Crownforge</a>
+      </div>
+    </main>
+  </body>
+</html>
