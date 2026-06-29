@@ -1,0 +1,34 @@
+{
+  "appName": "Crownforge",
+  "subtitle": "Build. Conquer. Reign.",
+  "promotionalText": "Lead your kingdom through seasons, war, alliances, and economy strategy.",
+  "description": "Crownforge is a real-time kingdom strategy game. Build your realm, train armies, manage resources, found settlements, join alliances, and conquer rivals.",
+  "keywords": [
+    "strategy",
+    "kingdom",
+    "war",
+    "alliances",
+    "multiplayer"
+  ],
+  "supportUrl": "https://example.com/support",
+  "marketingUrl": "https://example.com",
+  "privacyPolicyUrl": "https://example.com/privacy",
+  "categories": {
+    "primary": "GAMES_STRATEGY",
+    "secondary": "GAMES_ROLE_PLAYING"
+  },
+  "review": {
+    "contactFirstName": "Your",
+    "contactLastName": "Team",
+    "contactPhone": "+1-555-555-5555",
+    "contactEmail": "review@example.com",
+    "demoAccountRequired": false,
+    "notes": "Provide test account details here if your app requires sign-in for review."
+  },
+  "localized": {
+    "en-US": {
+      "name": "Crownforge",
+      "subtitle": "Build. Conquer. Reign."
+    }
+  }
+}

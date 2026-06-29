@@ -3,10 +3,17 @@
     "name": "Crownforge",
     "slug": "crownforge",
     "version": "1.0.0",
+    "scheme": "crownforge",
+    "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0f0f12",
+    "assetBundlePatterns": ["**/*"],
+    "updates": {
+      "fallbackToCacheTimeout": 0
+    },
     "splash": {
+      "image": "./assets/splash.png",
       "backgroundColor": "#0f0f12",
       "resizeMode": "contain"
     },
@@ -16,6 +23,7 @@
     },
     "android": {
       "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0f0f12"
       },
       "package": "com.crownforge.app"

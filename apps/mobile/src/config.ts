@@ -1,11 +1,21 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// EDIT THIS FILE before testing on a real device.
-//
-// On a physical phone, "localhost" means the phone itself — not your computer.
-// Find your computer's local IP (run `ipconfig` on Windows, `ifconfig` on Mac)
-// and replace localhost below with it, e.g.:
-//   export const API_BASE = "http://192.168.1.42:8080";
-//
-// For iOS Simulator or Android Emulator, localhost works fine.
-// ─────────────────────────────────────────────────────────────────────────────
-export const API_BASE = "http://localhost:8080";
+import { Platform } from "react-native";
+
+function normalizeBaseUrl(raw: string | undefined): string | null {
+	if (!raw) return null;
+	const trimmed = raw.trim();
+	if (!trimmed) return null;
+	return trimmed.replace(/\/+$/, "");
+}
+
+// Priority:
+// 1) EXPO_PUBLIC_API_BASE_URL from env
+// 2) Android emulator loopback
+// 3) Localhost for iOS simulator and Expo web
+const envApiBase = normalizeBaseUrl(process.env.EXPO_PUBLIC_API_BASE_URL);
+
+const defaultApiBase = Platform.select({
+	android: "http://10.0.2.2:8080",
+	default: "http://localhost:8080",
+});
+
+export const API_BASE = envApiBase || defaultApiBase;
