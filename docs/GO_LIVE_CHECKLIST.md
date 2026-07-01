@@ -63,10 +63,10 @@ Owner: Engineering + Live Ops
 
 ## Frontend and UX Launch Quality
 - [ ] Audit all pages for responsive layout quality across common desktop and mobile breakpoints.
-- [ ] Add empty-state, loading-state, and retry UX consistency across major screens.
-- [ ] Confirm first-login daily interstitial ad behavior works with built-in fallback and configurable external ad URL.
+- [x] Add empty-state, loading-state, and retry UX consistency across major screens.
+- [x] Confirm first-login daily interstitial ad behavior works with built-in fallback and configurable external ad URL.
 - [ ] Validate accessibility basics: keyboard navigation, focus visibility, contrast, and semantic labels.
-- [ ] Fix any blocking console errors and unhandled promise rejections in production build.
+- [x] Fix any blocking console errors and unhandled promise rejections in production build.
 - [ ] Finalize user-facing copy for onboarding, errors, premium upsell, and support links.
 
 ## Deployment and Infrastructure Readiness

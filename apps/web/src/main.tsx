@@ -118,6 +118,43 @@ const BTN_STYLE: React.CSSProperties = {
   fontFamily: FONT_BODY,
 };
 
+const STATUS_LOADING_STYLE: React.CSSProperties = { color: TEXT_MUTED, marginTop: 8, fontSize: 14 };
+const STATUS_ERROR_STYLE: React.CSSProperties = {
+  marginTop: 8,
+  color: "#ffae9a",
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexWrap: "wrap",
+  fontSize: 14,
+};
+const STATUS_EMPTY_STYLE: React.CSSProperties = { color: TEXT_MUTED, fontSize: 14, fontStyle: "italic" };
+
+function LoadingState({ label = "Loading..." }: { label?: string }) {
+  return <div style={STATUS_LOADING_STYLE}>{label}</div>;
+}
+
+function ErrorState({
+  error,
+  onRetry,
+  compact = false,
+}: {
+  error: string;
+  onRetry: () => void;
+  compact?: boolean;
+}) {
+  return (
+    <div style={{ ...STATUS_ERROR_STYLE, marginTop: compact ? 4 : 8, fontSize: compact ? 13 : 14 }}>
+      <span>{error}</span>
+      <button onClick={onRetry} style={{ ...BTN_STYLE, padding: compact ? "4px 10px" : "8px 12px", fontSize: compact ? 13 : 14 }}>Retry</button>
+    </div>
+  );
+}
+
+function EmptyState({ message }: { message: string }) {
+  return <div style={STATUS_EMPTY_STYLE}>{message}</div>;
+}
+
 function BrokenWagonFallback({
   title,
   message,
@@ -671,13 +708,8 @@ function OverviewView() {
         </div>
       </div>
 
-      {loading ? <div style={{ color: TEXT_MUTED, padding: "0 4px" }}>Loading overview...</div> : null}
-      {error ? (
-        <div style={{ color: "#ffae9a", display: "flex", alignItems: "center", gap: 8 }}>
-          <span>{error}</span>
-          <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
-        </div>
-      ) : null}
+      {loading ? <LoadingState label="Loading overview..." /> : null}
+      {error ? <ErrorState error={error} onRetry={() => { void load(); }} /> : null}
       {statusMsg ? <div style={{ color: "#c8e7b1", fontSize: 14 }}>{statusMsg}</div> : null}
 
       {/* Two-column layout */}
@@ -1146,13 +1178,8 @@ function BuildingsView() {
         <div style={{ marginTop: 10, color: TEXT_MUTED }}>
           Each building has its own role. Build order now matters because military unlocks depend on structure type.
         </div>
-        {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading buildings...</div> : null}
-        {error ? (
-          <div style={{ marginTop: 8, color: "#ffae9a", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span>{error}</span>
-            <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
-          </div>
-        ) : null}
+        {loading ? <LoadingState label="Loading buildings..." /> : null}
+        {error ? <ErrorState error={error} onRetry={() => { void load(); }} /> : null}
         {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1", overflowWrap: "anywhere", wordBreak: "break-word" }}>{actionMsg}</div> : null}
       </div>
 
@@ -1656,13 +1683,8 @@ function ResearchView() {
             </div>
           </div>
         </div>
-        {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading research...</div> : null}
-        {error ? (
-          <div style={{ marginTop: 8, color: "#ffae9a", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span>{error}</span>
-            <button onClick={() => void load()} style={BTN_STYLE}>Retry</button>
-          </div>
-        ) : null}
+        {loading ? <LoadingState label="Loading research..." /> : null}
+        {error ? <ErrorState error={error} onRetry={() => { void load(); }} /> : null}
         {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
         <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
           {TAB_BTN_R("skills", "Skills & Technologies")}
@@ -1675,7 +1697,7 @@ function ResearchView() {
           <div style={{ fontWeight: 800, marginBottom: 4, fontSize: 22, fontFamily: FONT_DISPLAY }}>Composite Effects</div>
           <div style={{ color: TEXT_MUTED, fontSize: 14, marginBottom: 12 }}>Composite effects of all skills researched</div>
           {effectEntries.length === 0 ? (
-            <div style={{ color: TEXT_MUTED }}>No researched skills yet.</div>
+            <EmptyState message="No researched skills yet." />
           ) : (
             <div style={{ display: "grid", gap: 6 }}>
               {effectEntries.map(([label, value]) => (
@@ -1691,7 +1713,7 @@ function ResearchView() {
         <>
           <div style={CARD}>
             <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 22 }}>Current Research Queue</div>
-            {queue.length === 0 ? <div style={{ color: TEXT_MUTED }}>No active research queue.</div> : null}
+            {queue.length === 0 ? <EmptyState message="No active research queue." /> : null}
             {queue.map((q) => (
               <div key={q.id} style={{ marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                 <span style={{ fontSize: 14 }}>{String(q.research_code).replace(/_/g, " ")} → Lvl {q.target_level}</span>
@@ -1939,8 +1961,8 @@ function SettlementsView() {
             )}
           </div>
         </div>
-        {loading && <div style={{ marginTop: 8, color: TEXT_MUTED, fontSize: 13 }}>Loading...</div>}
-        {error && <div style={{ marginTop: 8, color: "#ffae9a", fontSize: 13 }}>{error} <button onClick={() => void load()} style={BTN_SM}>Retry</button></div>}
+        {loading && <LoadingState />}
+        {error && <ErrorState error={error} onRetry={() => { void load(); }} compact />}
         {actionMsg && <div style={{ marginTop: 8, color: "#c8e7b1", fontSize: 13 }}>{actionMsg}</div>}
       </div>
 
@@ -1948,7 +1970,7 @@ function SettlementsView() {
         /* ── LIST VIEW ── */
         <div style={CARD}>
           <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 12, color: ACCENT }}>Your Settlements</div>
-          {settlements.length === 0 && !loading && <div style={{ color: TEXT_MUTED, fontSize: 13 }}>No settlements found. Load your kingdom to see them.</div>}
+          {settlements.length === 0 && !loading && <EmptyState message="No settlements found. Load your kingdom to see them." />}
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
@@ -2416,8 +2438,8 @@ function AllianceView() {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ fontSize: 26, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>🤝 Alliance</div>
         </div>
-        {loading ? <div style={{ marginTop: 8, color: TEXT_MUTED }}>Loading...</div> : null}
-        {error ? <div style={{ marginTop: 8, color: "#ffae9a" }}>{error} <button onClick={() => void load()} style={{ ...BTN_STYLE, padding: "4px 10px", fontSize: 13 }}>Retry</button></div> : null}
+        {loading ? <LoadingState /> : null}
+        {error ? <ErrorState error={error} onRetry={() => { void load(); }} compact /> : null}
         {actionMsg ? <div style={{ marginTop: 8, color: "#c8e7b1" }}>{actionMsg}</div> : null}
       </div>
 
@@ -2436,7 +2458,7 @@ function AllianceView() {
                 {busy ? "Joining..." : "Join"}
               </button>
             </div>
-            {alliances.length === 0 ? <div style={{ color: TEXT_MUTED, fontSize: 14 }}>No alliances exist yet. Be the first to create one!</div> : null}
+            {alliances.length === 0 ? <EmptyState message="No alliances exist yet. Be the first to create one!" /> : null}
             {alliances.length > 0 ? (
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -2804,6 +2826,14 @@ function HomeView() {
   const [myKingdom, setMyKingdom] = useState<any>(null);
   const [season, setSeason] = useState<{ code: string; name: string; remainingSeconds: number } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 980);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   useEffect(() => {
     async function load() {
@@ -2879,7 +2909,7 @@ function HomeView() {
         {/* Quick links */}
         <div style={{ ...CARD }}>
           <div style={{ fontSize: 13, color: TEXT_MUTED, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 10 }}>Quick Actions</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 6 }}>
             {[
               ["Overview", "overview"], ["War Room", "war-room"],
               ["Buildings", "buildings"], ["Holy Circle", "holy-circle"],
@@ -3049,6 +3079,7 @@ function ForumsView() {
 function AllianceForumsView() {
   const kingdom = localStorage.getItem(KINGDOM_STORAGE_KEY) || "";
   const [loading, setLoading] = useState(true);
+  const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
   const [threads, setThreads] = useState<any[]>([]);
   const [allianceName, setAllianceName] = useState("");
   const [selectedThreadId, setSelectedThreadId] = useState<number | null>(null);
@@ -3067,6 +3098,13 @@ function AllianceForumsView() {
   const [statusMsg, setStatusMsg] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 980);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   async function loadThreads(q = searchQ) {
     if (!kingdom) { setLoading(false); return; }
@@ -3245,7 +3283,7 @@ function AllianceForumsView() {
           <span style={{ fontSize: 12, color: TEXT_MUTED }}>Role: {viewerRole}</span>
         </div>
         <form onSubmit={runSearch} style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-          <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search threads/posts..." style={{ ...INPUT_STYLE, minWidth: 220 }} />
+          <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search threads/posts..." style={{ ...INPUT_STYLE, minWidth: 0, flex: "1 1 220px", width: isMobile ? "100%" : undefined }} />
           <button type="submit" style={{ ...BTN_STYLE, fontSize: 13 }}>Search</button>
           {searchQ ? <button type="button" onClick={() => { setSearchInput(""); setSearchQ(""); void loadThreads(""); }} style={{ ...BTN_STYLE, fontSize: 13 }}>Clear</button> : null}
         </form>
@@ -3254,10 +3292,10 @@ function AllianceForumsView() {
       {error ? <div style={{ ...CARD, color: "#ffae9a" }}>{error}</div> : null}
       {loading ? <div style={{ ...CARD, color: TEXT_MUTED }}>Loading...</div> : null}
 
-      <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "340px 1fr", gap: 12 }}>
         <div style={{ ...CARD, alignContent: "start", display: "grid", gap: 10 }}>
           <div style={{ fontWeight: 800, fontSize: 16 }}>Threads</div>
-          <div style={{ display: "grid", gap: 6, maxHeight: 420, overflowY: "auto" }}>
+          <div style={{ display: "grid", gap: 6, maxHeight: isMobile ? undefined : 420, overflowY: isMobile ? undefined : "auto" }}>
             {threads.map((t: any) => (
               <button
                 key={t.id}
@@ -3298,7 +3336,7 @@ function AllianceForumsView() {
               </button>
             </div>
           ) : null}
-          <div style={{ display: "grid", gap: 8, maxHeight: 420, overflowY: "auto" }}>
+          <div style={{ display: "grid", gap: 8, maxHeight: isMobile ? undefined : 420, overflowY: isMobile ? undefined : "auto" }}>
             {posts.map((p: any) => (
               <div key={p.id} style={{ border: "1px solid rgba(216,176,117,.15)", borderRadius: 8, padding: "10px 12px", background: "rgba(0,0,0,.2)" }}>
                 <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 4 }}>
@@ -8440,7 +8478,11 @@ function DailyLoginModal({ onClose, kingdom, isPremium }: { onClose: () => void;
   const [claiming, setClaiming] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState("");
-  const hasExternalAd = DAILY_INTERSTITIAL_AD_URL.length > 0;
+  const [adFrameLoaded, setAdFrameLoaded] = useState(false);
+  const [adFrameFailed, setAdFrameFailed] = useState(false);
+  const adUrl = String(DAILY_INTERSTITIAL_AD_URL || "").trim();
+  const hasConfiguredAdUrl = adUrl.length > 0;
+  const showIframeAd = hasConfiguredAdUrl && !adFrameFailed;
 
   useEffect(() => {
     if (phase !== "ad") return;
@@ -8456,6 +8498,15 @@ function DailyLoginModal({ onClose, kingdom, isPremium }: { onClose: () => void;
     }, 1000);
     return () => clearInterval(t);
   }, [phase, countdown]);
+
+  useEffect(() => {
+    if (phase !== "ad") return;
+    if (!showIframeAd || adFrameLoaded) return;
+    const timeout = setTimeout(() => {
+      setAdFrameFailed(true);
+    }, 8000);
+    return () => clearTimeout(timeout);
+  }, [phase, showIframeAd, adFrameLoaded]);
 
   async function claim() {
     if (!kingdom) return;
@@ -8519,18 +8570,22 @@ function DailyLoginModal({ onClose, kingdom, isPremium }: { onClose: () => void;
               alignItems: "center", justifyContent: "center", padding: 12, marginBottom: 14, gap: 8,
               overflow: "hidden",
             }}>
-              {hasExternalAd ? (
+              {showIframeAd ? (
                 <iframe
                   title="Crownforge Sponsored Ad"
-                  src={DAILY_INTERSTITIAL_AD_URL}
+                  src={adUrl}
                   style={{ width: "100%", minHeight: 220, border: "none", borderRadius: 6, background: "#000" }}
                   sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+                  onLoad={() => setAdFrameLoaded(true)}
+                  onError={() => setAdFrameFailed(true)}
                 />
               ) : (
                 <>
                   <div style={{ fontSize: 32 }}>📣</div>
                   <div style={{ color: TEXT_MUTED, fontSize: 13, textAlign: "center", marginBottom: 6 }}>
-                    No ad tag is configured for this environment.
+                    {hasConfiguredAdUrl
+                      ? "The ad could not be loaded. Showing fallback content."
+                      : "No ad URL is configured for this environment."}
                   </div>
                   <a
                     href="https://crownforge.game/premium"
@@ -8595,7 +8650,7 @@ function DailyLoginModal({ onClose, kingdom, isPremium }: { onClose: () => void;
               Day streak: <strong style={{ color: TEXT_MAIN }}>{result.streak}</strong>
             </div>
             {result.claimed && result.rewards && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 12px", fontSize: 14, marginBottom: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "6px 12px", fontSize: 14, marginBottom: 16 }}>
                 {[
                   ["💰 Gold", result.rewards.gold],
                   ["🌾 Food", result.rewards.food],
@@ -8640,6 +8695,7 @@ function App() {
   const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth < 980 : false));
   const [navOpen, setNavOpen] = useState(() => (typeof window !== "undefined" ? window.innerWidth >= 980 : true));
   const [showDailyModal, setShowDailyModal] = useState(false);
+  const [globalAsyncIssue, setGlobalAsyncIssue] = useState("");
   const [serviceDown, setServiceDown] = useState(false);
   const [serviceDownReason, setServiceDownReason] = useState("The realm servers are not responding right now.");
   const serviceFailCountRef = useRef(0);
@@ -8725,6 +8781,23 @@ function App() {
     };
     window.addEventListener("gg:navigate", handler);
     return () => window.removeEventListener("gg:navigate", handler);
+  }, []);
+
+  useEffect(() => {
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const msg = String((event.reason as any)?.message || event.reason || "Unknown async error");
+      setGlobalAsyncIssue(`Unhandled async error: ${msg}`);
+    };
+    const onRuntimeError = (event: ErrorEvent) => {
+      const msg = String(event.message || "Unknown runtime error");
+      setGlobalAsyncIssue(`Runtime error: ${msg}`);
+    };
+    window.addEventListener("unhandledrejection", onUnhandledRejection);
+    window.addEventListener("error", onRuntimeError);
+    return () => {
+      window.removeEventListener("unhandledrejection", onUnhandledRejection);
+      window.removeEventListener("error", onRuntimeError);
+    };
   }, []);
 
   useEffect(() => {
@@ -8960,6 +9033,23 @@ function App() {
         </aside>
 
         <section style={{ display: "grid", gap: 12, minWidth: 0 }}>
+          {globalAsyncIssue ? (
+            <div
+              style={{
+                ...CARD,
+                borderColor: "rgba(220,120,120,.5)",
+                background: "rgba(70,18,18,.45)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                flexWrap: "wrap",
+              }}
+            >
+              <div style={{ color: "#ffd0c7", fontSize: 14, overflowWrap: "anywhere" }}>{globalAsyncIssue}</div>
+              <button onClick={() => setGlobalAsyncIssue("")} style={{ ...BTN_STYLE, padding: "6px 10px", fontSize: 12 }}>Dismiss</button>
+            </div>
+          ) : null}
           {/* Unverified email banner */}
           {auth.user.emailVerified === false && (
             <EmailVerifyBanner token={auth.token} onVerified={() => setAuth({ ...auth, user: { ...auth.user, emailVerified: true } })} />
