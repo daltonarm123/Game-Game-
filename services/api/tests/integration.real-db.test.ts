@@ -10,18 +10,43 @@ function qident(name: string) {
   return `"${String(name || "").replace(/"/g, '""')}"`;
 }
 
+const SEEDED_TABLES = new Set([
+  "building_types",
+  "troop_types",
+  "boat_types",
+  "research_types",
+  "research_prereqs",
+  "settlement_building_types",
+  "alliance_building_types",
+  "alliance_relation_types",
+  "sea_channels",
+  "kingdom_channel_control",
+  "game_state",
+]);
+
 async function resetPublicSchemaData() {
   const tables = await pool.query(
     `SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> 'spatial_ref_sys'`,
   );
-  const names = tables.rows.map((r) => String(r.tablename || "")).filter(Boolean);
+  const names = tables.rows
+    .map((r) => String(r.tablename || ""))
+    .filter((n) => Boolean(n) && !SEEDED_TABLES.has(n));
   if (!names.length) return;
   const list = names.map((n) => qident(n)).join(", ");
   await pool.query(`TRUNCATE ${list} RESTART IDENTITY CASCADE`);
 }
 
+let reqIpCounter = 30;
+function nextForwardedFor() {
+  reqIpCounter = (reqIpCounter % 220) + 1;
+  return `203.0.113.${reqIpCounter}`;
+}
+
 async function postJson(url: string, body: unknown, token?: string) {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "X-Forwarded-For": nextForwardedFor(),
+  };
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(url, {
     method: "POST",
@@ -32,7 +57,9 @@ async function postJson(url: string, body: unknown, token?: string) {
 }
 
 async function getJson(url: string, token?: string) {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = {
+    "X-Forwarded-For": nextForwardedFor(),
+  };
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(url, { method: "GET", headers });
   return { status: res.status, body: await res.json() as any };
@@ -128,6 +155,8 @@ test(
       assert.ok(sellerToken.length > 0);
       assert.ok(buyerToken.length > 0);
 
+      await pool.query(`UPDATE kingdoms SET shield_status='none' WHERE LOWER(name)=LOWER($1) OR LOWER(name)=LOWER($2)`, [sellerKingdom, buyerKingdom]);
+
       const list = await postJson(
         `${base}/api/market/${encodeURIComponent(sellerKingdom)}/list`,
         { resource: "food", quantity: 1000, pricePerUnit: 2 },
@@ -150,7 +179,7 @@ test(
         { listingId, quantity: 400 },
         buyerToken,
       );
-      assert.equal(buy.status, 200);
+      assert.equal(buy.status, 200, JSON.stringify(buy.body));
       assert.equal(buy.body.ok, true);
       assert.equal(Number(buy.body?.quantity || 0), 400);
 
@@ -269,7 +298,7 @@ test(
       assert.ok(token.length > 0);
       assert.ok(kingdom.length > 0);
 
-      await pool.query(`UPDATE kingdoms SET land=5000 WHERE LOWER(name)=LOWER($1)`, [kingdom]);
+      await pool.query(`UPDATE kingdoms SET land=9000 WHERE LOWER(name)=LOWER($1)`, [kingdom]);
 
       const foundedName = `Test Hold ${stamp}`;
       const found = await postJson(
@@ -521,10 +550,16 @@ test(
       assert.ok(colonyId > 0);
 
       await pool.query(
-        `UPDATE kingdom_channel_control
-         SET kingdom_id=$2, status='controlled', is_closed=true, toll_percent=12, updated_at=now()
-         WHERE channel_code='strait_of_ravens'`,
-        ["strait_of_ravens", ctrlId],
+        `INSERT INTO kingdom_channel_control(channel_code, kingdom_id, toll_percent, is_closed, status, captured_at, updated_at)
+         VALUES ('strait_of_ravens', $1, 12, true, 'controlled', now(), now())
+         ON CONFLICT (channel_code) DO UPDATE
+         SET kingdom_id=EXCLUDED.kingdom_id,
+             toll_percent=EXCLUDED.toll_percent,
+             is_closed=EXCLUDED.is_closed,
+             status=EXCLUDED.status,
+             captured_at=EXCLUDED.captured_at,
+             updated_at=EXCLUDED.updated_at`,
+        [ctrlId],
       );
 
       const transfer = await postJson(
@@ -542,7 +577,7 @@ test(
         },
         moverToken,
       );
-      assert.equal(transfer.status, 400);
+      assert.equal(transfer.status, 400, JSON.stringify(transfer.body));
       assert.equal(transfer.body.ok, false);
       assert.match(String(transfer.body.error || ""), /closed/i);
     } finally {

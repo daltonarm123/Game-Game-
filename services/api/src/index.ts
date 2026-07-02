@@ -9519,7 +9519,7 @@ app.post("/api/market/:kingdom/buy", requireAuth, async (req, res) => {
         [buyerRow.id, buyQty],
       );
       await c.query(
-        `UPDATE market_listings SET quantity_remaining=$2, status=CASE WHEN $2=0 THEN 'sold' ELSE status END WHERE id=$1`,
+        `UPDATE market_listings SET quantity_remaining=$2::bigint, status=CASE WHEN $2::bigint=0 THEN 'sold' ELSE status END WHERE id=$1`,
         [listingId, newRemaining],
       );
 

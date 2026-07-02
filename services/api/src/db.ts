@@ -1014,6 +1014,19 @@ export async function ensureSchema(): Promise<void> {
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS horses BIGINT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS sea_world_code TEXT NOT NULL DEFAULT 'main_sea'`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS pirate_last_raid_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE boat_types ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'economy'`);
+  await pool.query(`ALTER TABLE boat_types ADD COLUMN IF NOT EXISTS shipyard_level INT NOT NULL DEFAULT 1`);
+  await pool.query(`ALTER TABLE boat_types ADD COLUMN IF NOT EXISTS wood_cost INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE boat_types ADD COLUMN IF NOT EXISTS stone_cost INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE boat_types ADD COLUMN IF NOT EXISTS gold_cost INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE boat_types ADD COLUMN IF NOT EXISTS horses_cost INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE boat_types ADD COLUMN IF NOT EXISTS build_seconds INT NOT NULL DEFAULT 3600`);
+  await pool.query(`ALTER TABLE boat_types ADD COLUMN IF NOT EXISTS travel_seconds INT NOT NULL DEFAULT 1800`);
+  await pool.query(`ALTER TABLE boat_types ADD COLUMN IF NOT EXISTS fishing_food_per_hour INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE boat_types ADD COLUMN IF NOT EXISTS cargo_capacity INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE boat_types ADD COLUMN IF NOT EXISTS port_attack INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE boat_types ADD COLUMN IF NOT EXISTS port_defense INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE boat_types ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT ''`);
 
   await pool.query(`ALTER TABLE research_types ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'General'`);
   await pool.query(`ALTER TABLE research_types ADD COLUMN IF NOT EXISTS effect_text TEXT NOT NULL DEFAULT ''`);
