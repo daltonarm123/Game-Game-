@@ -7718,12 +7718,17 @@ app.get("/api/admin/alerts", requireAdmin, async (_req, res) => {
 
 app.get("/api/admin/backlog", requireAdmin, async (_req, res) => {
   try {
-    const [buildQ, trainQ, researchQ, settlementQ, movementQ, stateQ] = await Promise.all([
+    const [buildQ, trainQ, researchQ, settlementQ, movementQ, boatQ, shipmentQ, barterQ, channelsQ, pirateQ, stateQ] = await Promise.all([
       pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='queued' AND completes_at <= now())::int AS due FROM build_queue WHERE status='queued'`),
       pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='queued' AND completes_at <= now())::int AS due FROM train_queue WHERE status='queued'`),
       pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='queued' AND completes_at <= now())::int AS due FROM research_queue WHERE status='queued'`),
       pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='queued' AND completes_at <= now())::int AS due FROM settlement_build_queue WHERE status='queued'`),
       pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='out' AND returns_at <= now())::int AS due FROM troop_movements WHERE status='out'`),
+      pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='queued' AND completes_at <= now())::int AS due FROM boat_queue WHERE status='queued'`),
+      pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='transit' AND arrives_at <= now())::int AS due FROM kingdom_shipments WHERE status='transit'`),
+      pool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status='open' AND expires_at <= now())::int AS due FROM naval_barter_offers WHERE status='open'`),
+      pool.query(`SELECT COUNT(*)::int AS controlled, COUNT(*) FILTER (WHERE status='controlled' AND is_closed=true)::int AS closed FROM kingdom_channel_control WHERE status='controlled'`),
+      pool.query(`SELECT COUNT(*)::int AS raids6h, COUNT(*) FILTER (WHERE result='breached')::int AS breached6h FROM pirate_raid_reports WHERE created_at > now() - interval '6 hours'`),
       pool.query(`SELECT worker_last_tick_at FROM game_state WHERE id=1 LIMIT 1`),
     ]);
     const workerLastTickAt = new Date(stateQ.rows[0]?.worker_last_tick_at || Date.now());
@@ -7737,6 +7742,15 @@ app.get("/api/admin/backlog", requireAdmin, async (_req, res) => {
         research: { total: Number(researchQ.rows[0]?.total || 0), due: Number(researchQ.rows[0]?.due || 0) },
         settlementBuilds: { total: Number(settlementQ.rows[0]?.total || 0), due: Number(settlementQ.rows[0]?.due || 0) },
         troopReturns: { total: Number(movementQ.rows[0]?.total || 0), due: Number(movementQ.rows[0]?.due || 0) },
+        boats: { total: Number(boatQ.rows[0]?.total || 0), due: Number(boatQ.rows[0]?.due || 0) },
+        shipments: { total: Number(shipmentQ.rows[0]?.total || 0), due: Number(shipmentQ.rows[0]?.due || 0) },
+        barterOffers: { total: Number(barterQ.rows[0]?.total || 0), due: Number(barterQ.rows[0]?.due || 0) },
+      },
+      naval: {
+        channelsControlled: Number(channelsQ.rows[0]?.controlled || 0),
+        channelsClosed: Number(channelsQ.rows[0]?.closed || 0),
+        pirateRaids6h: Number(pirateQ.rows[0]?.raids6h || 0),
+        pirateBreached6h: Number(pirateQ.rows[0]?.breached6h || 0),
       },
       capturedAt: new Date().toISOString(),
     });

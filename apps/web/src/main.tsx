@@ -6560,7 +6560,28 @@ function AdminView() {
 
   const [tab, setTab] = useState<"overview" | "kingdoms" | "users">("overview");
   const [stats, setStats] = useState<StatsData | null>(null);
-  const [backlog, setBacklog] = useState<any>(null);
+  type BacklogData = {
+    ok: boolean;
+    worker?: { lagSeconds?: number };
+    queues?: {
+      builds?: { due?: number };
+      training?: { due?: number };
+      research?: { due?: number };
+      settlementBuilds?: { due?: number };
+      troopReturns?: { due?: number };
+      boats?: { due?: number };
+      shipments?: { due?: number };
+      barterOffers?: { due?: number };
+    };
+    naval?: {
+      channelsControlled?: number;
+      channelsClosed?: number;
+      pirateRaids6h?: number;
+      pirateBreached6h?: number;
+    };
+  };
+
+  const [backlog, setBacklog] = useState<BacklogData | null>(null);
   const [kingdoms, setKingdoms] = useState<KingdomRow[]>([]);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [kingdomTotal, setKingdomTotal] = useState(0);
@@ -6751,6 +6772,15 @@ function AdminView() {
   const TH: React.CSSProperties = { padding: "8px 10px", textAlign: "left", color: ACCENT, fontSize: 13, borderBottom: "1px solid rgba(216,176,117,.25)", whiteSpace: "nowrap" };
   const TD: React.CSSProperties = { padding: "7px 10px", fontSize: 13, borderBottom: "1px solid rgba(255,255,255,.06)" };
 
+  const workerLag = Number(backlog?.worker?.lagSeconds || 0);
+  const navalBoatDue = Number(backlog?.queues?.boats?.due || 0);
+  const navalShipmentDue = Number(backlog?.queues?.shipments?.due || 0);
+  const navalBarterDue = Number(backlog?.queues?.barterOffers?.due || 0);
+  const pirateRaids6h = Number(backlog?.naval?.pirateRaids6h || 0);
+  const pirateBreached6h = Number(backlog?.naval?.pirateBreached6h || 0);
+  const channelControlled = Number(backlog?.naval?.channelsControlled || 0);
+  const channelClosed = Number(backlog?.naval?.channelsClosed || 0);
+
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <div style={{ ...CARD }}>
@@ -6804,7 +6834,23 @@ function AdminView() {
                   <div>Research: {Number(backlog?.queues?.research?.due || 0).toLocaleString()} due</div>
                   <div>Settlement: {Number(backlog?.queues?.settlementBuilds?.due || 0).toLocaleString()} due</div>
                   <div>Returns: {Number(backlog?.queues?.troopReturns?.due || 0).toLocaleString()} due</div>
+                  <div>Boats: {Number(backlog?.queues?.boats?.due || 0).toLocaleString()} due</div>
+                  <div>Shipments: {Number(backlog?.queues?.shipments?.due || 0).toLocaleString()} due</div>
+                  <div>Barter Expiry: {Number(backlog?.queues?.barterOffers?.due || 0).toLocaleString()} due</div>
                   <div>Worker Lag: {Number(backlog?.worker?.lagSeconds || 0).toLocaleString()}s</div>
+                </div>
+              </div>
+            ) : null}
+            {backlog?.ok ? (
+              <div style={{ ...CARD, marginTop: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>Naval Health Checklist</div>
+                <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
+                  <div>{workerLag <= 600 ? "✅" : "⚠️"} Worker lag under 10m: {workerLag.toLocaleString()}s</div>
+                  <div>{navalBoatDue === 0 ? "✅" : "⚠️"} Boat queue due jobs: {navalBoatDue.toLocaleString()}</div>
+                  <div>{navalShipmentDue === 0 ? "✅" : "⚠️"} Shipment due jobs: {navalShipmentDue.toLocaleString()}</div>
+                  <div>{navalBarterDue === 0 ? "✅" : "⚠️"} Barter expiries due: {navalBarterDue.toLocaleString()}</div>
+                  <div>ℹ️ Controlled channels: {channelControlled.toLocaleString()} (closed: {channelClosed.toLocaleString()})</div>
+                  <div>ℹ️ Pirate raids (6h): {pirateRaids6h.toLocaleString()} (breached: {pirateBreached6h.toLocaleString()})</div>
                 </div>
               </div>
             ) : null}

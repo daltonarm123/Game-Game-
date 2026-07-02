@@ -13,7 +13,8 @@
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "go-live:check": "./scripts/go-live-check.sh",
-    "test:api:integration": "npm --workspace services/api run test:integration"
+    "test:api:integration": "npm --workspace services/api run test:integration",
+    "smoke:naval": "./scripts/naval-smoke.sh"
   },
   "engines": {
     "node": ">=20.0.0"

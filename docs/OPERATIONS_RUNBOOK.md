@@ -61,6 +61,32 @@ After API restart or schema migration deployment:
   - `channels=...`
   - `pirate_raids=...`
 
+## Naval Smoke Command
+
+Run a one-command naval smoke pass:
+
+1. Base health only:
+  - `npm run smoke:naval`
+2. Full admin-backed checks:
+  - `API_BASE=https://your-api.example.com ADMIN_TOKEN=<admin-token> npm run smoke:naval`
+
+Admin-backed mode validates:
+
+- `GET /api/admin/backlog` and `GET /api/admin/alerts`
+- worker lag threshold (`<= 600s`)
+- due naval jobs are zero (`boats`, `shipments`, `barterOffers`)
+
+## Admin Naval Checklist (Dashboard)
+
+The Admin Panel Overview now includes a compact `Naval Health Checklist` card with:
+
+- worker lag under 10 minutes
+- boat queue due jobs
+- shipment due jobs
+- barter expiry due jobs
+- controlled vs closed channels
+- pirate raids and breached raids over last 6 hours
+
 ## Integrity Reconcile (Admin)
 
 Run as admin from browser console with auth token:
