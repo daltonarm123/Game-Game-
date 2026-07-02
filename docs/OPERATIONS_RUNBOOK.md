@@ -27,6 +27,40 @@ On boot, the API creates or updates that user as `is_admin=true` and `hidden_fro
 
 Season countdowns in API responses are derived from season start + wall clock, so UI timers stay accurate even if worker execution is temporarily delayed.
 
+## Naval Operations Configuration
+
+These settings control standing navy economics and pirate event pressure in the game-server worker:
+
+- `CHANNEL_UPKEEP_GOLD_PER_HOUR` (default: `680`)
+- `CHANNEL_TRAFFIC_GOLD_PER_HOUR` (default: `1450`)
+- `PIRATE_TICK_CHANCE` (default: `0.018`)
+- `PIRATE_MIN_POWER` (default: `260`)
+- `PIRATE_MAX_POWER` (default: `1500`)
+
+Recommended tuning approach:
+
+1. Change only one variable group at a time (channel economy or pirate pressure).
+2. Run for at least one full day/night cycle.
+3. Compare before/after values in admin metrics plus player support reports.
+4. Keep pirate raid outcomes mixed (not always breached, not always repelled).
+
+## Naval Post-Deploy Verification
+
+After API restart or schema migration deployment:
+
+1. Confirm API startup logs contain no `boat_types` migration errors.
+2. Run integration validation against transient Postgres:
+  - `bash scripts/run-api-integration-with-transient-db.sh`
+3. Validate in live environment with two kingdoms:
+  - queue and complete at least one boat build
+  - create and accept one naval barter offer
+  - capture one sea channel and set toll/closure policy
+  - verify closed channel blocks third-party ship transfer
+4. Confirm worker tick log shows naval processors:
+  - `barter_expired=...`
+  - `channels=...`
+  - `pirate_raids=...`
+
 ## Integrity Reconcile (Admin)
 
 Run as admin from browser console with auth token:
