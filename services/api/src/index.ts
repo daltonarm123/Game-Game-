@@ -439,6 +439,76 @@ const holyCircleCastBody = z.object({
   targetKingdom: z.string().min(2).max(64).optional(),
 });
 
+const shipBuildBody = z.object({
+  boatCode: z.string().min(1),
+  quantity: z.number().int().min(1).max(20000).optional().default(1),
+});
+
+const shipQueueCancelBody = z.object({
+  queueId: z.number().int().positive(),
+});
+
+const shipColonyBody = z.object({
+  colonyName: z.string().min(2).max(64),
+  worldCode: z.string().min(2).max(24).optional(),
+});
+
+const shipTransferBody = z.object({
+  colonyId: z.number().int().positive(),
+  shipCode: z.string().min(1),
+  shipQuantity: z.number().int().min(1).max(500).optional().default(1),
+  direction: z.enum(["main_to_colony", "colony_to_main"]),
+  food: z.number().int().min(0).optional().default(0),
+  gold: z.number().int().min(0).optional().default(0),
+  wood: z.number().int().min(0).optional().default(0),
+  stone: z.number().int().min(0).optional().default(0),
+  horses: z.number().int().min(0).optional().default(0),
+}).refine((d) => Number(d.food || 0) + Number(d.gold || 0) + Number(d.wood || 0) + Number(d.stone || 0) + Number(d.horses || 0) > 0, {
+  message: "transfer payload cannot be empty",
+});
+
+const shipPortAttackBody = z.object({
+  colonyId: z.number().int().positive(),
+  shipCode: z.string().min(1),
+  quantity: z.number().int().min(1).max(5000),
+});
+
+const shipPirateDefenseBody = z.object({
+  autoDefend: z.boolean(),
+});
+
+const shipPirateRaidBody = z.object({
+  targetKingdom: z.string().min(2).max(64),
+  shipCode: z.string().min(1),
+  quantity: z.number().int().min(1).max(5000),
+});
+
+const shipChannelCaptureBody = z.object({
+  channelCode: z.string().min(2).max(64),
+  shipCode: z.string().min(1),
+  quantity: z.number().int().min(1).max(5000),
+});
+
+const shipChannelPolicyBody = z.object({
+  channelCode: z.string().min(2).max(64),
+  tollPercent: z.number().int().min(0).max(35).optional(),
+  isClosed: z.boolean().optional(),
+}).refine((d) => d.tollPercent !== undefined || d.isClosed !== undefined, {
+  message: "at least one policy field required",
+});
+
+const shipBarterOfferBody = z.object({
+  shipCode: z.string().min(1),
+  giveResource: z.enum(["food", "wood", "stone", "horses"]),
+  giveAmount: z.number().int().min(1).max(2_000_000),
+  wantResource: z.enum(["food", "wood", "stone", "horses"]),
+  wantAmount: z.number().int().min(1).max(2_000_000),
+}).refine((d) => d.giveResource !== d.wantResource, { message: "resources must be different" });
+
+const shipBarterAcceptBody = z.object({
+  offerId: z.number().int().positive(),
+});
+
 
 const TROOP_TRAIN_REQUIREMENTS: Record<string, { buildingCode: string; buildingName: string; minLevel: number }> = {
   archers: { buildingCode: "archery_ranges", buildingName: "Archery Ranges", minLevel: 1 },
@@ -485,6 +555,13 @@ const TROOP_HOUSING_CAPS: Record<string, { buildingCode: string; perLevel: numbe
 };
 
 const FOOTMAN_ELITE_PROMOTION_RATE = clamp(Number(process.env.FOOTMAN_ELITE_PROMOTION_RATE || 0.0025), 0, 0.05);
+const SHIPYARD_COLONY_SETTLER_CODE = "settler_ships";
+const SHIPYARD_COLONY_GOLD_COST = 30_000;
+const SHIPYARD_COLONY_FOOD_COST = 20_000;
+const SHIPYARD_COLONY_WOOD_COST = 6_000;
+const SHIPYARD_COLONY_STONE_COST = 6_000;
+const SHIPYARD_CHANNEL_BASE_MAINT_PER_MIN = 50;
+const SHIPYARD_PIRATE_MAX_LOOT_RATIO = 0.06;
 const AUTH_SESSION_DAYS = 30;
 const APP_BASE_URL = String(process.env.APP_BASE_URL || "http://localhost:5173").replace(/\/$/, "");
 
@@ -1148,6 +1225,7 @@ function computeEconomyHourly(
   modifiers?: { food?: number; gold?: number; wood?: number; stone?: number; horse?: number },
   researchBonus?: { food?: number; gold?: number },
   settlementBonus?: { food?: number; gold?: number; wood?: number; stone?: number; horses?: number; foodCap?: number },
+  shipBonus?: { fishFoodPerHour?: number },
 ) {
   const farm = Number(buildingLevels.farm || 0);
   const lumber = Number(buildingLevels.lumberyard || 0);
@@ -1176,6 +1254,7 @@ function computeEconomyHourly(
   const sWood  = Number(settlementBonus?.wood  ?? 0);
   const sStone = Number(settlementBonus?.stone ?? 0);
   const sHorses = Number(settlementBonus?.horses ?? 0);
+  const fishFoodPerHour = Number(shipBonus?.fishFoodPerHour ?? 0);
 
   let foodUpkeep = 0;
   let goldUpkeep = 0;
@@ -1197,7 +1276,7 @@ function computeEconomyHourly(
 
   return {
     perHour: {
-      food: foodIncome + sFood - effectiveFoodUpkeep,
+      food: foodIncome + sFood + fishFoodPerHour - effectiveFoodUpkeep,
       gold: goldIncome + sGold - goldUpkeep + diplomatGoldIncome,
       wood: woodIncome + sWood,
       stone: stoneIncome + sStone,
@@ -1226,6 +1305,7 @@ function computeEconomyHourly(
       settlementWoodBonus: sWood,
       settlementStoneBonus: sStone,
       settlementHorseBonus: sHorses,
+      fishFoodPerHour,
     },
   };
 }
@@ -2517,6 +2597,13 @@ app.get("/api/kingdom/:name", requireAuth, async (req, res) => {
         [kingdom.id],
       ),
     ]);
+    const fishingQ = await pool.query(
+      `SELECT COALESCE(SUM(kb.amount * bt.fishing_food_per_hour),0)::bigint AS fish_food
+       FROM kingdom_boats kb
+       JOIN boat_types bt ON bt.code = kb.boat_code
+       WHERE kb.kingdom_id=$1`,
+      [kingdom.id],
+    );
     const econRes = Object.fromEntries(econResearchQ.rows.map((r: any) => [String(r.research_code), Number(r.level || 0)]));
     const econResBonus = {
       food: ((econRes.better_farming_methods || 0) + (econRes.crop_rotation || 0) + (econRes.irrigation || 0) + (econRes.manure || 0)) * 0.01,
@@ -2531,7 +2618,16 @@ app.get("/api/kingdom/:name", requireAuth, async (req, res) => {
       horses:  (sBldg.stables   || 0) * SETTLEMENT_EFFECTS.stablesHorsesPerHour,
       foodCap: (sBldg.barn      || 0) * SETTLEMENT_EFFECTS.barnFoodCapPerLevel,
     };
-    const economy = computeEconomyHourly(Number(kingdomSync.land || 0), buildingLevels, economyTroops, Number(kingdomSync.tax_rate || 25), season.modifiers, econResBonus, econSettlementBonus);
+    const economy = computeEconomyHourly(
+      Number(kingdomSync.land || 0),
+      buildingLevels,
+      economyTroops,
+      Number(kingdomSync.tax_rate || 25),
+      season.modifiers,
+      econResBonus,
+      econSettlementBonus,
+      { fishFoodPerHour: Number(fishingQ.rows[0]?.fish_food || 0) },
+    );
 
     const nwQ = await pool.query(
       `WITH tn AS (SELECT COALESCE(SUM(kt.amount * ty.nw_value),0) AS troop_nw
@@ -3048,6 +3144,983 @@ app.post("/api/kingdom/:name/train/cancel", requireAuth, async (req, res) => {
       };
     });
 
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/shipyard/:kingdom", requireAuth, async (req, res) => {
+  const kingdomName = String(req.params.kingdom || "").trim();
+  if (!kingdomName) return res.status(400).json({ ok: false, error: "kingdom name required" });
+
+  try {
+    const session = (req as any).authSession;
+    const own = await pool.query(
+      `SELECT id, name, gold, wood, stone, food, horses FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1`,
+      [kingdomName, session.user_id],
+    );
+    if (!own.rowCount) return res.status(403).json({ ok: false, error: "You can only access your own shipyard" });
+    const kingdom = own.rows[0];
+
+    const [shipyardQ, fleetQ, queueQ, coloniesQ, shipmentsQ, channelsQ, pirateCfgQ, pirateReportsQ, barterQ] = await Promise.all([
+      pool.query(`SELECT COALESCE(level,0)::int AS lvl FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='shipyard' LIMIT 1`, [kingdom.id]),
+      pool.query(
+        `SELECT bt.code, bt.name, bt.category, bt.shipyard_level, bt.wood_cost, bt.stone_cost, bt.gold_cost, bt.horses_cost,
+                bt.build_seconds, bt.travel_seconds, bt.fishing_food_per_hour, bt.cargo_capacity, bt.port_attack, bt.port_defense, bt.notes,
+                COALESCE(kb.amount,0)::bigint AS amount
+         FROM boat_types bt
+         LEFT JOIN kingdom_boats kb ON kb.boat_code=bt.code AND kb.kingdom_id=$1
+         ORDER BY bt.shipyard_level ASC, bt.code ASC`,
+        [kingdom.id],
+      ),
+      pool.query(
+        `SELECT id, boat_code, quantity, started_at, completes_at, status
+         FROM boat_queue
+         WHERE kingdom_id=$1
+         ORDER BY started_at DESC
+         LIMIT 30`,
+        [kingdom.id],
+      ),
+      pool.query(
+        `SELECT id, colony_name, world_code, gold, wood, stone, food, horses, created_at
+         FROM kingdom_colonies
+         WHERE owner_kingdom_id=$1
+         ORDER BY created_at ASC`,
+        [kingdom.id],
+      ),
+      pool.query(
+        `SELECT id, colony_id, direction, ship_code, ship_quantity, gold, wood, stone, food, horses, departed_at, arrives_at, status, completed_at
+         FROM kingdom_shipments
+         WHERE owner_kingdom_id=$1
+         ORDER BY departed_at DESC
+         LIMIT 40`,
+        [kingdom.id],
+      ),
+      pool.query(
+        `SELECT sc.code, sc.name, sc.required_navy_power, sc.base_traffic,
+                kcc.kingdom_id AS controller_kingdom_id,
+                COALESCE(ctrl.name, '') AS controller_name,
+                COALESCE(kcc.toll_percent, 0)::int AS toll_percent,
+                COALESCE(kcc.is_closed, false) AS is_closed,
+                COALESCE(kcc.status, 'neutral') AS status,
+                kcc.captured_at,
+                kcc.updated_at
+         FROM sea_channels sc
+         LEFT JOIN kingdom_channel_control kcc ON kcc.channel_code = sc.code
+         LEFT JOIN kingdoms ctrl ON ctrl.id = kcc.kingdom_id
+         ORDER BY sc.required_navy_power ASC, sc.code ASC`,
+      ),
+      pool.query(
+        `SELECT COALESCE((SELECT (payload->>'autoDefendPirates')::boolean
+                          FROM kingdom_status_effects
+                          WHERE kingdom_id=$1 AND effect_code='pirate_auto_defense'
+                          ORDER BY created_at DESC
+                          LIMIT 1), true) AS auto_defend`,
+        [kingdom.id],
+      ),
+      pool.query(
+        `SELECT id, result, pirate_power, defense_power, ships_lost, loot, created_at
+         FROM pirate_raid_reports
+         WHERE kingdom_id=$1
+         ORDER BY created_at DESC
+         LIMIT 15`,
+        [kingdom.id],
+      ),
+      pool.query(
+        `SELECT o.id, o.owner_kingdom_id, o.ship_code, o.give_resource, o.give_amount, o.want_resource, o.want_amount,
+                o.status, o.accepted_by_kingdom_id, o.created_at, o.accepted_at, o.expires_at,
+                COALESCE(k.name, '') AS owner_name
+         FROM naval_barter_offers o
+         LEFT JOIN kingdoms k ON k.id = o.owner_kingdom_id
+         WHERE o.status='open' AND o.expires_at > now()
+         ORDER BY o.created_at DESC
+         LIMIT 50`,
+      ),
+    ]);
+
+    const shipyardLevel = Number(shipyardQ.rows[0]?.lvl || 0);
+    const fishingFoodPerHour = fleetQ.rows.reduce((s: number, row: any) => s + Number(row.amount || 0) * Number(row.fishing_food_per_hour || 0), 0);
+    const cargoCapacity = fleetQ.rows.reduce((s: number, row: any) => s + Number(row.amount || 0) * Number(row.cargo_capacity || 0), 0);
+    const portAttack = fleetQ.rows.reduce((s: number, row: any) => s + Number(row.amount || 0) * Number(row.port_attack || 0), 0);
+    const portDefense = fleetQ.rows.reduce((s: number, row: any) => s + Number(row.amount || 0) * Number(row.port_defense || 0), 0);
+
+    return res.json({
+      ok: true,
+      kingdom,
+      shipyardLevel,
+      fleet: fleetQ.rows,
+      queue: queueQ.rows,
+      colonies: coloniesQ.rows,
+      shipments: shipmentsQ.rows,
+      channels: channelsQ.rows,
+      pirate: {
+        autoDefend: Boolean(pirateCfgQ.rows[0]?.auto_defend ?? true),
+        reports: pirateReportsQ.rows,
+      },
+      barterOffers: barterQ.rows,
+      summary: { fishingFoodPerHour, cargoCapacity, portAttack, portDefense },
+    });
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/shipyard/:kingdom/build", requireAuth, async (req, res) => {
+  const kingdomName = String(req.params.kingdom || "").trim();
+  const parsed = shipBuildBody.safeParse(req.body || {});
+  if (!kingdomName) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
+
+  try {
+    const session = (req as any).authSession;
+    const out = await withTx(async (c) => {
+      const own = await c.query(
+        `SELECT id, name, gold, wood, stone, food, horses FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 FOR UPDATE`,
+        [kingdomName, session.user_id],
+      );
+      if (!own.rowCount) throw new Error("kingdom not found");
+      const kingdom = own.rows[0];
+
+      const boatCode = String(parsed.data.boatCode || "").trim().toLowerCase();
+      const qty = Math.max(1, Number(parsed.data.quantity || 1));
+
+      const [shipyardQ, boatQ] = await Promise.all([
+        c.query(`SELECT COALESCE(level,0)::int AS lvl FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='shipyard' LIMIT 1`, [kingdom.id]),
+        c.query(
+          `SELECT code, name, category, shipyard_level, wood_cost, stone_cost, gold_cost, horses_cost, build_seconds
+           FROM boat_types WHERE code=$1 LIMIT 1`,
+          [boatCode],
+        ),
+      ]);
+      if (!boatQ.rowCount) throw new Error("unknown boat code");
+      const shipyardLevel = Number(shipyardQ.rows[0]?.lvl || 0);
+      const boat = boatQ.rows[0];
+      if (shipyardLevel <= 0) throw new Error("build a Shipyard first");
+      if (shipyardLevel < Number(boat.shipyard_level || 1)) {
+        throw new Error(`${String(boat.name)} requires Shipyard level ${Number(boat.shipyard_level || 1)}`);
+      }
+
+      const goldCost = Number(boat.gold_cost || 0) * qty;
+      const woodCost = Number(boat.wood_cost || 0) * qty;
+      const stoneCost = Number(boat.stone_cost || 0) * qty;
+      const horsesCost = Number(boat.horses_cost || 0) * qty;
+      if (Number(kingdom.gold || 0) < goldCost || Number(kingdom.wood || 0) < woodCost || Number(kingdom.stone || 0) < stoneCost || Number(kingdom.horses || 0) < horsesCost) {
+        throw new Error(`not enough resources (need gold ${goldCost}, wood ${woodCost}, stone ${stoneCost}, horses ${horsesCost})`);
+      }
+
+      await c.query(
+        `UPDATE kingdoms SET gold=gold-$2, wood=wood-$3, stone=stone-$4, horses=horses-$5 WHERE id=$1`,
+        [kingdom.id, goldCost, woodCost, stoneCost, horsesCost],
+      );
+
+      const totalSeconds = LOCAL_DEMO_FAST ? FAST_TRAIN_SECONDS : Math.max(60, Number(boat.build_seconds || 3600));
+      const existing = await c.query(
+        `SELECT id, quantity FROM boat_queue WHERE kingdom_id=$1 AND boat_code=$2 AND status='queued' ORDER BY id DESC LIMIT 1 FOR UPDATE`,
+        [kingdom.id, boatCode],
+      );
+      if (existing.rowCount) {
+        const row = existing.rows[0];
+        const up = await c.query(
+          `UPDATE boat_queue
+           SET quantity=$2, completes_at=GREATEST(completes_at, now() + ($3 * INTERVAL '1 second'))
+           WHERE id=$1
+           RETURNING id, boat_code, quantity, started_at, completes_at, status`,
+          [row.id, Number(row.quantity || 0) + qty, totalSeconds],
+        );
+        return { queue: up.rows[0], costs: { gold: goldCost, wood: woodCost, stone: stoneCost, horses: horsesCost } };
+      }
+
+      const ins = await c.query(
+        `INSERT INTO boat_queue(kingdom_id, boat_code, quantity, started_at, completes_at, status)
+         VALUES ($1,$2,$3,now(),now() + ($4 * INTERVAL '1 second'),'queued')
+         RETURNING id, boat_code, quantity, started_at, completes_at, status`,
+        [kingdom.id, boatCode, qty, totalSeconds],
+      );
+      return { queue: ins.rows[0], costs: { gold: goldCost, wood: woodCost, stone: stoneCost, horses: horsesCost } };
+    });
+
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/shipyard/:kingdom/queue/cancel", requireAuth, async (req, res) => {
+  const kingdomName = String(req.params.kingdom || "").trim();
+  const parsed = shipQueueCancelBody.safeParse(req.body || {});
+  if (!kingdomName) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
+
+  try {
+    const session = (req as any).authSession;
+    const out = await withTx(async (c) => {
+      const own = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 FOR UPDATE`, [kingdomName, session.user_id]);
+      if (!own.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(own.rows[0].id);
+
+      const q = await c.query(
+        `SELECT bq.id, bq.boat_code, bq.quantity, bt.name, bt.gold_cost, bt.wood_cost, bt.stone_cost, bt.horses_cost
+         FROM boat_queue bq
+         JOIN boat_types bt ON bt.code = bq.boat_code
+         WHERE bq.id=$1 AND bq.kingdom_id=$2 AND bq.status='queued'
+         FOR UPDATE`,
+        [Number(parsed.data.queueId), kingdomId],
+      );
+      if (!q.rowCount) throw new Error("boat queue item not found or already processed");
+      const row = q.rows[0];
+      const qty = Number(row.quantity || 0);
+      const refundGold = Number(row.gold_cost || 0) * qty;
+      const refundWood = Number(row.wood_cost || 0) * qty;
+      const refundStone = Number(row.stone_cost || 0) * qty;
+      const refundHorses = Number(row.horses_cost || 0) * qty;
+
+      await c.query(`UPDATE boat_queue SET status='cancelled', completed_at=now() WHERE id=$1`, [Number(parsed.data.queueId)]);
+      await c.query(
+        `UPDATE kingdoms SET gold=gold+$2, wood=wood+$3, stone=stone+$4, horses=horses+$5 WHERE id=$1`,
+        [kingdomId, refundGold, refundWood, refundStone, refundHorses],
+      );
+      return {
+        queueId: Number(parsed.data.queueId),
+        boatCode: String(row.boat_code || ""),
+        boatName: String(row.name || row.boat_code || ""),
+        quantity: qty,
+        refunds: { gold: refundGold, wood: refundWood, stone: refundStone, horses: refundHorses },
+      };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/shipyard/:kingdom/colonize", requireAuth, async (req, res) => {
+  const kingdomName = String(req.params.kingdom || "").trim();
+  const parsed = shipColonyBody.safeParse(req.body || {});
+  if (!kingdomName) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
+
+  try {
+    const session = (req as any).authSession;
+    const out = await withTx(async (c) => {
+      const own = await c.query(
+        `SELECT id, name, gold, wood, stone, food FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 FOR UPDATE`,
+        [kingdomName, session.user_id],
+      );
+      if (!own.rowCount) throw new Error("kingdom not found");
+      const kingdom = own.rows[0];
+
+      const shipyardQ = await c.query(`SELECT COALESCE(level,0)::int AS lvl FROM kingdom_buildings WHERE kingdom_id=$1 AND building_code='shipyard' LIMIT 1`, [kingdom.id]);
+      const shipyardLevel = Number(shipyardQ.rows[0]?.lvl || 0);
+      if (shipyardLevel < 4) throw new Error("Shipyard level 4 is required to found a colony");
+
+      const maxColonies = Math.max(1, shipyardLevel - 3);
+      const countQ = await c.query(`SELECT COUNT(*)::int AS total FROM kingdom_colonies WHERE owner_kingdom_id=$1`, [kingdom.id]);
+      const coloniesOwned = Number(countQ.rows[0]?.total || 0);
+      if (coloniesOwned >= maxColonies) throw new Error(`colony cap reached (${maxColonies}) for current shipyard level`);
+
+      const settlerQ = await c.query(
+        `SELECT COALESCE(amount,0)::bigint AS amount FROM kingdom_boats WHERE kingdom_id=$1 AND boat_code=$2 LIMIT 1 FOR UPDATE`,
+        [kingdom.id, SHIPYARD_COLONY_SETTLER_CODE],
+      );
+      if (Number(settlerQ.rows[0]?.amount || 0) < 1) throw new Error("requires at least 1 Settler Ship");
+
+      if (
+        Number(kingdom.gold || 0) < SHIPYARD_COLONY_GOLD_COST ||
+        Number(kingdom.food || 0) < SHIPYARD_COLONY_FOOD_COST ||
+        Number(kingdom.wood || 0) < SHIPYARD_COLONY_WOOD_COST ||
+        Number(kingdom.stone || 0) < SHIPYARD_COLONY_STONE_COST
+      ) {
+        throw new Error(
+          `not enough resources (need gold ${SHIPYARD_COLONY_GOLD_COST}, food ${SHIPYARD_COLONY_FOOD_COST}, wood ${SHIPYARD_COLONY_WOOD_COST}, stone ${SHIPYARD_COLONY_STONE_COST})`,
+        );
+      }
+
+      const colonyName = String(parsed.data.colonyName || "").trim();
+      const worldCodeRaw = String(parsed.data.worldCode || `world_${Date.now().toString(36)}`).trim().toLowerCase();
+      const worldCode = worldCodeRaw.replace(/[^a-z0-9_\-]/g, "").slice(0, 24) || `world_${Date.now().toString(36)}`;
+
+      await c.query(
+        `UPDATE kingdoms
+         SET gold=gold-$2, food=food-$3, wood=wood-$4, stone=stone-$5
+         WHERE id=$1`,
+        [kingdom.id, SHIPYARD_COLONY_GOLD_COST, SHIPYARD_COLONY_FOOD_COST, SHIPYARD_COLONY_WOOD_COST, SHIPYARD_COLONY_STONE_COST],
+      );
+      await c.query(
+        `UPDATE kingdom_boats SET amount = GREATEST(0, amount - 1) WHERE kingdom_id=$1 AND boat_code=$2`,
+        [kingdom.id, SHIPYARD_COLONY_SETTLER_CODE],
+      );
+
+      const ins = await c.query(
+        `INSERT INTO kingdom_colonies(owner_kingdom_id, colony_name, world_code, gold, wood, stone, food, horses)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         RETURNING id, colony_name, world_code, gold, wood, stone, food, horses, created_at`,
+        [kingdom.id, colonyName, worldCode, 5000, 1500, 1500, 8000, 0],
+      );
+      return {
+        colony: ins.rows[0],
+        colonyCap: maxColonies,
+        colonyCount: coloniesOwned + 1,
+        consumed: {
+          settlerShips: 1,
+          gold: SHIPYARD_COLONY_GOLD_COST,
+          food: SHIPYARD_COLONY_FOOD_COST,
+          wood: SHIPYARD_COLONY_WOOD_COST,
+          stone: SHIPYARD_COLONY_STONE_COST,
+        },
+      };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/shipyard/:kingdom/transfer", requireAuth, async (req, res) => {
+  const kingdomName = String(req.params.kingdom || "").trim();
+  const parsed = shipTransferBody.safeParse(req.body || {});
+  if (!kingdomName) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
+
+  try {
+    const session = (req as any).authSession;
+    const out = await withTx(async (c) => {
+      const own = await c.query(
+        `SELECT id, name, gold, wood, stone, food, horses FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 FOR UPDATE`,
+        [kingdomName, session.user_id],
+      );
+      if (!own.rowCount) throw new Error("kingdom not found");
+      const kingdom = own.rows[0];
+
+      const body = parsed.data;
+      const shipCode = String(body.shipCode || "").trim().toLowerCase();
+      const shipQuantity = Math.max(1, Number(body.shipQuantity || 1));
+      const cargoTotal = Number(body.food || 0) + Number(body.gold || 0) + Number(body.wood || 0) + Number(body.stone || 0) + Number(body.horses || 0);
+
+      const [boatQ, ownShipsQ, colonyQ] = await Promise.all([
+        c.query(`SELECT code, name, category, cargo_capacity, travel_seconds FROM boat_types WHERE code=$1 LIMIT 1`, [shipCode]),
+        c.query(`SELECT COALESCE(amount,0)::bigint AS amount FROM kingdom_boats WHERE kingdom_id=$1 AND boat_code=$2 LIMIT 1`, [kingdom.id, shipCode]),
+        c.query(`SELECT id, owner_kingdom_id, colony_name, gold, wood, stone, food, horses FROM kingdom_colonies WHERE id=$1 AND owner_kingdom_id=$2 LIMIT 1 FOR UPDATE`, [Number(body.colonyId), kingdom.id]),
+      ]);
+      if (!boatQ.rowCount) throw new Error("unknown ship code");
+      const boat = boatQ.rows[0];
+      if (String(boat.category) !== "logistics" && String(boat.category) !== "expansion") {
+        throw new Error("selected ship cannot run logistics transfers");
+      }
+      if (!colonyQ.rowCount) throw new Error("colony not found");
+
+      const shipsOwned = Number(ownShipsQ.rows[0]?.amount || 0);
+      if (shipsOwned < shipQuantity) throw new Error(`not enough ${String(boat.name)} (have ${shipsOwned}, need ${shipQuantity})`);
+
+      const capacity = Number(boat.cargo_capacity || 0) * shipQuantity;
+      if (capacity <= 0) throw new Error("selected ship has no cargo capacity");
+      if (cargoTotal > capacity) throw new Error(`cargo exceeds capacity (${cargoTotal} > ${capacity})`);
+
+      const colony = colonyQ.rows[0];
+      const channelQ = await c.query(
+        `SELECT channel_code, kingdom_id, toll_percent, is_closed
+         FROM kingdom_channel_control
+         WHERE status='controlled' AND kingdom_id IS NOT NULL
+         ORDER BY updated_at DESC
+         LIMIT 1`,
+      );
+      const activeChannel = channelQ.rows[0] || null;
+      const channelOwnerId = Number(activeChannel?.kingdom_id || 0);
+      const tollPercent = Math.max(0, Number(activeChannel?.toll_percent || 0));
+      const tollGold = Math.max(0, Math.floor(Number(body.gold || 0) * (tollPercent / 100)));
+      if (Boolean(activeChannel?.is_closed) && channelOwnerId > 0 && channelOwnerId !== Number(kingdom.id)) {
+        throw new Error("a controlled sea channel is currently closed to your shipping lanes");
+      }
+
+      if (body.direction === "main_to_colony") {
+        if (
+          Number(kingdom.food || 0) < Number(body.food || 0) ||
+          Number(kingdom.gold || 0) < Number(body.gold || 0) + tollGold ||
+          Number(kingdom.wood || 0) < Number(body.wood || 0) ||
+          Number(kingdom.stone || 0) < Number(body.stone || 0) ||
+          Number(kingdom.horses || 0) < Number(body.horses || 0)
+        ) {
+          throw new Error("not enough resources in main kingdom for transfer");
+        }
+        await c.query(
+          `UPDATE kingdoms
+           SET food=food-$2, gold=gold-$3, wood=wood-$4, stone=stone-$5, horses=horses-$6
+           WHERE id=$1`,
+          [kingdom.id, Number(body.food || 0), Number(body.gold || 0) + tollGold, Number(body.wood || 0), Number(body.stone || 0), Number(body.horses || 0)],
+        );
+      } else {
+        if (
+          Number(colony.food || 0) < Number(body.food || 0) ||
+          Number(colony.gold || 0) < Number(body.gold || 0) + tollGold ||
+          Number(colony.wood || 0) < Number(body.wood || 0) ||
+          Number(colony.stone || 0) < Number(body.stone || 0) ||
+          Number(colony.horses || 0) < Number(body.horses || 0)
+        ) {
+          throw new Error("not enough resources in colony for transfer");
+        }
+        await c.query(
+          `UPDATE kingdom_colonies
+           SET food=food-$2, gold=gold-$3, wood=wood-$4, stone=stone-$5, horses=horses-$6
+           WHERE id=$1`,
+          [Number(body.colonyId), Number(body.food || 0), Number(body.gold || 0) + tollGold, Number(body.wood || 0), Number(body.stone || 0), Number(body.horses || 0)],
+        );
+      }
+
+      if (channelOwnerId > 0 && channelOwnerId !== Number(kingdom.id) && tollGold > 0) {
+        await c.query(`UPDATE kingdoms SET gold=gold+$2 WHERE id=$1`, [channelOwnerId, tollGold]);
+      }
+
+      const travelSeconds = LOCAL_DEMO_FAST ? Math.max(8, Math.floor(Number(boat.travel_seconds || 60) / 6)) : Math.max(60, Number(boat.travel_seconds || 1800));
+      const ins = await c.query(
+        `INSERT INTO kingdom_shipments(
+          owner_kingdom_id, colony_id, direction, ship_code, ship_quantity,
+          food, gold, wood, stone, horses, departed_at, arrives_at, status
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now(), now() + ($11 * INTERVAL '1 second'), 'transit')
+        RETURNING id, colony_id, direction, ship_code, ship_quantity, food, gold, wood, stone, horses, departed_at, arrives_at, status`,
+        [
+          kingdom.id,
+          Number(body.colonyId),
+          body.direction,
+          shipCode,
+          shipQuantity,
+          Number(body.food || 0),
+          Number(body.gold || 0),
+          Number(body.wood || 0),
+          Number(body.stone || 0),
+          Number(body.horses || 0),
+          travelSeconds,
+        ],
+      );
+      return { shipment: ins.rows[0], capacity, cargoTotal, travelSeconds, tollGold, channelCode: String(activeChannel?.channel_code || "") };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/shipyard/:kingdom/port-attack", requireAuth, async (req, res) => {
+  const kingdomName = String(req.params.kingdom || "").trim();
+  const parsed = shipPortAttackBody.safeParse(req.body || {});
+  if (!kingdomName) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
+
+  try {
+    const session = (req as any).authSession;
+    const out = await withTx(async (c) => {
+      const own = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 FOR UPDATE`, [kingdomName, session.user_id]);
+      if (!own.rowCount) throw new Error("kingdom not found");
+      const attacker = own.rows[0];
+
+      const shipCode = String(parsed.data.shipCode || "").trim().toLowerCase();
+      const qty = Number(parsed.data.quantity || 0);
+      const colonyId = Number(parsed.data.colonyId);
+
+      const [shipQ, attackerShipsQ, colonyQ] = await Promise.all([
+        c.query(`SELECT code, name, category, port_attack FROM boat_types WHERE code=$1 LIMIT 1`, [shipCode]),
+        c.query(`SELECT COALESCE(amount,0)::bigint AS amount FROM kingdom_boats WHERE kingdom_id=$1 AND boat_code=$2 LIMIT 1 FOR UPDATE`, [attacker.id, shipCode]),
+        c.query(
+          `SELECT c.id, c.colony_name, c.owner_kingdom_id, c.gold, c.food, c.wood, c.stone, c.horses, k.name AS defender_name
+           FROM kingdom_colonies c
+           JOIN kingdoms k ON k.id = c.owner_kingdom_id
+           WHERE c.id=$1
+           LIMIT 1
+           FOR UPDATE`,
+          [colonyId],
+        ),
+      ]);
+      if (!shipQ.rowCount) throw new Error("unknown ship code");
+      const ship = shipQ.rows[0];
+      if (String(ship.category) !== "military") throw new Error("only military fleets can perform port attacks");
+      if (!colonyQ.rowCount) throw new Error("target colony not found");
+      const colony = colonyQ.rows[0];
+      const defenderId = Number(colony.owner_kingdom_id || 0);
+      if (defenderId === Number(attacker.id)) throw new Error("cannot attack your own colony");
+
+      const haveShips = Number(attackerShipsQ.rows[0]?.amount || 0);
+      if (haveShips < qty) throw new Error(`not enough ships (have ${haveShips}, need ${qty})`);
+
+      const defenderDefenseQ = await c.query(
+        `SELECT COALESCE(SUM(kb.amount * bt.port_defense),0)::numeric AS defense_power
+         FROM kingdom_boats kb
+         JOIN boat_types bt ON bt.code = kb.boat_code
+         WHERE kb.kingdom_id=$1`,
+        [defenderId],
+      );
+      const attackerPower = qty * Number(ship.port_attack || 0) * (0.88 + Math.random() * 0.32);
+      const defenderPower = Number(defenderDefenseQ.rows[0]?.defense_power || 0) * (0.88 + Math.random() * 0.32);
+      const success = attackerPower > defenderPower;
+
+      let loot = { gold: 0, food: 0, wood: 0, stone: 0, horses: 0 };
+      const attackerLosses = Math.max(0, Math.min(qty, Math.floor(qty * (success ? 0.12 : 0.32))));
+      const defenderLosses = Math.max(0, Math.floor((success ? 0.08 : 0.03) * Math.max(1, defenderPower / 100)));
+
+      await c.query(
+        `UPDATE kingdom_boats SET amount=GREATEST(0, amount-$3) WHERE kingdom_id=$1 AND boat_code=$2`,
+        [attacker.id, shipCode, attackerLosses],
+      );
+
+      if (success) {
+        loot = {
+          gold: Math.max(0, Math.floor(Number(colony.gold || 0) * 0.08)),
+          food: Math.max(0, Math.floor(Number(colony.food || 0) * 0.07)),
+          wood: Math.max(0, Math.floor(Number(colony.wood || 0) * 0.06)),
+          stone: Math.max(0, Math.floor(Number(colony.stone || 0) * 0.06)),
+          horses: Math.max(0, Math.floor(Number(colony.horses || 0) * 0.04)),
+        };
+        await c.query(
+          `UPDATE kingdom_colonies
+           SET gold=GREATEST(0, gold-$2),
+               food=GREATEST(0, food-$3),
+               wood=GREATEST(0, wood-$4),
+               stone=GREATEST(0, stone-$5),
+               horses=GREATEST(0, horses-$6)
+           WHERE id=$1`,
+          [colonyId, loot.gold, loot.food, loot.wood, loot.stone, loot.horses],
+        );
+        await c.query(
+          `UPDATE kingdoms SET gold=gold+$2, food=food+$3, wood=wood+$4, stone=stone+$5, horses=horses+$6 WHERE id=$1`,
+          [attacker.id, loot.gold, loot.food, loot.wood, loot.stone, loot.horses],
+        );
+      }
+
+      // Defender loses ships from highest-defense fleets first.
+      if (defenderLosses > 0) {
+        const defFleetQ = await c.query(
+          `SELECT kb.boat_code, kb.amount, bt.port_defense
+           FROM kingdom_boats kb
+           JOIN boat_types bt ON bt.code = kb.boat_code
+           WHERE kb.kingdom_id=$1 AND kb.amount > 0 AND bt.port_defense > 0
+           ORDER BY bt.port_defense DESC, kb.amount DESC`,
+          [defenderId],
+        );
+        let remaining = defenderLosses;
+        for (const row of defFleetQ.rows) {
+          if (remaining <= 0) break;
+          const sink = Math.min(remaining, Number(row.amount || 0));
+          if (sink <= 0) continue;
+          await c.query(`UPDATE kingdom_boats SET amount=GREATEST(0, amount-$3) WHERE kingdom_id=$1 AND boat_code=$2`, [defenderId, String(row.boat_code), sink]);
+          remaining -= sink;
+        }
+      }
+
+      const rep = await c.query(
+        `INSERT INTO naval_port_reports(
+          attacker_kingdom_id, defender_kingdom_id, defender_colony_id,
+          attacker_name, defender_name, result, attacker_power, defender_power,
+          attacker_ship_code, attacker_ships_sent, attacker_ships_lost, defender_ships_lost, loot
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
+        RETURNING id, created_at`,
+        [
+          attacker.id,
+          defenderId,
+          colonyId,
+          String(attacker.name || ""),
+          String(colony.defender_name || ""),
+          success ? "victory" : "defeat",
+          attackerPower,
+          defenderPower,
+          shipCode,
+          qty,
+          attackerLosses,
+          defenderLosses,
+          JSON.stringify(loot),
+        ],
+      );
+
+      await sendNoticeTx(c, Number(defenderId), success ? "warning" : "info", `Port attacked at ${String(colony.colony_name || "colony")}.`, {
+        attacker: String(attacker.name || ""),
+        colony: String(colony.colony_name || ""),
+        result: success ? "defender_lost" : "defender_held",
+      });
+
+      return {
+        reportId: Number(rep.rows[0]?.id || 0),
+        reportAt: rep.rows[0]?.created_at,
+        success,
+        attackerPower: Number(attackerPower.toFixed(2)),
+        defenderPower: Number(defenderPower.toFixed(2)),
+        attackerLosses,
+        defenderLosses,
+        loot,
+      };
+    });
+
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/shipyard/:kingdom/pirate-defense", requireAuth, async (req, res) => {
+  const kingdomName = String(req.params.kingdom || "").trim();
+  const parsed = shipPirateDefenseBody.safeParse(req.body || {});
+  if (!kingdomName) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
+
+  try {
+    const session = (req as any).authSession;
+    const out = await withTx(async (c) => {
+      const own = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1`, [kingdomName, session.user_id]);
+      if (!own.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(own.rows[0].id);
+      await c.query(`DELETE FROM kingdom_status_effects WHERE kingdom_id=$1 AND effect_code='pirate_auto_defense'`, [kingdomId]);
+      await c.query(
+        `INSERT INTO kingdom_status_effects(kingdom_id, effect_code, source_kind, magnitude, payload, starts_at, ends_at)
+         VALUES ($1,'pirate_auto_defense','system',$2,$3::jsonb, now(), now() + interval '365 days')`,
+        [kingdomId, parsed.data.autoDefend ? 1 : 0, JSON.stringify({ autoDefendPirates: parsed.data.autoDefend })],
+      );
+      return { autoDefend: Boolean(parsed.data.autoDefend) };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/shipyard/:kingdom/pirate-raid", requireAuth, async (req, res) => {
+  const kingdomName = String(req.params.kingdom || "").trim();
+  const parsed = shipPirateRaidBody.safeParse(req.body || {});
+  if (!kingdomName) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
+
+  try {
+    const session = (req as any).authSession;
+    const out = await withTx(async (c) => {
+      const own = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 FOR UPDATE`, [kingdomName, session.user_id]);
+      if (!own.rowCount) throw new Error("kingdom not found");
+      const attacker = own.rows[0];
+
+      const targetName = String(parsed.data.targetKingdom || "").trim();
+      const shipCode = String(parsed.data.shipCode || "").trim().toLowerCase();
+      const quantity = Number(parsed.data.quantity || 0);
+      const [targetQ, shipQ, ownShipsQ] = await Promise.all([
+        c.query(`SELECT id, name, gold, food, wood, stone, horses FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1 FOR UPDATE`, [targetName]),
+        c.query(`SELECT code, name, category, port_attack FROM boat_types WHERE code=$1 LIMIT 1`, [shipCode]),
+        c.query(`SELECT COALESCE(amount,0)::bigint AS amount FROM kingdom_boats WHERE kingdom_id=$1 AND boat_code=$2 LIMIT 1 FOR UPDATE`, [attacker.id, shipCode]),
+      ]);
+      if (!targetQ.rowCount) throw new Error("target kingdom not found");
+      if (!shipQ.rowCount) throw new Error("unknown ship code");
+      const target = targetQ.rows[0];
+      if (Number(target.id) === Number(attacker.id)) throw new Error("cannot raid your own kingdom");
+      const ship = shipQ.rows[0];
+      if (String(ship.category) !== "military") throw new Error("selected ship cannot run raids");
+      const owned = Number(ownShipsQ.rows[0]?.amount || 0);
+      if (owned < quantity) throw new Error(`not enough ships (have ${owned}, need ${quantity})`);
+
+      const targetDefenseQ = await c.query(
+        `SELECT COALESCE(SUM(kb.amount * bt.port_defense),0)::numeric AS defense_power
+         FROM kingdom_boats kb JOIN boat_types bt ON bt.code=kb.boat_code WHERE kb.kingdom_id=$1`,
+        [target.id],
+      );
+      const attackPower = quantity * Number(ship.port_attack || 0) * (0.86 + Math.random() * 0.34);
+      const defensePower = Number(targetDefenseQ.rows[0]?.defense_power || 0) * (0.86 + Math.random() * 0.34);
+      const success = attackPower > defensePower;
+      const losses = Math.max(0, Math.min(quantity, Math.floor(quantity * (success ? 0.14 : 0.36))));
+      await c.query(`UPDATE kingdom_boats SET amount=GREATEST(0, amount-$3) WHERE kingdom_id=$1 AND boat_code=$2`, [attacker.id, shipCode, losses]);
+
+      let loot = { gold: 0, food: 0, wood: 0, stone: 0, horses: 0 };
+      if (success) {
+        loot = {
+          gold: Math.floor(Number(target.gold || 0) * 0.04),
+          food: Math.floor(Number(target.food || 0) * 0.04),
+          wood: Math.floor(Number(target.wood || 0) * 0.035),
+          stone: Math.floor(Number(target.stone || 0) * 0.035),
+          horses: Math.floor(Number(target.horses || 0) * 0.03),
+        };
+        await c.query(
+          `UPDATE kingdoms
+           SET gold=GREATEST(0,gold-$2), food=GREATEST(0,food-$3), wood=GREATEST(0,wood-$4), stone=GREATEST(0,stone-$5), horses=GREATEST(0,horses-$6)
+           WHERE id=$1`,
+          [target.id, loot.gold, loot.food, loot.wood, loot.stone, loot.horses],
+        );
+        await c.query(
+          `UPDATE kingdoms SET gold=gold+$2, food=food+$3, wood=wood+$4, stone=stone+$5, horses=horses+$6 WHERE id=$1`,
+          [attacker.id, loot.gold, loot.food, loot.wood, loot.stone, loot.horses],
+        );
+      }
+
+      await sendNoticeTx(
+        c,
+        Number(target.id),
+        success ? "warning" : "info",
+        `${String(attacker.name || "Unknown")} launched a pirate raid on your coasts.`,
+        { attacker: String(attacker.name || ""), result: success ? "breached" : "repelled" },
+      );
+      return { success, attackPower: Number(attackPower.toFixed(2)), defensePower: Number(defensePower.toFixed(2)), shipsLost: losses, loot };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/shipyard/:kingdom/channel/capture", requireAuth, async (req, res) => {
+  const kingdomName = String(req.params.kingdom || "").trim();
+  const parsed = shipChannelCaptureBody.safeParse(req.body || {});
+  if (!kingdomName) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
+
+  try {
+    const session = (req as any).authSession;
+    const out = await withTx(async (c) => {
+      const own = await c.query(`SELECT id, name FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 FOR UPDATE`, [kingdomName, session.user_id]);
+      if (!own.rowCount) throw new Error("kingdom not found");
+      const kingdom = own.rows[0];
+      const channelCode = String(parsed.data.channelCode || "").trim().toLowerCase();
+      const shipCode = String(parsed.data.shipCode || "").trim().toLowerCase();
+      const quantity = Number(parsed.data.quantity || 0);
+
+      const [channelQ, boatQ, ownShipsQ, defenseQ] = await Promise.all([
+        c.query(`SELECT code, name, required_navy_power FROM sea_channels WHERE code=$1 LIMIT 1`, [channelCode]),
+        c.query(`SELECT code, name, category, port_attack FROM boat_types WHERE code=$1 LIMIT 1`, [shipCode]),
+        c.query(`SELECT COALESCE(amount,0)::bigint AS amount FROM kingdom_boats WHERE kingdom_id=$1 AND boat_code=$2 LIMIT 1 FOR UPDATE`, [kingdom.id, shipCode]),
+        c.query(
+          `SELECT COALESCE(SUM(kb.amount * bt.port_defense),0)::numeric AS def_power
+           FROM kingdom_boats kb JOIN boat_types bt ON bt.code=kb.boat_code WHERE kb.kingdom_id=$1`,
+          [kingdom.id],
+        ),
+      ]);
+      if (!channelQ.rowCount) throw new Error("channel not found");
+      if (!boatQ.rowCount) throw new Error("unknown ship code");
+      const boat = boatQ.rows[0];
+      if (String(boat.category) !== "military") throw new Error("only military boats can capture channels");
+      const have = Number(ownShipsQ.rows[0]?.amount || 0);
+      if (have < quantity) throw new Error(`not enough ships (have ${have}, need ${quantity})`);
+
+      const atkPower = quantity * Number(boat.port_attack || 0) * (0.9 + Math.random() * 0.3);
+      const needed = Number(channelQ.rows[0]?.required_navy_power || 0);
+      const defenseBonus = Number(defenseQ.rows[0]?.def_power || 0) * 0.05;
+      const effective = atkPower + defenseBonus;
+      if (effective < needed) throw new Error(`channel too contested, need ${needed.toLocaleString()} naval power`);
+
+      const losses = Math.max(0, Math.floor(quantity * 0.1));
+      if (losses > 0) {
+        await c.query(`UPDATE kingdom_boats SET amount=GREATEST(0, amount-$3) WHERE kingdom_id=$1 AND boat_code=$2`, [kingdom.id, shipCode, losses]);
+      }
+
+      await c.query(
+        `INSERT INTO kingdom_channel_control(channel_code, kingdom_id, toll_percent, is_closed, status, captured_at, updated_at)
+         VALUES ($1,$2,8,false,'controlled', now(), now())
+         ON CONFLICT (channel_code) DO UPDATE
+         SET kingdom_id=EXCLUDED.kingdom_id,
+             status='controlled',
+             captured_at=now(),
+             updated_at=now()`,
+        [channelCode, kingdom.id],
+      );
+
+      return { channelCode, channelName: String(channelQ.rows[0]?.name || channelCode), effectivePower: Number(effective.toFixed(2)), shipsLost: losses };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/shipyard/:kingdom/channel/policy", requireAuth, async (req, res) => {
+  const kingdomName = String(req.params.kingdom || "").trim();
+  const parsed = shipChannelPolicyBody.safeParse(req.body || {});
+  if (!kingdomName) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
+
+  try {
+    const session = (req as any).authSession;
+    const out = await withTx(async (c) => {
+      const own = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1`, [kingdomName, session.user_id]);
+      if (!own.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(own.rows[0].id);
+      const channelCode = String(parsed.data.channelCode || "").trim().toLowerCase();
+      const ctrl = await c.query(`SELECT channel_code, kingdom_id, toll_percent, is_closed FROM kingdom_channel_control WHERE channel_code=$1 LIMIT 1 FOR UPDATE`, [channelCode]);
+      if (!ctrl.rowCount) throw new Error("channel not found");
+      if (Number(ctrl.rows[0].kingdom_id || 0) !== kingdomId) throw new Error("you do not control this channel");
+      const nextToll = parsed.data.tollPercent !== undefined ? Number(parsed.data.tollPercent) : Number(ctrl.rows[0].toll_percent || 0);
+      const nextClosed = parsed.data.isClosed !== undefined ? Boolean(parsed.data.isClosed) : Boolean(ctrl.rows[0].is_closed);
+      await c.query(
+        `UPDATE kingdom_channel_control SET toll_percent=$2, is_closed=$3, updated_at=now() WHERE channel_code=$1`,
+        [channelCode, nextToll, nextClosed],
+      );
+      return { channelCode, tollPercent: nextToll, isClosed: nextClosed };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/shipyard/:kingdom/barter/create", requireAuth, async (req, res) => {
+  const kingdomName = String(req.params.kingdom || "").trim();
+  const parsed = shipBarterOfferBody.safeParse(req.body || {});
+  if (!kingdomName) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
+
+  try {
+    const session = (req as any).authSession;
+    const out = await withTx(async (c) => {
+      const own = await c.query(
+        `SELECT id, gold, wood, stone, food, horses FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 FOR UPDATE`,
+        [kingdomName, session.user_id],
+      );
+      if (!own.rowCount) throw new Error("kingdom not found");
+      const kingdom = own.rows[0];
+      const body = parsed.data;
+      const shipCode = String(body.shipCode || "").trim().toLowerCase();
+      const boatQ = await c.query(`SELECT code, category FROM boat_types WHERE code=$1 LIMIT 1`, [shipCode]);
+      if (!boatQ.rowCount) throw new Error("unknown ship code");
+      if (!["logistics", "expansion"].includes(String(boatQ.rows[0].category || ""))) throw new Error("selected ship cannot host barter routes");
+
+      const giveField = String(body.giveResource) as "food" | "wood" | "stone" | "horses";
+      const giveAmount = Number(body.giveAmount || 0);
+      if (Number((kingdom as any)[giveField] || 0) < giveAmount) throw new Error(`not enough ${giveField} to post barter`);
+
+      await c.query(
+        `UPDATE kingdoms
+         SET food=food-$2, wood=wood-$3, stone=stone-$4, horses=horses-$5
+         WHERE id=$1`,
+        [
+          kingdom.id,
+          giveField === "food" ? giveAmount : 0,
+          giveField === "wood" ? giveAmount : 0,
+          giveField === "stone" ? giveAmount : 0,
+          giveField === "horses" ? giveAmount : 0,
+        ],
+      );
+
+      const ins = await c.query(
+        `INSERT INTO naval_barter_offers(owner_kingdom_id, ship_code, give_resource, give_amount, want_resource, want_amount, status)
+         VALUES ($1,$2,$3,$4,$5,$6,'open')
+         RETURNING id, owner_kingdom_id, ship_code, give_resource, give_amount, want_resource, want_amount, status, created_at, expires_at`,
+        [kingdom.id, shipCode, body.giveResource, giveAmount, body.wantResource, Number(body.wantAmount || 0)],
+      );
+      return { offer: ins.rows[0] };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/shipyard/:kingdom/barter/accept", requireAuth, async (req, res) => {
+  const kingdomName = String(req.params.kingdom || "").trim();
+  const parsed = shipBarterAcceptBody.safeParse(req.body || {});
+  if (!kingdomName) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
+
+  try {
+    const session = (req as any).authSession;
+    const out = await withTx(async (c) => {
+      const own = await c.query(
+        `SELECT id, gold, wood, stone, food, horses FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 FOR UPDATE`,
+        [kingdomName, session.user_id],
+      );
+      if (!own.rowCount) throw new Error("kingdom not found");
+      const buyer = own.rows[0];
+      const offerQ = await c.query(
+        `SELECT id, owner_kingdom_id, ship_code, give_resource, give_amount, want_resource, want_amount, status, expires_at
+         FROM naval_barter_offers WHERE id=$1 LIMIT 1 FOR UPDATE`,
+        [Number(parsed.data.offerId)],
+      );
+      if (!offerQ.rowCount) throw new Error("offer not found");
+      const offer = offerQ.rows[0];
+      if (String(offer.status) !== "open") throw new Error("offer is not open");
+      if (new Date(String(offer.expires_at)).getTime() <= Date.now()) throw new Error("offer expired");
+      if (Number(offer.owner_kingdom_id) === Number(buyer.id)) throw new Error("cannot accept your own offer");
+
+      const wantResource = String(offer.want_resource) as "food" | "wood" | "stone" | "horses";
+      const wantAmount = Number(offer.want_amount || 0);
+      if (Number((buyer as any)[wantResource] || 0) < wantAmount) throw new Error(`not enough ${wantResource} to accept trade`);
+
+      await c.query(
+        `UPDATE kingdoms SET food=food-$2, wood=wood-$3, stone=stone-$4, horses=horses-$5 WHERE id=$1`,
+        [
+          buyer.id,
+          wantResource === "food" ? wantAmount : 0,
+          wantResource === "wood" ? wantAmount : 0,
+          wantResource === "stone" ? wantAmount : 0,
+          wantResource === "horses" ? wantAmount : 0,
+        ],
+      );
+
+      await c.query(
+        `UPDATE kingdoms SET food=food+$2, wood=wood+$3, stone=stone+$4, horses=horses+$5 WHERE id=$1`,
+        [
+          offer.owner_kingdom_id,
+          wantResource === "food" ? wantAmount : 0,
+          wantResource === "wood" ? wantAmount : 0,
+          wantResource === "stone" ? wantAmount : 0,
+          wantResource === "horses" ? wantAmount : 0,
+        ],
+      );
+
+      const giveResource = String(offer.give_resource) as "food" | "wood" | "stone" | "horses";
+      const giveAmount = Number(offer.give_amount || 0);
+      await c.query(
+        `UPDATE kingdoms SET food=food+$2, wood=wood+$3, stone=stone+$4, horses=horses+$5 WHERE id=$1`,
+        [
+          buyer.id,
+          giveResource === "food" ? giveAmount : 0,
+          giveResource === "wood" ? giveAmount : 0,
+          giveResource === "stone" ? giveAmount : 0,
+          giveResource === "horses" ? giveAmount : 0,
+        ],
+      );
+
+      await c.query(
+        `UPDATE naval_barter_offers SET status='accepted', accepted_by_kingdom_id=$2, accepted_at=now() WHERE id=$1`,
+        [offer.id, buyer.id],
+      );
+
+      await sendNoticeTx(c, Number(offer.owner_kingdom_id), "success", `Your naval barter offer #${Number(offer.id)} was accepted.`, {
+        offerId: Number(offer.id),
+        acceptedByKingdomId: Number(buyer.id),
+      });
+
+      return { offerId: Number(offer.id), status: "accepted" };
+    });
+    return res.json({ ok: true, ...out });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/shipyard/:kingdom/barter/cancel", requireAuth, async (req, res) => {
+  const kingdomName = String(req.params.kingdom || "").trim();
+  const parsed = shipBarterAcceptBody.safeParse(req.body || {});
+  if (!kingdomName) return res.status(400).json({ ok: false, error: "kingdom name required" });
+  if (!parsed.success) return res.status(400).json({ ok: false, error: zodMsg(parsed.error) });
+
+  try {
+    const session = (req as any).authSession;
+    const out = await withTx(async (c) => {
+      const own = await c.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) AND user_id=$2 LIMIT 1`, [kingdomName, session.user_id]);
+      if (!own.rowCount) throw new Error("kingdom not found");
+      const kingdomId = Number(own.rows[0].id);
+      const offerQ = await c.query(
+        `SELECT id, owner_kingdom_id, give_resource, give_amount, status
+         FROM naval_barter_offers WHERE id=$1 LIMIT 1 FOR UPDATE`,
+        [Number(parsed.data.offerId)],
+      );
+      if (!offerQ.rowCount) throw new Error("offer not found");
+      const offer = offerQ.rows[0];
+      if (Number(offer.owner_kingdom_id) !== kingdomId) throw new Error("cannot cancel another kingdom's offer");
+      if (String(offer.status) !== "open") throw new Error("offer is not open");
+
+      await c.query(`UPDATE naval_barter_offers SET status='cancelled' WHERE id=$1`, [Number(offer.id)]);
+      const giveResource = String(offer.give_resource) as "food" | "wood" | "stone" | "horses";
+      const giveAmount = Number(offer.give_amount || 0);
+      await c.query(
+        `UPDATE kingdoms SET food=food+$2, wood=wood+$3, stone=stone+$4, horses=horses+$5 WHERE id=$1`,
+        [
+          kingdomId,
+          giveResource === "food" ? giveAmount : 0,
+          giveResource === "wood" ? giveAmount : 0,
+          giveResource === "stone" ? giveAmount : 0,
+          giveResource === "horses" ? giveAmount : 0,
+        ],
+      );
+      return { offerId: Number(offer.id), status: "cancelled" };
+    });
     return res.json({ ok: true, ...out });
   } catch (e: any) {
     return res.status(400).json({ ok: false, error: String(e?.message || e) });

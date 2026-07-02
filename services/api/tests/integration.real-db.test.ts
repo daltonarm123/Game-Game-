@@ -368,3 +368,186 @@ test(
     }
   },
 );
+
+test(
+  "real-db: naval barter offer can be accepted",
+  { skip: !process.env.DATABASE_URL },
+  async () => {
+    await ensureSchema();
+    await resetPublicSchemaData();
+
+    const server = app.listen(0);
+    try {
+      const addr = server.address();
+      assert.ok(addr && typeof addr === "object");
+      const base = `http://127.0.0.1:${addr.port}`;
+      const stamp = Date.now();
+
+      const seller = await postJson(`${base}/api/auth/register`, {
+        email: `naval_seller_${stamp}@example.com`,
+        username: `naval_seller_${stamp}`,
+        password: "passphrase123",
+        kingdomName: `NavalSeller-${stamp}`,
+      });
+      assert.equal(seller.status, 200);
+      assert.equal(seller.body.ok, true);
+
+      const buyer = await postJson(`${base}/api/auth/register`, {
+        email: `naval_buyer_${stamp}@example.com`,
+        username: `naval_buyer_${stamp}`,
+        password: "passphrase123",
+        kingdomName: `NavalBuyer-${stamp}`,
+      });
+      assert.equal(buyer.status, 200);
+      assert.equal(buyer.body.ok, true);
+
+      const sellerToken = String(seller.body?.session?.token || "");
+      const sellerKingdom = String(seller.body?.kingdom?.name || "");
+      const buyerToken = String(buyer.body?.session?.token || "");
+      const buyerKingdom = String(buyer.body?.kingdom?.name || "");
+      assert.ok(sellerToken.length > 0);
+      assert.ok(buyerToken.length > 0);
+
+      const sellerRow = await pool.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [sellerKingdom]);
+      const buyerRow = await pool.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [buyerKingdom]);
+      const sellerId = Number(sellerRow.rows[0]?.id || 0);
+      const buyerId = Number(buyerRow.rows[0]?.id || 0);
+      assert.ok(sellerId > 0);
+      assert.ok(buyerId > 0);
+
+      await pool.query(`UPDATE kingdoms SET wood=20000, stone=2000 WHERE id=$1`, [sellerId]);
+      await pool.query(`UPDATE kingdoms SET wood=2000, stone=20000 WHERE id=$1`, [buyerId]);
+      await pool.query(
+        `INSERT INTO kingdom_boats(kingdom_id, boat_code, amount)
+         VALUES ($1,'market_ships',5)
+         ON CONFLICT (kingdom_id, boat_code)
+         DO UPDATE SET amount=EXCLUDED.amount`,
+        [sellerId],
+      );
+
+      const createOffer = await postJson(
+        `${base}/api/shipyard/${encodeURIComponent(sellerKingdom)}/barter/create`,
+        {
+          shipCode: "market_ships",
+          giveResource: "wood",
+          giveAmount: 1200,
+          wantResource: "stone",
+          wantAmount: 900,
+        },
+        sellerToken,
+      );
+      assert.equal(createOffer.status, 200);
+      assert.equal(createOffer.body.ok, true);
+      const offerId = Number(createOffer.body?.offer?.id || 0);
+      assert.ok(offerId > 0);
+
+      const accept = await postJson(
+        `${base}/api/shipyard/${encodeURIComponent(buyerKingdom)}/barter/accept`,
+        { offerId },
+        buyerToken,
+      );
+      assert.equal(accept.status, 200);
+      assert.equal(accept.body.ok, true);
+
+      const offerRow = await pool.query(`SELECT status FROM naval_barter_offers WHERE id=$1`, [offerId]);
+      assert.equal(String(offerRow.rows[0]?.status || ""), "accepted");
+
+      const sellerAfter = await pool.query(`SELECT wood, stone FROM kingdoms WHERE id=$1`, [sellerId]);
+      const buyerAfter = await pool.query(`SELECT wood, stone FROM kingdoms WHERE id=$1`, [buyerId]);
+      assert.equal(Number(sellerAfter.rows[0]?.stone || 0), 2900);
+      assert.equal(Number(buyerAfter.rows[0]?.wood || 0), 3200);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await resetPublicSchemaData();
+    }
+  },
+);
+
+test(
+  "real-db: closed channel blocks ship transfer",
+  { skip: !process.env.DATABASE_URL },
+  async () => {
+    await ensureSchema();
+    await resetPublicSchemaData();
+
+    const server = app.listen(0);
+    try {
+      const addr = server.address();
+      assert.ok(addr && typeof addr === "object");
+      const base = `http://127.0.0.1:${addr.port}`;
+      const stamp = Date.now();
+
+      const mover = await postJson(`${base}/api/auth/register`, {
+        email: `mover_${stamp}@example.com`,
+        username: `mover_${stamp}`,
+        password: "passphrase123",
+        kingdomName: `Mover-${stamp}`,
+      });
+      assert.equal(mover.status, 200);
+      assert.equal(mover.body.ok, true);
+
+      const controller = await postJson(`${base}/api/auth/register`, {
+        email: `controller_${stamp}@example.com`,
+        username: `controller_${stamp}`,
+        password: "passphrase123",
+        kingdomName: `Controller-${stamp}`,
+      });
+      assert.equal(controller.status, 200);
+      assert.equal(controller.body.ok, true);
+
+      const moverToken = String(mover.body?.session?.token || "");
+      const moverKingdom = String(mover.body?.kingdom?.name || "");
+      const moverRow = await pool.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [moverKingdom]);
+      const ctrlRow = await pool.query(`SELECT id FROM kingdoms WHERE LOWER(name)=LOWER($1) LIMIT 1`, [String(controller.body?.kingdom?.name || "")]);
+      const moverId = Number(moverRow.rows[0]?.id || 0);
+      const ctrlId = Number(ctrlRow.rows[0]?.id || 0);
+      assert.ok(moverId > 0 && ctrlId > 0);
+
+      await pool.query(`UPDATE kingdoms SET gold=100000, food=100000, wood=100000, stone=100000, horses=1000 WHERE id=$1`, [moverId]);
+      await pool.query(
+        `INSERT INTO kingdom_boats(kingdom_id, boat_code, amount)
+         VALUES ($1,'market_ships',5)
+         ON CONFLICT (kingdom_id, boat_code)
+         DO UPDATE SET amount=EXCLUDED.amount`,
+        [moverId],
+      );
+      const colonyRow = await pool.query(
+        `INSERT INTO kingdom_colonies(owner_kingdom_id, colony_name, world_code, gold, wood, stone, food, horses)
+         VALUES ($1,$2,$3,0,0,0,0,0)
+         RETURNING id`,
+        [moverId, `MoverColony-${stamp}`, `mv_${stamp}`],
+      );
+      const colonyId = Number(colonyRow.rows[0]?.id || 0);
+      assert.ok(colonyId > 0);
+
+      await pool.query(
+        `UPDATE kingdom_channel_control
+         SET kingdom_id=$2, status='controlled', is_closed=true, toll_percent=12, updated_at=now()
+         WHERE channel_code='strait_of_ravens'`,
+        ["strait_of_ravens", ctrlId],
+      );
+
+      const transfer = await postJson(
+        `${base}/api/shipyard/${encodeURIComponent(moverKingdom)}/transfer`,
+        {
+          colonyId,
+          direction: "main_to_colony",
+          shipCode: "market_ships",
+          shipQuantity: 1,
+          food: 100,
+          gold: 100,
+          wood: 0,
+          stone: 0,
+          horses: 0,
+        },
+        moverToken,
+      );
+      assert.equal(transfer.status, 400);
+      assert.equal(transfer.body.ok, false);
+      assert.match(String(transfer.body.error || ""), /closed/i);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await resetPublicSchemaData();
+    }
+  },
+);

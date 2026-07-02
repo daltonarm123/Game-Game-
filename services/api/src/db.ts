@@ -25,6 +25,7 @@ const BUILDINGS = [
   { code: "lumberyard", name: "Lumber Yards", landCost: 3, woodCost: 10, stoneCost: 5, baseBuildSeconds: 2 * 3600 },
   { code: "markets", name: "Markets", landCost: 3, woodCost: 25, stoneCost: 10, baseBuildSeconds: 2 * 3600 },
   { code: "quarry", name: "Stone Quarries", landCost: 3, woodCost: 10, stoneCost: 5, baseBuildSeconds: 2 * 3600 },
+  { code: "shipyard", name: "Shipyard", landCost: 6, woodCost: 120, stoneCost: 80, baseBuildSeconds: 6 * 3600 },
   { code: "stables", name: "Stables", landCost: 5, woodCost: 20, stoneCost: 20, baseBuildSeconds: 6 * 3600 },
   { code: "temples", name: "Temples", landCost: 2, woodCost: 5, stoneCost: 15, baseBuildSeconds: 10 * 3600 },
 ] as const;
@@ -42,6 +43,152 @@ const TROOPS = [
   { code: "diplomats", name: "Diplomats", trainGoldCost: 0, trainFoodCost: 0, trainSeconds: 0, upkeepFood: 15, upkeepGold: 15, att: 0.1, def: 0.1, nw: 0.88, housing: "N/A, Embassies", notes: "", isTrainable: false },
   { code: "priests", name: "Priests", trainGoldCost: 400, trainFoodCost: 150, trainSeconds: 3600, upkeepFood: 30, upkeepGold: 20, att: 0.1, def: 0.1, nw: 0.5, housing: "Faith, Temples", notes: "Max 5 per Temple. Each priest generates 4 mana/hr.", isTrainable: true },
   { code: "spies", name: "Spies", trainGoldCost: 300, trainFoodCost: 100, trainSeconds: 2400, upkeepFood: 18, upkeepGold: 10, att: 0.1, def: 0.1, nw: 0.38, housing: "N/A, Guildhalls", notes: "Requires Guildhall to train.", isTrainable: true },
+] as const;
+
+const SHIPS = [
+  {
+    code: "fishing_boats",
+    name: "Fishing Boats",
+    category: "economy",
+    shipyardLevel: 1,
+    woodCost: 120,
+    stoneCost: 40,
+    goldCost: 300,
+    horsesCost: 0,
+    buildSeconds: 90 * 60,
+    travelSeconds: 20 * 60,
+    fishingFoodPerHour: 180,
+    cargoCapacity: 0,
+    portAttack: 0,
+    portDefense: 8,
+    notes: "Adds fish harvest to kingdom food economy.",
+  },
+  {
+    code: "market_ships",
+    name: "Market Ships",
+    category: "logistics",
+    shipyardLevel: 2,
+    woodCost: 180,
+    stoneCost: 70,
+    goldCost: 700,
+    horsesCost: 0,
+    buildSeconds: 2 * 3600,
+    travelSeconds: 16 * 60,
+    fishingFoodPerHour: 0,
+    cargoCapacity: 12000,
+    portAttack: 0,
+    portDefense: 12,
+    notes: "Transfers resources between worlds and ports.",
+  },
+  {
+    code: "patrol_fleets",
+    name: "Patrol Fleets",
+    category: "military",
+    shipyardLevel: 3,
+    woodCost: 260,
+    stoneCost: 120,
+    goldCost: 1300,
+    horsesCost: 0,
+    buildSeconds: 3 * 3600,
+    travelSeconds: 14 * 60,
+    fishingFoodPerHour: 0,
+    cargoCapacity: 1500,
+    portAttack: 85,
+    portDefense: 140,
+    notes: "Defensive naval force for protecting your ports.",
+  },
+  {
+    code: "settler_ships",
+    name: "Settler Ships",
+    category: "expansion",
+    shipyardLevel: 4,
+    woodCost: 420,
+    stoneCost: 180,
+    goldCost: 2800,
+    horsesCost: 20,
+    buildSeconds: 4 * 3600,
+    travelSeconds: 30 * 60,
+    fishingFoodPerHour: 0,
+    cargoCapacity: 8000,
+    portAttack: 20,
+    portDefense: 65,
+    notes: "Required to found a new colony world.",
+  },
+  {
+    code: "war_frigates",
+    name: "War Frigates",
+    category: "military",
+    shipyardLevel: 5,
+    woodCost: 600,
+    stoneCost: 300,
+    goldCost: 5200,
+    horsesCost: 0,
+    buildSeconds: 6 * 3600,
+    travelSeconds: 12 * 60,
+    fishingFoodPerHour: 0,
+    cargoCapacity: 3000,
+    portAttack: 210,
+    portDefense: 180,
+    notes: "Main warship for cross-world port assaults.",
+  },
+  {
+    code: "supply_barges",
+    name: "Supply Barges",
+    category: "logistics",
+    shipyardLevel: 3,
+    woodCost: 260,
+    stoneCost: 100,
+    goldCost: 1200,
+    horsesCost: 0,
+    buildSeconds: 3 * 3600,
+    travelSeconds: 18 * 60,
+    fishingFoodPerHour: 0,
+    cargoCapacity: 22000,
+    portAttack: 0,
+    portDefense: 25,
+    notes: "Heavy supply vessel for high-volume logistics and barter routes.",
+  },
+  {
+    code: "troop_transports",
+    name: "Troop Transports",
+    category: "military",
+    shipyardLevel: 3,
+    woodCost: 320,
+    stoneCost: 130,
+    goldCost: 1650,
+    horsesCost: 10,
+    buildSeconds: 3 * 3600,
+    travelSeconds: 15 * 60,
+    fishingFoodPerHour: 0,
+    cargoCapacity: 5000,
+    portAttack: 125,
+    portDefense: 120,
+    notes: "Carries raiding parties and amphibious strike forces.",
+  },
+  {
+    code: "corsair_raiders",
+    name: "Corsair Raiders",
+    category: "military",
+    shipyardLevel: 4,
+    woodCost: 520,
+    stoneCost: 210,
+    goldCost: 3200,
+    horsesCost: 0,
+    buildSeconds: 5 * 3600,
+    travelSeconds: 10 * 60,
+    fishingFoodPerHour: 0,
+    cargoCapacity: 2200,
+    portAttack: 245,
+    portDefense: 165,
+    notes: "Fast strike craft specialized for raiding and privateering.",
+  },
+] as const;
+
+const SEA_CHANNELS = [
+  { code: "strait_of_ravens", name: "Strait of Ravens", requiredPower: 900, baseTraffic: 7 },
+  { code: "iron_gate_pass", name: "Iron Gate Pass", requiredPower: 1350, baseTraffic: 11 },
+  { code: "azure_narrows", name: "Azure Narrows", requiredPower: 700, baseTraffic: 5 },
+  { code: "crown_tide_lane", name: "Crown Tide Lane", requiredPower: 1800, baseTraffic: 15 },
 ] as const;
 
 const RESEARCH_SKILLS = [
@@ -258,6 +405,150 @@ export async function ensureSchema(): Promise<void> {
       housing TEXT NOT NULL DEFAULT '',
       notes TEXT NOT NULL DEFAULT '',
       is_trainable BOOLEAN NOT NULL DEFAULT TRUE
+    );
+
+    CREATE TABLE IF NOT EXISTS boat_types (
+      code TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL,
+      shipyard_level INT NOT NULL DEFAULT 1,
+      wood_cost INT NOT NULL DEFAULT 0,
+      stone_cost INT NOT NULL DEFAULT 0,
+      gold_cost INT NOT NULL DEFAULT 0,
+      horses_cost INT NOT NULL DEFAULT 0,
+      build_seconds INT NOT NULL DEFAULT 3600,
+      travel_seconds INT NOT NULL DEFAULT 1800,
+      fishing_food_per_hour INT NOT NULL DEFAULT 0,
+      cargo_capacity INT NOT NULL DEFAULT 0,
+      port_attack INT NOT NULL DEFAULT 0,
+      port_defense INT NOT NULL DEFAULT 0,
+      notes TEXT NOT NULL DEFAULT ''
+    );
+
+    CREATE TABLE IF NOT EXISTS kingdom_boats (
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      boat_code TEXT NOT NULL REFERENCES boat_types(code) ON DELETE CASCADE,
+      amount BIGINT NOT NULL DEFAULT 0,
+      PRIMARY KEY (kingdom_id, boat_code)
+    );
+
+    CREATE TABLE IF NOT EXISTS boat_queue (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      boat_code TEXT NOT NULL REFERENCES boat_types(code),
+      quantity INT NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completes_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      completed_at TIMESTAMPTZ,
+      CHECK (status IN ('queued','completed','cancelled'))
+    );
+
+    CREATE TABLE IF NOT EXISTS kingdom_colonies (
+      id BIGSERIAL PRIMARY KEY,
+      owner_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      colony_name TEXT NOT NULL,
+      world_code TEXT NOT NULL,
+      gold BIGINT NOT NULL DEFAULT 0,
+      wood BIGINT NOT NULL DEFAULT 0,
+      stone BIGINT NOT NULL DEFAULT 0,
+      food BIGINT NOT NULL DEFAULT 0,
+      horses BIGINT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (owner_kingdom_id, colony_name),
+      UNIQUE (owner_kingdom_id, world_code)
+    );
+
+    CREATE TABLE IF NOT EXISTS kingdom_shipments (
+      id BIGSERIAL PRIMARY KEY,
+      owner_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      colony_id BIGINT NOT NULL REFERENCES kingdom_colonies(id) ON DELETE CASCADE,
+      direction TEXT NOT NULL,
+      ship_code TEXT NOT NULL REFERENCES boat_types(code),
+      ship_quantity INT NOT NULL DEFAULT 1,
+      gold BIGINT NOT NULL DEFAULT 0,
+      wood BIGINT NOT NULL DEFAULT 0,
+      stone BIGINT NOT NULL DEFAULT 0,
+      food BIGINT NOT NULL DEFAULT 0,
+      horses BIGINT NOT NULL DEFAULT 0,
+      departed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      arrives_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL DEFAULT 'transit',
+      completed_at TIMESTAMPTZ,
+      CHECK (direction IN ('main_to_colony','colony_to_main')),
+      CHECK (status IN ('transit','delivered','cancelled'))
+    );
+
+    CREATE TABLE IF NOT EXISTS naval_port_reports (
+      id BIGSERIAL PRIMARY KEY,
+      attacker_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      defender_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      defender_colony_id BIGINT REFERENCES kingdom_colonies(id) ON DELETE SET NULL,
+      attacker_name TEXT NOT NULL,
+      defender_name TEXT NOT NULL,
+      result TEXT NOT NULL,
+      attacker_power NUMERIC(18,2) NOT NULL,
+      defender_power NUMERIC(18,2) NOT NULL,
+      attacker_ship_code TEXT NOT NULL,
+      attacker_ships_sent INT NOT NULL,
+      attacker_ships_lost INT NOT NULL DEFAULT 0,
+      defender_ships_lost INT NOT NULL DEFAULT 0,
+      loot JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS sea_channels (
+      code TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      required_navy_power INT NOT NULL DEFAULT 500,
+      base_traffic INT NOT NULL DEFAULT 5,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS kingdom_channel_control (
+      channel_code TEXT PRIMARY KEY REFERENCES sea_channels(code) ON DELETE CASCADE,
+      kingdom_id BIGINT REFERENCES kingdoms(id) ON DELETE SET NULL,
+      toll_percent INT NOT NULL DEFAULT 8,
+      is_closed BOOLEAN NOT NULL DEFAULT FALSE,
+      status TEXT NOT NULL DEFAULT 'neutral',
+      captured_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (status IN ('neutral','controlled','lost')),
+      CHECK (toll_percent >= 0 AND toll_percent <= 35)
+    );
+
+    CREATE TABLE IF NOT EXISTS naval_barter_offers (
+      id BIGSERIAL PRIMARY KEY,
+      owner_kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      ship_code TEXT NOT NULL REFERENCES boat_types(code) ON DELETE RESTRICT,
+      give_resource TEXT NOT NULL,
+      give_amount BIGINT NOT NULL,
+      want_resource TEXT NOT NULL,
+      want_amount BIGINT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      accepted_by_kingdom_id BIGINT REFERENCES kingdoms(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      accepted_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '3 days'),
+      CHECK (status IN ('open','accepted','cancelled','expired')),
+      CHECK (give_resource IN ('food','wood','stone','horses')),
+      CHECK (want_resource IN ('food','wood','stone','horses')),
+      CHECK (give_resource <> want_resource),
+      CHECK (give_amount > 0),
+      CHECK (want_amount > 0)
+    );
+
+    CREATE TABLE IF NOT EXISTS pirate_raid_reports (
+      id BIGSERIAL PRIMARY KEY,
+      kingdom_id BIGINT NOT NULL REFERENCES kingdoms(id) ON DELETE CASCADE,
+      kingdom_name TEXT NOT NULL,
+      result TEXT NOT NULL,
+      pirate_power NUMERIC(18,2) NOT NULL,
+      defense_power NUMERIC(18,2) NOT NULL,
+      ships_lost INT NOT NULL DEFAULT 0,
+      loot JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (result IN ('repelled','breached'))
     );
 
     CREATE TABLE IF NOT EXISTS kingdom_buildings (
@@ -580,6 +871,17 @@ export async function ensureSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS build_queue_kingdom_due_idx ON build_queue(kingdom_id, status, completes_at);
     CREATE INDEX IF NOT EXISTS train_queue_due_idx ON train_queue(status, completes_at);
     CREATE INDEX IF NOT EXISTS train_queue_kingdom_due_idx ON train_queue(kingdom_id, status, completes_at);
+    CREATE INDEX IF NOT EXISTS boat_queue_due_idx ON boat_queue(status, completes_at);
+    CREATE INDEX IF NOT EXISTS boat_queue_kingdom_due_idx ON boat_queue(kingdom_id, status, completes_at);
+    CREATE INDEX IF NOT EXISTS kingdom_shipments_due_idx ON kingdom_shipments(status, arrives_at);
+    CREATE INDEX IF NOT EXISTS kingdom_shipments_owner_idx ON kingdom_shipments(owner_kingdom_id, status, arrives_at DESC);
+    CREATE INDEX IF NOT EXISTS kingdom_colonies_owner_idx ON kingdom_colonies(owner_kingdom_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS naval_port_reports_defender_idx ON naval_port_reports(defender_kingdom_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS naval_port_reports_attacker_idx ON naval_port_reports(attacker_kingdom_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS kingdom_channel_control_kingdom_idx ON kingdom_channel_control(kingdom_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS naval_barter_offers_open_idx ON naval_barter_offers(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS naval_barter_offers_owner_idx ON naval_barter_offers(owner_kingdom_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS pirate_raid_reports_kingdom_idx ON pirate_raid_reports(kingdom_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS attack_reports_defender_idx ON attack_reports(defender_kingdom_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS attack_reports_attacker_idx ON attack_reports(attacker_kingdom_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS attack_reports_pair_idx ON attack_reports(attacker_kingdom_id, defender_kingdom_id, created_at DESC);
@@ -710,6 +1012,8 @@ export async function ensureSchema(): Promise<void> {
   await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS is_trainable BOOLEAN NOT NULL DEFAULT TRUE`);
   await pool.query(`ALTER TABLE troop_types ADD COLUMN IF NOT EXISTS horse_cost INT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS horses BIGINT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS sea_world_code TEXT NOT NULL DEFAULT 'main_sea'`);
+  await pool.query(`ALTER TABLE kingdoms ADD COLUMN IF NOT EXISTS pirate_last_raid_at TIMESTAMPTZ`);
 
   await pool.query(`ALTER TABLE research_types ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'General'`);
   await pool.query(`ALTER TABLE research_types ADD COLUMN IF NOT EXISTS effect_text TEXT NOT NULL DEFAULT ''`);
@@ -835,6 +1139,72 @@ export async function ensureSchema(): Promise<void> {
           is_trainable = EXCLUDED.is_trainable;
       `,
       [t.code, t.name, t.trainGoldCost, t.trainFoodCost, Number((t as any).horseCost || 0), t.trainSeconds, t.upkeepFood, t.upkeepGold, t.att, t.def, t.nw, t.housing, t.notes, t.isTrainable],
+    );
+  }
+
+  for (const s of SHIPS) {
+    await pool.query(
+      `
+      INSERT INTO boat_types (
+        code, name, category, shipyard_level, wood_cost, stone_cost, gold_cost, horses_cost,
+        build_seconds, travel_seconds, fishing_food_per_hour, cargo_capacity, port_attack, port_defense, notes
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+      ON CONFLICT (code) DO UPDATE
+      SET name = EXCLUDED.name,
+          category = EXCLUDED.category,
+          shipyard_level = EXCLUDED.shipyard_level,
+          wood_cost = EXCLUDED.wood_cost,
+          stone_cost = EXCLUDED.stone_cost,
+          gold_cost = EXCLUDED.gold_cost,
+          horses_cost = EXCLUDED.horses_cost,
+          build_seconds = EXCLUDED.build_seconds,
+          travel_seconds = EXCLUDED.travel_seconds,
+          fishing_food_per_hour = EXCLUDED.fishing_food_per_hour,
+          cargo_capacity = EXCLUDED.cargo_capacity,
+          port_attack = EXCLUDED.port_attack,
+          port_defense = EXCLUDED.port_defense,
+          notes = EXCLUDED.notes
+      `,
+      [
+        s.code,
+        s.name,
+        s.category,
+        s.shipyardLevel,
+        s.woodCost,
+        s.stoneCost,
+        s.goldCost,
+        s.horsesCost,
+        s.buildSeconds,
+        s.travelSeconds,
+        s.fishingFoodPerHour,
+        s.cargoCapacity,
+        s.portAttack,
+        s.portDefense,
+        s.notes,
+      ],
+    );
+  }
+
+  for (const ch of SEA_CHANNELS) {
+    await pool.query(
+      `
+      INSERT INTO sea_channels(code, name, required_navy_power, base_traffic)
+      VALUES ($1,$2,$3,$4)
+      ON CONFLICT (code) DO UPDATE
+      SET name = EXCLUDED.name,
+          required_navy_power = EXCLUDED.required_navy_power,
+          base_traffic = EXCLUDED.base_traffic
+      `,
+      [ch.code, ch.name, ch.requiredPower, ch.baseTraffic],
+    );
+    await pool.query(
+      `
+      INSERT INTO kingdom_channel_control(channel_code, status)
+      VALUES ($1,'neutral')
+      ON CONFLICT (channel_code) DO NOTHING
+      `,
+      [ch.code],
     );
   }
 

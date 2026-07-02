@@ -26,6 +26,11 @@ const TAX_MIN = 0;
 const TAX_MAX = 40;
 const VACATION_COOLDOWN_SECONDS = Math.max(3600, Number(process.env.VACATION_COOLDOWN_SECONDS || 7 * 24 * 3600));
 const SHIELD_COOLDOWN_SECONDS = Math.max(0, Number(process.env.SHIELD_COOLDOWN_SECONDS || 12 * 3600));
+const CHANNEL_UPKEEP_GOLD_PER_HOUR = Number(process.env.CHANNEL_UPKEEP_GOLD_PER_HOUR || 680);
+const CHANNEL_TRAFFIC_GOLD_PER_HOUR = Number(process.env.CHANNEL_TRAFFIC_GOLD_PER_HOUR || 1450);
+const PIRATE_TICK_CHANCE = Math.max(0, Math.min(1, Number(process.env.PIRATE_TICK_CHANCE || 0.018)));
+const PIRATE_MIN_POWER = Math.max(100, Number(process.env.PIRATE_MIN_POWER || 260));
+const PIRATE_MAX_POWER = Math.max(PIRATE_MIN_POWER + 50, Number(process.env.PIRATE_MAX_POWER || 1500));
 
 type SeasonState = {
   index: number;
@@ -179,6 +184,290 @@ async function processTrainQueueTick(): Promise<number> {
     }
 
     return due.rowCount;
+  });
+}
+
+async function processBoatQueueTick(): Promise<number> {
+  return withTx(async (c) => {
+    const due = await c.query(
+      `
+      SELECT id, kingdom_id, boat_code, quantity
+      FROM boat_queue
+      WHERE status = 'queued'
+        AND completes_at <= now()
+      ORDER BY completes_at ASC
+      FOR UPDATE SKIP LOCKED
+      LIMIT 200
+      `,
+    );
+
+    if (!due.rowCount) return 0;
+
+    for (const row of due.rows) {
+      await c.query(
+        `
+        INSERT INTO kingdom_boats(kingdom_id, boat_code, amount)
+        VALUES ($1,$2,$3)
+        ON CONFLICT (kingdom_id, boat_code)
+        DO UPDATE SET amount = kingdom_boats.amount + EXCLUDED.amount
+        `,
+        [row.kingdom_id, row.boat_code, row.quantity],
+      );
+
+      await c.query(`UPDATE boat_queue SET status = 'completed', completed_at = now() WHERE id = $1`, [row.id]);
+      await c.query(`UPDATE kingdoms SET last_tick_at = now() WHERE id = $1`, [row.kingdom_id]);
+    }
+
+    return due.rowCount;
+  });
+}
+
+async function processShipmentTick(): Promise<number> {
+  return withTx(async (c) => {
+    const due = await c.query(
+      `
+      SELECT id, owner_kingdom_id, colony_id, direction, gold, wood, stone, food, horses
+      FROM kingdom_shipments
+      WHERE status = 'transit'
+        AND arrives_at <= now()
+      ORDER BY arrives_at ASC
+      FOR UPDATE SKIP LOCKED
+      LIMIT 300
+      `,
+    );
+
+    if (!due.rowCount) return 0;
+
+    for (const row of due.rows) {
+      const gold = Number(row.gold || 0);
+      const wood = Number(row.wood || 0);
+      const stone = Number(row.stone || 0);
+      const food = Number(row.food || 0);
+      const horses = Number(row.horses || 0);
+      if (String(row.direction) === "main_to_colony") {
+        await c.query(
+          `
+          UPDATE kingdom_colonies
+          SET gold = gold + $2,
+              wood = wood + $3,
+              stone = stone + $4,
+              food = food + $5,
+              horses = horses + $6
+          WHERE id = $1
+          `,
+          [row.colony_id, gold, wood, stone, food, horses],
+        );
+      } else {
+        await c.query(
+          `
+          UPDATE kingdoms
+          SET gold = gold + $2,
+              wood = wood + $3,
+              stone = stone + $4,
+              food = food + $5,
+              horses = horses + $6,
+              last_tick_at = now()
+          WHERE id = $1
+          `,
+          [row.owner_kingdom_id, gold, wood, stone, food, horses],
+        );
+      }
+
+      await c.query(`UPDATE kingdom_shipments SET status='delivered', completed_at=now() WHERE id=$1`, [row.id]);
+    }
+
+    return due.rowCount;
+  });
+}
+
+async function processBarterExpiryTick(): Promise<number> {
+  return withTx(async (c) => {
+    const due = await c.query(
+      `
+      SELECT id, owner_kingdom_id, give_resource, give_amount
+      FROM naval_barter_offers
+      WHERE status='open' AND expires_at <= now()
+      ORDER BY expires_at ASC
+      FOR UPDATE SKIP LOCKED
+      LIMIT 200
+      `,
+    );
+    if (!due.rowCount) return 0;
+
+    for (const row of due.rows) {
+      const giveResource = String(row.give_resource || "") as "food" | "wood" | "stone" | "horses";
+      const giveAmount = Number(row.give_amount || 0);
+      await c.query(`UPDATE naval_barter_offers SET status='expired' WHERE id=$1`, [row.id]);
+      if (["food", "wood", "stone", "horses"].includes(giveResource) && giveAmount > 0) {
+        await c.query(`UPDATE kingdoms SET ${giveResource}=${giveResource}+$2 WHERE id=$1`, [row.owner_kingdom_id, giveAmount]);
+      }
+    }
+
+    return due.rowCount;
+  });
+}
+
+async function processChannelControlTick(): Promise<number> {
+  return withTx(async (c) => {
+    const rows = await c.query(
+      `
+      SELECT kcc.channel_code, kcc.kingdom_id, kcc.toll_percent, kcc.is_closed, sc.name, sc.required_navy_power, sc.base_traffic
+      FROM kingdom_channel_control kcc
+      JOIN sea_channels sc ON sc.code = kcc.channel_code
+      WHERE kcc.status='controlled' AND kcc.kingdom_id IS NOT NULL
+      ORDER BY kcc.updated_at ASC
+      FOR UPDATE OF kcc SKIP LOCKED
+      `,
+    );
+    if (!rows.rowCount) return 0;
+
+    let changed = 0;
+    for (const row of rows.rows) {
+      const kingdomId = Number(row.kingdom_id || 0);
+      if (kingdomId <= 0) continue;
+
+      const navyQ = await c.query(
+        `SELECT COALESCE(SUM(kb.amount * bt.port_defense),0)::numeric AS defense_power
+         FROM kingdom_boats kb
+         JOIN boat_types bt ON bt.code=kb.boat_code
+         WHERE kb.kingdom_id=$1`,
+        [kingdomId],
+      );
+      const defensePower = Number(navyQ.rows[0]?.defense_power || 0);
+      const requiredPower = Number(row.required_navy_power || 0);
+      if (defensePower < requiredPower) {
+        await c.query(
+          `UPDATE kingdom_channel_control
+           SET kingdom_id=NULL, status='lost', is_closed=false, toll_percent=0, updated_at=now()
+           WHERE channel_code=$1`,
+          [row.channel_code],
+        );
+        await sendGameNotice(c, kingdomId, "warning", `You lost control of ${String(row.name || row.channel_code)} due to weak navy coverage.`);
+        changed += 1;
+        continue;
+      }
+
+      const upkeep = Math.max(0, Math.floor((CHANNEL_UPKEEP_GOLD_PER_HOUR * TICK_HOURS) + (Number(row.toll_percent || 0) * 2)));
+      const kQ = await c.query(`SELECT gold FROM kingdoms WHERE id=$1 FOR UPDATE`, [kingdomId]);
+      const gold = Number(kQ.rows[0]?.gold || 0);
+      if (gold < upkeep) {
+        await c.query(
+          `UPDATE kingdom_channel_control
+           SET kingdom_id=NULL, status='lost', is_closed=false, toll_percent=0, updated_at=now()
+           WHERE channel_code=$1`,
+          [row.channel_code],
+        );
+        await sendGameNotice(c, kingdomId, "warning", `You lost control of ${String(row.name || row.channel_code)} because you could not fund the standing navy.`);
+        changed += 1;
+        continue;
+      }
+
+      const trafficIncome = row.is_closed
+        ? 0
+        : Math.max(
+            0,
+            Math.floor(
+              CHANNEL_TRAFFIC_GOLD_PER_HOUR *
+                TICK_HOURS *
+                (Number(row.base_traffic || 1) / 10) *
+                (Number(row.toll_percent || 0) / 100),
+            ),
+          );
+      await c.query(`UPDATE kingdoms SET gold = GREATEST(0, gold - $2) + $3 WHERE id=$1`, [kingdomId, upkeep, trafficIncome]);
+      changed += 1;
+    }
+
+    return changed;
+  });
+}
+
+async function processPirateRaidTick(): Promise<number> {
+  return withTx(async (c) => {
+    const kingdoms = await c.query(`SELECT id, name, gold, wood, stone, food, horses FROM kingdoms ORDER BY id ASC`);
+    if (!kingdoms.rowCount) return 0;
+
+    let raids = 0;
+    for (const k of kingdoms.rows) {
+      if (Math.random() > PIRATE_TICK_CHANCE) continue;
+
+      const defenseQ = await c.query(
+        `SELECT COALESCE(SUM(kb.amount * bt.port_defense),0)::numeric AS defense_power
+         FROM kingdom_boats kb
+         JOIN boat_types bt ON bt.code = kb.boat_code
+         WHERE kb.kingdom_id=$1`,
+        [k.id],
+      );
+      const autoDefQ = await c.query(
+        `SELECT COALESCE((payload->>'autoDefendPirates')::boolean, true) AS auto_defend
+         FROM kingdom_status_effects
+         WHERE kingdom_id=$1 AND effect_code='pirate_auto_defense' AND ends_at > now()
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [k.id],
+      );
+      const autoDef = autoDefQ.rowCount ? Boolean(autoDefQ.rows[0]?.auto_defend) : true;
+
+      const piratePower = PIRATE_MIN_POWER + Math.random() * (PIRATE_MAX_POWER - PIRATE_MIN_POWER);
+      const defensePower = Number(defenseQ.rows[0]?.defense_power || 0) * (autoDef ? 1 : 0.45) * (0.88 + Math.random() * 0.28);
+      const breached = piratePower > defensePower;
+
+      let loot = { gold: 0, food: 0, wood: 0, stone: 0, horses: 0 };
+      if (breached) {
+        loot = {
+          gold: Math.max(0, Math.floor(Number(k.gold || 0) * 0.03)),
+          food: Math.max(0, Math.floor(Number(k.food || 0) * 0.03)),
+          wood: Math.max(0, Math.floor(Number(k.wood || 0) * 0.03)),
+          stone: Math.max(0, Math.floor(Number(k.stone || 0) * 0.03)),
+          horses: Math.max(0, Math.floor(Number(k.horses || 0) * 0.02)),
+        };
+        await c.query(
+          `UPDATE kingdoms
+           SET gold=GREATEST(0,gold-$2), food=GREATEST(0,food-$3), wood=GREATEST(0,wood-$4), stone=GREATEST(0,stone-$5), horses=GREATEST(0,horses-$6)
+           WHERE id=$1`,
+          [k.id, loot.gold, loot.food, loot.wood, loot.stone, loot.horses],
+        );
+      }
+
+      let shipsLost = 0;
+      if (autoDef) {
+        const fleetQ = await c.query(
+          `SELECT kb.boat_code, kb.amount
+           FROM kingdom_boats kb
+           JOIN boat_types bt ON bt.code = kb.boat_code
+           WHERE kb.kingdom_id=$1 AND bt.port_defense > 0 AND kb.amount > 0
+           ORDER BY bt.port_defense DESC, kb.amount DESC
+           FOR UPDATE`,
+          [k.id],
+        );
+        if (fleetQ.rowCount) {
+          shipsLost = Math.max(0, Math.floor((breached ? 0.05 : 0.02) * Math.max(1, Number(fleetQ.rows[0].amount || 0))));
+          if (shipsLost > 0) {
+            await c.query(
+              `UPDATE kingdom_boats SET amount=GREATEST(0, amount-$3) WHERE kingdom_id=$1 AND boat_code=$2`,
+              [k.id, String(fleetQ.rows[0].boat_code), shipsLost],
+            );
+          }
+        }
+      }
+
+      await c.query(
+        `INSERT INTO pirate_raid_reports(kingdom_id, kingdom_name, result, pirate_power, defense_power, ships_lost, loot)
+         VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+        [k.id, String(k.name || ""), breached ? "breached" : "repelled", piratePower, defensePower, shipsLost, JSON.stringify(loot)],
+      );
+      await c.query(`UPDATE kingdoms SET pirate_last_raid_at=now() WHERE id=$1`, [k.id]);
+      await sendGameNotice(
+        c,
+        Number(k.id),
+        breached ? "warning" : "info",
+        breached
+          ? `Pirates breached your ports and stole resources. Losses: G ${loot.gold}, F ${loot.food}, W ${loot.wood}, S ${loot.stone}.`
+          : "Pirate raid repelled by your standing navy.",
+      );
+      raids += 1;
+    }
+
+    return raids;
   });
 }
 
@@ -422,6 +711,16 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
       const castles = Number(b.rows[0]?.castles || 0);
       const guildhalls = Number((b.rows[0] as any)?.guildhalls || 0);
       const barns = Number((b.rows[0] as any)?.barns || 0);
+      const boatBonusQ = await c.query(
+        `
+        SELECT COALESCE(SUM(kb.amount * bt.fishing_food_per_hour),0)::bigint AS fish_food
+        FROM kingdom_boats kb
+        JOIN boat_types bt ON bt.code = kb.boat_code
+        WHERE kb.kingdom_id = $1
+        `,
+        [k.id],
+      );
+      const fishFoodPerHour = Number(boatBonusQ.rows[0]?.fish_food || 0);
 
       // Land integrity guard: if building land usage exceeds current land, raise land to used amount.
       const usedLandQ = await c.query(
@@ -500,7 +799,7 @@ async function processEconomyTick(season: SeasonState): Promise<number> {
         (sBldg.cathedral || 0) * SETTLEMENT_EFFECTS.cathedralManaPerHour;
       const settlHousingCapBonus = (sBldg.housing || 0) * SETTLEMENT_EFFECTS.housingPeasantCapPerLevel;
 
-      const foodIncomePerHour = farm * ECON_BUILDING_HOURLY.farmFood * prayerFoodBonus * researchFoodMult + settlFoodBonus;
+      const foodIncomePerHour = farm * ECON_BUILDING_HOURLY.farmFood * prayerFoodBonus * researchFoodMult + settlFoodBonus + fishFoodPerHour;
       const goldIncomePerHour = effectiveLand * ECON_BUILDING_HOURLY.baseGoldPerLand * prayerGoldBonus * researchGoldMult + settlGoldBonus;
       const woodIncomePerHour = lumber * ECON_BUILDING_HOURLY.lumberWood * prayerWoodBonus + settlWoodBonus;
       const stoneIncomePerHour = quarry * ECON_BUILDING_HOURLY.quarryStone * prayerStoneBonus + settlStoneBonus;
@@ -738,15 +1037,20 @@ async function runTick() {
   const season = await processSeasonTick();
   const builds = await processBuildQueueTick();
   const trains = await processTrainQueueTick();
+  const boats = await processBoatQueueTick();
   const research = await processResearchQueueTick();
   const settlementBuilds = await processSettlementBuildQueueTick();
   const shieldTransitions = await processShieldStateTick();
   const vacationExpiries = await processVacationTick();
+  const shipments = await processShipmentTick();
+  const barterExpiries = await processBarterExpiryTick();
+  const channels = await processChannelControlTick();
+  const pirateRaids = await processPirateRaidTick();
   const returns = await processTroopReturnsTick();
   const economies = await processEconomyTick(season);
-  if (builds > 0 || trains > 0 || research > 0 || settlementBuilds > 0 || shieldTransitions > 0 || vacationExpiries > 0 || returns > 0 || economies > 0) {
+  if (builds > 0 || trains > 0 || boats > 0 || research > 0 || settlementBuilds > 0 || shieldTransitions > 0 || vacationExpiries > 0 || shipments > 0 || barterExpiries > 0 || channels > 0 || pirateRaids > 0 || returns > 0 || economies > 0) {
     console.log(
-      `[tick] ${new Date().toISOString()} season=${season.code}(${season.remainingSeconds}s) completed builds=${builds}, trainings=${trains}, research=${research}, settlement_builds=${settlementBuilds}, shields=${shieldTransitions}, vacations=${vacationExpiries}, returns=${returns}, economy=${economies}`,
+      `[tick] ${new Date().toISOString()} season=${season.code}(${season.remainingSeconds}s) completed builds=${builds}, trainings=${trains}, boats=${boats}, research=${research}, settlement_builds=${settlementBuilds}, shields=${shieldTransitions}, vacations=${vacationExpiries}, shipments=${shipments}, barter_expired=${barterExpiries}, channels=${channels}, pirate_raids=${pirateRaids}, returns=${returns}, economy=${economies}`,
     );
   }
   return {
@@ -754,10 +1058,15 @@ async function runTick() {
     seasonRemainingSeconds: season.remainingSeconds,
     builds,
     trains,
+    boats,
     research,
     settlementBuilds,
     shieldTransitions,
     vacationExpiries,
+    shipments,
+    barterExpiries,
+    channels,
+    pirateRaids,
     returns,
     economies,
     durationMs: Date.now() - startedAt,
@@ -811,9 +1120,14 @@ async function runDueTicks() {
     let totals = {
       builds: 0,
       trains: 0,
+      boats: 0,
       research: 0,
       settlementBuilds: 0,
       shieldTransitions: 0,
+      shipments: 0,
+      barterExpiries: 0,
+      channels: 0,
+      pirateRaids: 0,
       returns: 0,
       economies: 0,
     };
@@ -823,9 +1137,14 @@ async function runDueTicks() {
       totals = {
         builds: totals.builds + Number(result.builds || 0),
         trains: totals.trains + Number(result.trains || 0),
+        boats: totals.boats + Number((result as any).boats || 0),
         research: totals.research + Number(result.research || 0),
         settlementBuilds: totals.settlementBuilds + Number(result.settlementBuilds || 0),
         shieldTransitions: totals.shieldTransitions + Number(result.shieldTransitions || 0),
+        shipments: totals.shipments + Number((result as any).shipments || 0),
+        barterExpiries: totals.barterExpiries + Number((result as any).barterExpiries || 0),
+        channels: totals.channels + Number((result as any).channels || 0),
+        pirateRaids: totals.pirateRaids + Number((result as any).pirateRaids || 0),
         returns: totals.returns + Number(result.returns || 0),
         economies: totals.economies + Number(result.economies || 0),
       };
@@ -839,9 +1158,7 @@ async function runDueTicks() {
     console.log(
       `[tick-batch] ${new Date().toISOString()} due=${dueTicks} processed=${runCount} backlog=${backlog} tick_ms_total=${totalTickDurationMs} batch_ms=${Date.now() - batchStartedAt} totals(build=${totals.builds},train=${
         totals.trains
-      },research=${totals.research},settlement=${totals.settlementBuilds},shield=${totals.shieldTransitions},returns=${
-        totals.returns
-      },economy=${totals.economies})`,
+      },boats=${totals.boats},research=${totals.research},settlement=${totals.settlementBuilds},shield=${totals.shieldTransitions},shipments=${totals.shipments},barter_expired=${totals.barterExpiries},channels=${totals.channels},pirate_raids=${totals.pirateRaids},returns=${totals.returns},economy=${totals.economies})`,
     );
     return runCount;
   });

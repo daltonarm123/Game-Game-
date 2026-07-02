@@ -97,6 +97,10 @@ Owner: Engineering + Live Ops
 - [ ] Freeze launch scope and create explicit post-launch backlog split.
 - [ ] Hold final go/no-go review with Engineering, Product, Operations, and Support stakeholders.
 
+## New Feature Milestones
+- [x] Shipyard v1 implemented with fishing fleets, logistics transfers, colony founding, and cross-world port attacks (API, worker tick processing, and web UI).
+- [x] Naval expansion implemented: war/supply/troop ship classes, pirate raids + defense policy, standing-navy channel capture/control (tolls/closure), and boat-enabled barter trade routes.
+
 ## Launch Exit Criteria
 - [ ] No sev-1 or sev-2 unresolved defects in launch-critical flows.
 - [ ] All production secrets configured and verified in staging parity checks.

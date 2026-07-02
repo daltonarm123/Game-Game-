@@ -45,6 +45,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "alliance-forums", label: "Alliance Forums",  group: "kingdom", icon: "📜" },
   { id: "embassy",         label: "Embassy",          group: "kingdom", icon: "🏛️" },
   { id: "marketplace",     label: "Marketplace",      group: "kingdom", icon: "🏪" },
+  { id: "shipyard",        label: "Shipyard",         group: "kingdom", icon: "⚓" },
   { id: "settlements",     label: "Settlements",      group: "kingdom", icon: "🏘️" },
   { id: "rankings",        label: "Rankings",         group: "kingdom", icon: "🏆" },
   { id: "research",        label: "Research",         group: "kingdom", icon: "🔬" },
@@ -293,6 +294,7 @@ const BUILDING_META: Record<string, { sigil: string; summary: string; unlocks: s
   lumberyard: { sigil: "LY", summary: "Generates wood per hour and provides 200 wood storage capacity. Core resource production.", unlocks: "Wood production" },
   markets: { sigil: "MK", summary: "Allows you to buy and sell goods with other kingdoms. Houses up to 3 trade wagons at a time.", unlocks: "Marketplace trading" },
   quarry: { sigil: "QY", summary: "Generates stone per hour and provides 200 stone storage capacity. Core resource production.", unlocks: "Stone production" },
+  shipyard: { sigil: "SY", summary: "Constructs ships for fishing, logistics, colony expansion, and naval warfare.", unlocks: "Fishing Boats, Market Ships, Settler Ships, Patrol Fleets, War Frigates" },
   stables: { sigil: "ST", summary: "Houses up to 10 cavalry per stable and adds 1 extra horse capacity to your kingdom.", unlocks: "Light Cavalry, Heavy Cavalry" },
   temples: { sigil: "TP", summary: "Houses up to 5 priests per temple. Generates mana over time for spell casting.", unlocks: "Priests, Mana" },
 };
@@ -310,6 +312,7 @@ const BUILDING_PROD: Record<string, { income: string; trains: string; special: s
   lumberyard:     { income: "+80 wood/hr", trains: "", special: "Core wood production — needed for most construction" },
   markets:        { income: "", trains: "", special: "Enables marketplace trading with other kingdoms" },
   quarry:         { income: "+80 stone/hr", trains: "", special: "Core stone production — critical for fortification and builds" },
+  shipyard:       { income: "", trains: "Fishing/Market/War fleets", special: "Enables naval economy, colony settlement, and cross-world port combat" },
   stables:        { income: "", trains: "Light Cavalry, Heavy Cavalry", special: "Required to train mounted units" },
   temples:        { income: "", trains: "Priests", special: "Generates mana over time and houses priests for faith progression" },
 };
@@ -2815,6 +2818,676 @@ function Placeholder({ label }: { label: string }) {
       <div style={{ fontSize: 28, fontWeight: 800, color: "#fff7ec" }}>{label}</div>
       <div style={{ color: TEXT_MUTED, marginTop: 8, fontSize: 18, fontWeight: 600 }}>
         This tab is scaffolded and ready for feature implementation.
+      </div>
+    </div>
+  );
+}
+
+function ShipyardView() {
+  const kingdom = localStorage.getItem(KINGDOM_STORAGE_KEY) || "";
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [actionMsg, setActionMsg] = useState("");
+  const [data, setData] = useState<any>(null);
+  const [buildBoatCode, setBuildBoatCode] = useState("fishing_boats");
+  const [buildQty, setBuildQty] = useState("1");
+  const [busy, setBusy] = useState(false);
+  const [colonyName, setColonyName] = useState("");
+  const [colonyWorld, setColonyWorld] = useState("");
+  const [transferColonyId, setTransferColonyId] = useState("0");
+  const [transferDirection, setTransferDirection] = useState<"main_to_colony" | "colony_to_main">("main_to_colony");
+  const [transferShipCode, setTransferShipCode] = useState("market_ships");
+  const [transferShipQty, setTransferShipQty] = useState("1");
+  const [transferFood, setTransferFood] = useState("0");
+  const [transferGold, setTransferGold] = useState("0");
+  const [transferWood, setTransferWood] = useState("0");
+  const [transferStone, setTransferStone] = useState("0");
+  const [transferHorses, setTransferHorses] = useState("0");
+  const [attackColonyId, setAttackColonyId] = useState("0");
+  const [attackShipCode, setAttackShipCode] = useState("war_frigates");
+  const [attackQty, setAttackQty] = useState("1");
+  const [pirateAutoDefend, setPirateAutoDefend] = useState(true);
+  const [pirateTargetKingdom, setPirateTargetKingdom] = useState("");
+  const [pirateShipCode, setPirateShipCode] = useState("corsair_raiders");
+  const [pirateQty, setPirateQty] = useState("1");
+  const [channelCode, setChannelCode] = useState("");
+  const [channelShipCode, setChannelShipCode] = useState("war_frigates");
+  const [channelQty, setChannelQty] = useState("1");
+  const [channelTollPercent, setChannelTollPercent] = useState("8");
+  const [channelClosed, setChannelClosed] = useState(false);
+  const [barterShipCode, setBarterShipCode] = useState("market_ships");
+  const [barterGiveResource, setBarterGiveResource] = useState<"food" | "wood" | "stone" | "horses">("wood");
+  const [barterGiveAmount, setBarterGiveAmount] = useState("1000");
+  const [barterWantResource, setBarterWantResource] = useState<"food" | "wood" | "stone" | "horses">("stone");
+  const [barterWantAmount, setBarterWantAmount] = useState("1000");
+
+  async function load(background = false) {
+    if (!kingdom.trim()) return;
+    if (!background) setLoading(true);
+    setError("");
+    try {
+      const r = await fetch(`${API_BASE}/api/shipyard/${encodeURIComponent(kingdom)}`, { headers: authHeaders() });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setData(j);
+      const fleets = Array.isArray(j?.fleet) ? j.fleet : [];
+      const colonies = Array.isArray(j?.colonies) ? j.colonies : [];
+      const channels = Array.isArray(j?.channels) ? j.channels : [];
+      const buildable = fleets.filter((f: any) => Number(j?.shipyardLevel || 0) >= Number(f.shipyard_level || 0));
+      const logistics = fleets.filter((f: any) => ["logistics", "expansion"].includes(String(f.category || "")));
+      const military = fleets.filter((f: any) => String(f.category || "") === "military");
+      if (buildable.length && !buildable.some((f: any) => String(f.code) === buildBoatCode)) setBuildBoatCode(String(buildable[0].code));
+      if (logistics.length && !logistics.some((f: any) => String(f.code) === transferShipCode)) setTransferShipCode(String(logistics[0].code));
+      if (military.length && !military.some((f: any) => String(f.code) === attackShipCode)) setAttackShipCode(String(military[0].code));
+      if (military.length && !military.some((f: any) => String(f.code) === pirateShipCode)) setPirateShipCode(String(military[0].code));
+      if (military.length && !military.some((f: any) => String(f.code) === channelShipCode)) setChannelShipCode(String(military[0].code));
+      if (logistics.length && !logistics.some((f: any) => String(f.code) === barterShipCode)) setBarterShipCode(String(logistics[0].code));
+      if (colonies.length && (transferColonyId === "0" || !colonies.some((c: any) => String(c.id) === transferColonyId))) setTransferColonyId(String(colonies[0].id));
+      if (colonies.length && (attackColonyId === "0" || !colonies.some((c: any) => String(c.id) === attackColonyId))) setAttackColonyId(String(colonies[0].id));
+      if (channels.length) {
+        const myChannel = channels.find((c: any) => Number(c.controller_kingdom_id || 0) === Number(j?.kingdom?.id || 0));
+        const fallback = channels[0];
+        const picked = myChannel || fallback;
+        if (picked && (!channelCode || !channels.some((c: any) => String(c.code) === channelCode))) {
+          setChannelCode(String(picked.code));
+          setChannelTollPercent(String(Math.max(0, Number(picked.toll_percent || 8))));
+          setChannelClosed(Boolean(picked.is_closed));
+        }
+      }
+      setPirateAutoDefend(Boolean(j?.pirate?.autoDefend ?? true));
+    } catch (e: any) {
+      setError(String(e?.message || e));
+      setData(null);
+    } finally {
+      if (!background) setLoading(false);
+    }
+  }
+
+  useEffect(() => { void load(); }, [kingdom]);
+  useKingdomStream(kingdom, () => { void load(true); });
+
+  const fleets = (data?.fleet || []) as any[];
+  const queue = (data?.queue || []) as any[];
+  const colonies = (data?.colonies || []) as any[];
+  const shipments = (data?.shipments || []) as any[];
+  const channels = (data?.channels || []) as any[];
+  const barterOffers = (data?.barterOffers || []) as any[];
+  const pirateReports = (data?.pirate?.reports || []) as any[];
+  const buildableFleets = fleets.filter((f) => Number(data?.shipyardLevel || 0) >= Number(f.shipyard_level || 0));
+  const logisticsFleets = fleets.filter((f) => ["logistics", "expansion"].includes(String(f.category || "")));
+  const militaryFleets = fleets.filter((f) => String(f.category || "") === "military");
+
+  async function buildShips(e: React.FormEvent) {
+    e.preventDefault();
+    if (!buildBoatCode) return;
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const qty = Math.max(1, Math.floor(Number(buildQty || 1)));
+      const r = await fetch(`${API_BASE}/api/shipyard/${encodeURIComponent(kingdom)}/build`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ boatCode: buildBoatCode, quantity: qty }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Queued ${qty.toLocaleString()} ship(s).`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Build failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelShipQueue(queueId: number) {
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/shipyard/${encodeURIComponent(kingdom)}/queue/cancel`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ queueId }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Cancelled queue #${queueId}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Cancel failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function foundColony(e: React.FormEvent) {
+    e.preventDefault();
+    if (!colonyName.trim()) return;
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/shipyard/${encodeURIComponent(kingdom)}/colonize`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ colonyName: colonyName.trim(), worldCode: colonyWorld.trim() || undefined }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Founded colony ${String(j?.colony?.colony_name || colonyName.trim())}.`);
+      setColonyName("");
+      setColonyWorld("");
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Colonize failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendTransfer(e: React.FormEvent) {
+    e.preventDefault();
+    if (!transferColonyId || transferColonyId === "0") return;
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const payload = {
+        colonyId: Number(transferColonyId),
+        direction: transferDirection,
+        shipCode: transferShipCode,
+        shipQuantity: Math.max(1, Math.floor(Number(transferShipQty || 1))),
+        food: Math.max(0, Math.floor(Number(transferFood || 0))),
+        gold: Math.max(0, Math.floor(Number(transferGold || 0))),
+        wood: Math.max(0, Math.floor(Number(transferWood || 0))),
+        stone: Math.max(0, Math.floor(Number(transferStone || 0))),
+        horses: Math.max(0, Math.floor(Number(transferHorses || 0))),
+      };
+      const r = await fetch(`${API_BASE}/api/shipyard/${encodeURIComponent(kingdom)}/transfer`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Shipment launched. ETA ${Math.max(0, Number(j?.travelSeconds || 0)).toLocaleString()}s.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Transfer failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function launchPortAttack(e: React.FormEvent) {
+    e.preventDefault();
+    if (!attackColonyId || attackColonyId === "0") return;
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/shipyard/${encodeURIComponent(kingdom)}/port-attack`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          colonyId: Number(attackColonyId),
+          shipCode: attackShipCode,
+          quantity: Math.max(1, Math.floor(Number(attackQty || 1))),
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Port attack ${j?.success ? "won" : "lost"}. Loot: G ${Number(j?.loot?.gold || 0).toLocaleString()}, F ${Number(j?.loot?.food || 0).toLocaleString()}, W ${Number(j?.loot?.wood || 0).toLocaleString()}, S ${Number(j?.loot?.stone || 0).toLocaleString()}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Attack failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function savePirateDefense() {
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/shipyard/${encodeURIComponent(kingdom)}/pirate-defense`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ autoDefend: pirateAutoDefend }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Pirate defense ${j?.autoDefend ? "enabled" : "disabled"}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Pirate defense update failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendPirateRaid(e: React.FormEvent) {
+    e.preventDefault();
+    if (!pirateTargetKingdom.trim()) return;
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/shipyard/${encodeURIComponent(kingdom)}/pirate-raid`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          targetKingdom: pirateTargetKingdom.trim(),
+          shipCode: pirateShipCode,
+          quantity: Math.max(1, Math.floor(Number(pirateQty || 1))),
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Raid ${j?.success ? "succeeded" : "failed"}. Loot: G ${Number(j?.loot?.gold || 0).toLocaleString()}, F ${Number(j?.loot?.food || 0).toLocaleString()}, W ${Number(j?.loot?.wood || 0).toLocaleString()}, S ${Number(j?.loot?.stone || 0).toLocaleString()}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Raid failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function captureChannel(e: React.FormEvent) {
+    e.preventDefault();
+    if (!channelCode) return;
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/shipyard/${encodeURIComponent(kingdom)}/channel/capture`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          channelCode,
+          shipCode: channelShipCode,
+          quantity: Math.max(1, Math.floor(Number(channelQty || 1))),
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Channel capture ${j?.success === false ? "failed" : "resolved"}: ${String(j?.channelName || channelCode)}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Capture failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateChannelPolicy(e: React.FormEvent) {
+    e.preventDefault();
+    if (!channelCode) return;
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/shipyard/${encodeURIComponent(kingdom)}/channel/policy`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          channelCode,
+          tollPercent: Math.max(0, Math.min(35, Math.floor(Number(channelTollPercent || 0)))),
+          isClosed: channelClosed,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Channel policy saved (${String(j?.channelCode || channelCode)}).`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Policy update failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createBarterOffer(e: React.FormEvent) {
+    e.preventDefault();
+    if (barterGiveResource === barterWantResource) return;
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/shipyard/${encodeURIComponent(kingdom)}/barter/create`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          shipCode: barterShipCode,
+          giveResource: barterGiveResource,
+          giveAmount: Math.max(1, Math.floor(Number(barterGiveAmount || 1))),
+          wantResource: barterWantResource,
+          wantAmount: Math.max(1, Math.floor(Number(barterWantAmount || 1))),
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Barter offer #${Number(j?.offer?.id || 0)} created.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Barter offer failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function acceptBarterOffer(offerId: number) {
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/shipyard/${encodeURIComponent(kingdom)}/barter/accept`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ offerId }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Accepted barter offer #${offerId}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Barter accept failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelBarterOffer(offerId: number) {
+    setBusy(true);
+    setActionMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/shipyard/${encodeURIComponent(kingdom)}/barter/cancel`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ offerId }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setActionMsg(`Cancelled barter offer #${offerId}.`);
+      await load();
+    } catch (e: any) {
+      setActionMsg(`Cancel barter failed: ${String(e?.message || e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const TH: React.CSSProperties = { textAlign: "left", padding: "8px 10px", color: TEXT_MUTED, fontWeight: 600, fontSize: 12, borderBottom: "1px solid rgba(216,176,117,.18)" };
+  const TD: React.CSSProperties = { padding: "8px 10px", borderBottom: "1px solid rgba(255,255,255,.05)", fontSize: 13 };
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <div style={CARD}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 32, fontWeight: 800, color: "#fff7ec", fontFamily: FONT_DISPLAY }}>⚓ Shipyard {kingdom ? `- ${kingdom}` : ""}</div>
+            <div style={{ marginTop: 6, color: TEXT_MUTED, fontSize: 14 }}>
+              Shipyard Lv {Number(data?.shipyardLevel || 0)} · Fishing +{Number(data?.summary?.fishingFoodPerHour || 0).toLocaleString()}/hr · Cargo {Number(data?.summary?.cargoCapacity || 0).toLocaleString()} · Port ATK {Number(data?.summary?.portAttack || 0).toLocaleString()} · Port DEF {Number(data?.summary?.portDefense || 0).toLocaleString()} · Channels {channels.length.toLocaleString()} · Open Barters {barterOffers.length.toLocaleString()}
+            </div>
+          </div>
+          <button onClick={() => void load()} style={{ ...BTN_STYLE, fontSize: 13 }}>Refresh</button>
+        </div>
+        {loading ? <LoadingState /> : null}
+        {error ? <ErrorState error={error} onRetry={() => { void load(); }} /> : null}
+        {actionMsg ? <div style={{ marginTop: 8, color: actionMsg.toLowerCase().includes("failed") ? "#ffae9a" : "#c8e7b1" }}>{actionMsg}</div> : null}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 12 }}>
+        <div style={CARD}>
+          <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 10 }}>Build Ships</div>
+          <form onSubmit={buildShips} style={{ display: "grid", gap: 8 }}>
+            <select value={buildBoatCode} onChange={(e) => setBuildBoatCode(e.target.value)} style={INPUT_STYLE}>
+              {buildableFleets.map((f) => (
+                <option key={String(f.code)} value={String(f.code)}>
+                  {String(f.name)} (need Lv {Number(f.shipyard_level || 1)})
+                </option>
+              ))}
+            </select>
+            <input type="number" min={1} value={buildQty} onChange={(e) => setBuildQty(String(e.target.value || "").replace(/\D+/g, ""))} style={INPUT_STYLE} placeholder="Quantity" />
+            <button type="submit" style={BTN_STYLE} disabled={busy || buildableFleets.length === 0}>{busy ? "Queueing..." : "Queue Ships"}</button>
+          </form>
+        </div>
+
+        <div style={CARD}>
+          <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 10 }}>Found Colony</div>
+          <form onSubmit={foundColony} style={{ display: "grid", gap: 8 }}>
+            <input value={colonyName} onChange={(e) => setColonyName(e.target.value)} style={INPUT_STYLE} placeholder="Colony name" />
+            <input value={colonyWorld} onChange={(e) => setColonyWorld(e.target.value)} style={INPUT_STYLE} placeholder="World code (optional)" />
+            <button type="submit" style={BTN_STYLE} disabled={busy}>{busy ? "Founding..." : "Launch Settlers"}</button>
+          </form>
+        </div>
+      </div>
+
+      <div style={CARD}>
+        <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 8 }}>Fleet Registry</div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={TH}>Ship</th>
+                <th style={TH}>Category</th>
+                <th style={{ ...TH, textAlign: "right" }}>Owned</th>
+                <th style={{ ...TH, textAlign: "right" }}>Fish/hr</th>
+                <th style={{ ...TH, textAlign: "right" }}>Cargo</th>
+                <th style={{ ...TH, textAlign: "right" }}>ATK</th>
+                <th style={{ ...TH, textAlign: "right" }}>DEF</th>
+              </tr>
+            </thead>
+            <tbody>
+              {fleets.map((f) => (
+                <tr key={String(f.code)}>
+                  <td style={TD}>{String(f.name)}</td>
+                  <td style={{ ...TD, color: TEXT_MUTED }}>{String(f.category)}</td>
+                  <td style={{ ...TD, textAlign: "right" }}>{Number(f.amount || 0).toLocaleString()}</td>
+                  <td style={{ ...TD, textAlign: "right" }}>{Number(f.fishing_food_per_hour || 0).toLocaleString()}</td>
+                  <td style={{ ...TD, textAlign: "right" }}>{Number(f.cargo_capacity || 0).toLocaleString()}</td>
+                  <td style={{ ...TD, textAlign: "right" }}>{Number(f.port_attack || 0).toLocaleString()}</td>
+                  <td style={{ ...TD, textAlign: "right" }}>{Number(f.port_defense || 0).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 12 }}>
+        <div style={CARD}>
+          <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 8 }}>Cross-World Transfer</div>
+          <form onSubmit={sendTransfer} style={{ display: "grid", gap: 8 }}>
+            <select value={transferColonyId} onChange={(e) => setTransferColonyId(e.target.value)} style={INPUT_STYLE}>
+              {colonies.length === 0 ? <option value="0">No colonies</option> : null}
+              {colonies.map((c) => <option key={String(c.id)} value={String(c.id)}>{String(c.colony_name)} ({String(c.world_code)})</option>)}
+            </select>
+            <select value={transferDirection} onChange={(e) => setTransferDirection(e.target.value as any)} style={INPUT_STYLE}>
+              <option value="main_to_colony">Main → Colony</option>
+              <option value="colony_to_main">Colony → Main</option>
+            </select>
+            <select value={transferShipCode} onChange={(e) => setTransferShipCode(e.target.value)} style={INPUT_STYLE}>
+              {logisticsFleets.map((f) => <option key={String(f.code)} value={String(f.code)}>{String(f.name)}</option>)}
+            </select>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
+              <input type="number" min={1} value={transferShipQty} onChange={(e) => setTransferShipQty(String(e.target.value || "").replace(/\D+/g, ""))} style={INPUT_STYLE} placeholder="Ships" />
+              <input type="number" min={0} value={transferFood} onChange={(e) => setTransferFood(String(e.target.value || "").replace(/\D+/g, ""))} style={INPUT_STYLE} placeholder="Food" />
+              <input type="number" min={0} value={transferGold} onChange={(e) => setTransferGold(String(e.target.value || "").replace(/\D+/g, ""))} style={INPUT_STYLE} placeholder="Gold" />
+              <input type="number" min={0} value={transferWood} onChange={(e) => setTransferWood(String(e.target.value || "").replace(/\D+/g, ""))} style={INPUT_STYLE} placeholder="Wood" />
+              <input type="number" min={0} value={transferStone} onChange={(e) => setTransferStone(String(e.target.value || "").replace(/\D+/g, ""))} style={INPUT_STYLE} placeholder="Stone" />
+              <input type="number" min={0} value={transferHorses} onChange={(e) => setTransferHorses(String(e.target.value || "").replace(/\D+/g, ""))} style={INPUT_STYLE} placeholder="Horses" />
+            </div>
+            <button type="submit" style={BTN_STYLE} disabled={busy || colonies.length === 0}>Launch Shipment</button>
+          </form>
+        </div>
+
+        <div style={CARD}>
+          <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 8 }}>Port Assault</div>
+          <form onSubmit={launchPortAttack} style={{ display: "grid", gap: 8 }}>
+            <select value={attackColonyId} onChange={(e) => setAttackColonyId(e.target.value)} style={INPUT_STYLE}>
+              {colonies.length === 0 ? <option value="0">No known colonies</option> : null}
+              {colonies.map((c) => <option key={String(c.id)} value={String(c.id)}>{String(c.colony_name)} ({String(c.world_code)})</option>)}
+            </select>
+            <select value={attackShipCode} onChange={(e) => setAttackShipCode(e.target.value)} style={INPUT_STYLE}>
+              {militaryFleets.map((f) => <option key={String(f.code)} value={String(f.code)}>{String(f.name)}</option>)}
+            </select>
+            <input type="number" min={1} value={attackQty} onChange={(e) => setAttackQty(String(e.target.value || "").replace(/\D+/g, ""))} style={INPUT_STYLE} placeholder="Ships to send" />
+            <button type="submit" style={BTN_STYLE} disabled={busy || colonies.length === 0}>Attack Port</button>
+          </form>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 12 }}>
+        <div style={CARD}>
+          <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 8 }}>Pirate Defense</div>
+          <div style={{ display: "grid", gap: 8 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, color: TEXT_MUTED, fontSize: 13 }}>
+              <input type="checkbox" checked={pirateAutoDefend} onChange={(e) => setPirateAutoDefend(e.target.checked)} />
+              Auto-defend against pirate raids
+            </label>
+            <button onClick={() => void savePirateDefense()} style={BTN_STYLE} disabled={busy}>{busy ? "Saving..." : "Save Defense Policy"}</button>
+          </div>
+        </div>
+
+        <div style={CARD}>
+          <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 8 }}>Send Raiding Party</div>
+          <form onSubmit={sendPirateRaid} style={{ display: "grid", gap: 8 }}>
+            <input value={pirateTargetKingdom} onChange={(e) => setPirateTargetKingdom(e.target.value)} style={INPUT_STYLE} placeholder="Target kingdom" />
+            <select value={pirateShipCode} onChange={(e) => setPirateShipCode(e.target.value)} style={INPUT_STYLE}>
+              {militaryFleets.map((f) => <option key={String(f.code)} value={String(f.code)}>{String(f.name)}</option>)}
+            </select>
+            <input type="number" min={1} value={pirateQty} onChange={(e) => setPirateQty(String(e.target.value || "").replace(/\D+/g, ""))} style={INPUT_STYLE} placeholder="Ships to send" />
+            <button type="submit" style={BTN_STYLE} disabled={busy}>Launch Raid</button>
+          </form>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 12 }}>
+        <div style={CARD}>
+          <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 8 }}>Capture Sea Channel</div>
+          <form onSubmit={captureChannel} style={{ display: "grid", gap: 8 }}>
+            <select value={channelCode} onChange={(e) => setChannelCode(e.target.value)} style={INPUT_STYLE}>
+              {channels.length === 0 ? <option value="">No channels available</option> : null}
+              {channels.map((c) => <option key={String(c.code)} value={String(c.code)}>{String(c.name)} · Need {Number(c.required_navy_power || 0).toLocaleString()}</option>)}
+            </select>
+            <select value={channelShipCode} onChange={(e) => setChannelShipCode(e.target.value)} style={INPUT_STYLE}>
+              {militaryFleets.map((f) => <option key={String(f.code)} value={String(f.code)}>{String(f.name)}</option>)}
+            </select>
+            <input type="number" min={1} value={channelQty} onChange={(e) => setChannelQty(String(e.target.value || "").replace(/\D+/g, ""))} style={INPUT_STYLE} placeholder="Ships to commit" />
+            <button type="submit" style={BTN_STYLE} disabled={busy || channels.length === 0}>Capture Channel</button>
+          </form>
+        </div>
+
+        <div style={CARD}>
+          <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 8 }}>Channel Policy</div>
+          <form onSubmit={updateChannelPolicy} style={{ display: "grid", gap: 8 }}>
+            <select value={channelCode} onChange={(e) => setChannelCode(e.target.value)} style={INPUT_STYLE}>
+              {channels.length === 0 ? <option value="">No channels available</option> : null}
+              {channels.map((c) => <option key={String(c.code)} value={String(c.code)}>{String(c.name)} · Controller: {String(c.controller_name || "Neutral")}</option>)}
+            </select>
+            <input type="number" min={0} max={35} value={channelTollPercent} onChange={(e) => setChannelTollPercent(String(e.target.value || "").replace(/\D+/g, ""))} style={INPUT_STYLE} placeholder="Toll % (0-35)" />
+            <label style={{ display: "flex", alignItems: "center", gap: 8, color: TEXT_MUTED, fontSize: 13 }}>
+              <input type="checkbox" checked={channelClosed} onChange={(e) => setChannelClosed(e.target.checked)} />
+              Close shipping channel
+            </label>
+            <button type="submit" style={BTN_STYLE} disabled={busy || channels.length === 0}>Save Channel Policy</button>
+          </form>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 12 }}>
+        <div style={CARD}>
+          <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 8 }}>Boat Trade (Barter)</div>
+          <form onSubmit={createBarterOffer} style={{ display: "grid", gap: 8 }}>
+            <select value={barterShipCode} onChange={(e) => setBarterShipCode(e.target.value)} style={INPUT_STYLE}>
+              {logisticsFleets.map((f) => <option key={String(f.code)} value={String(f.code)}>{String(f.name)}</option>)}
+            </select>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
+              <select value={barterGiveResource} onChange={(e) => setBarterGiveResource(e.target.value as any)} style={INPUT_STYLE}>
+                <option value="food">Give Food</option>
+                <option value="wood">Give Wood</option>
+                <option value="stone">Give Stone</option>
+                <option value="horses">Give Horses</option>
+              </select>
+              <input type="number" min={1} value={barterGiveAmount} onChange={(e) => setBarterGiveAmount(String(e.target.value || "").replace(/\D+/g, ""))} style={INPUT_STYLE} placeholder="Give amount" />
+              <select value={barterWantResource} onChange={(e) => setBarterWantResource(e.target.value as any)} style={INPUT_STYLE}>
+                <option value="food">Want Food</option>
+                <option value="wood">Want Wood</option>
+                <option value="stone">Want Stone</option>
+                <option value="horses">Want Horses</option>
+              </select>
+              <input type="number" min={1} value={barterWantAmount} onChange={(e) => setBarterWantAmount(String(e.target.value || "").replace(/\D+/g, ""))} style={INPUT_STYLE} placeholder="Want amount" />
+            </div>
+            <button type="submit" style={BTN_STYLE} disabled={busy || barterGiveResource === barterWantResource}>Post Barter Offer</button>
+          </form>
+        </div>
+
+        <div style={CARD}>
+          <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 8 }}>Pirate Activity</div>
+          {pirateReports.length === 0 ? <EmptyState message="No pirate raids reported yet." /> : null}
+          <div style={{ display: "grid", gap: 6 }}>
+            {pirateReports.map((r) => (
+              <div key={Number(r.id)} style={{ padding: "8px 10px", border: "1px solid rgba(216,176,117,.15)", borderRadius: 8 }}>
+                <div style={{ fontWeight: 700 }}>{String(r.result)} · Pirate {Number(r.pirate_power || 0).toLocaleString()} vs Defense {Number(r.defense_power || 0).toLocaleString()}</div>
+                <div style={{ fontSize: 12, color: TEXT_MUTED }}>Ships Lost: {Number(r.ships_lost || 0).toLocaleString()} · {new Date(String(r.created_at)).toLocaleString()}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 12 }}>
+        <div style={CARD}>
+          <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 8 }}>Boat Queue</div>
+          {queue.length === 0 ? <EmptyState message="No ships currently building." /> : null}
+          <div style={{ display: "grid", gap: 6 }}>
+            {queue.map((q) => (
+              <div key={Number(q.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "8px 10px", border: "1px solid rgba(216,176,117,.15)", borderRadius: 8 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, overflowWrap: "anywhere" }}>{String(q.boat_code).replaceAll("_", " ")} × {Number(q.quantity || 0).toLocaleString()}</div>
+                  <div style={{ fontSize: 12, color: TEXT_MUTED }}>ETA: {new Date(String(q.completes_at)).toLocaleString()}</div>
+                </div>
+                {String(q.status) === "queued" ? (
+                  <button onClick={() => void cancelShipQueue(Number(q.id))} style={{ ...BTN_STYLE, padding: "5px 10px", fontSize: 12 }} disabled={busy}>Cancel</button>
+                ) : <span style={{ color: TEXT_MUTED, fontSize: 12 }}>{String(q.status)}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={CARD}>
+          <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 8 }}>Shipments</div>
+          {shipments.length === 0 ? <EmptyState message="No shipments in transit." /> : null}
+          <div style={{ display: "grid", gap: 6 }}>
+            {shipments.map((s) => (
+              <div key={Number(s.id)} style={{ padding: "8px 10px", border: "1px solid rgba(216,176,117,.15)", borderRadius: 8 }}>
+                <div style={{ fontWeight: 700 }}>{String(s.direction)} · {String(s.ship_code).replaceAll("_", " ")} × {Number(s.ship_quantity || 0).toLocaleString()}</div>
+                <div style={{ fontSize: 12, color: TEXT_MUTED }}>
+                  Cargo: F {Number(s.food || 0).toLocaleString()} · G {Number(s.gold || 0).toLocaleString()} · W {Number(s.wood || 0).toLocaleString()} · S {Number(s.stone || 0).toLocaleString()} · H {Number(s.horses || 0).toLocaleString()}
+                </div>
+                <div style={{ fontSize: 12, color: TEXT_MUTED }}>
+                  ETA: {new Date(String(s.arrives_at)).toLocaleString()} · Status: {String(s.status)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={CARD}>
+        <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 8 }}>Naval Barter Exchange</div>
+        {barterOffers.length === 0 ? <EmptyState message="No open barter offers." /> : null}
+        <div style={{ display: "grid", gap: 6 }}>
+          {barterOffers.map((o) => {
+            const mine = Number(o.owner_kingdom_id || 0) === Number(data?.kingdom?.id || 0);
+            return (
+              <div key={Number(o.id)} style={{ padding: "8px 10px", border: "1px solid rgba(216,176,117,.15)", borderRadius: 8, display: "grid", gap: 6 }}>
+                <div style={{ fontWeight: 700 }}>#{Number(o.id)} · {String(o.owner_name || "Unknown")} · {String(o.ship_code).replaceAll("_", " ")}</div>
+                <div style={{ fontSize: 12, color: TEXT_MUTED }}>Give {Number(o.give_amount || 0).toLocaleString()} {String(o.give_resource)} for {Number(o.want_amount || 0).toLocaleString()} {String(o.want_resource)} · Expires {new Date(String(o.expires_at)).toLocaleString()}</div>
+                <div>
+                  {mine ? (
+                    <button onClick={() => void cancelBarterOffer(Number(o.id))} style={{ ...BTN_STYLE, padding: "5px 10px", fontSize: 12 }} disabled={busy}>Cancel Offer</button>
+                  ) : (
+                    <button onClick={() => void acceptBarterOffer(Number(o.id))} style={{ ...BTN_STYLE, padding: "5px 10px", fontSize: 12 }} disabled={busy}>Accept Offer</button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -9065,6 +9738,7 @@ function App() {
           {active.id === "train-troops" ? <TrainTroopsView /> : null}
           {active.id === "attack-kingdom" ? <AttackKingdomView /> : null}
           {active.id === "marketplace" ? <MarketplaceView /> : null}
+          {active.id === "shipyard" ? <ShipyardView /> : null}
           {active.id === "holy-circle" ? <PrayView /> : null}
           {active.id === "admin" ? <AdminView /> : null}
           {active.id === "rankings" ? <RankingsView /> : null}
@@ -9073,7 +9747,7 @@ function App() {
           {active.id === "embassy" ? <EmbassyView /> : null}
           {active.id === "account" ? <AccountView /> : null}
           {active.id === "how-to-play" ? <HowToPlayView /> : null}
-          {active.id !== "home" && active.id !== "forums" && active.id !== "alliance-forums" && active.id !== "overview" && active.id !== "buildings" && active.id !== "alliance" && active.id !== "research" && active.id !== "settlements" && active.id !== "war-room" && active.id !== "train-troops" && active.id !== "attack-kingdom" && active.id !== "marketplace" && active.id !== "holy-circle" && active.id !== "admin" && active.id !== "rankings" && active.id !== "pigeons" && active.id !== "guildhall" && active.id !== "embassy" && active.id !== "account" && active.id !== "how-to-play" ? <Placeholder label={active.label} /> : null}
+          {active.id !== "home" && active.id !== "forums" && active.id !== "alliance-forums" && active.id !== "overview" && active.id !== "buildings" && active.id !== "alliance" && active.id !== "research" && active.id !== "settlements" && active.id !== "war-room" && active.id !== "train-troops" && active.id !== "attack-kingdom" && active.id !== "marketplace" && active.id !== "shipyard" && active.id !== "holy-circle" && active.id !== "admin" && active.id !== "rankings" && active.id !== "pigeons" && active.id !== "guildhall" && active.id !== "embassy" && active.id !== "account" && active.id !== "how-to-play" ? <Placeholder label={active.label} /> : null}
         </section>
       </div>
       <footer
