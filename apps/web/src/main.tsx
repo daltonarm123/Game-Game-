@@ -281,22 +281,22 @@ type PremiumPlan = {
   benefit: string;
 };
 
-const BUILDING_META: Record<string, { sigil: string; summary: string; unlocks: string }> = {
-  archery_ranges: { sigil: "AR", summary: "Houses up to 20 archers per range built. Required to train ranged military units.", unlocks: "Archers, Crossbowmen" },
-  barns: { sigil: "BN", summary: "Increases food storage capacity by 10,000 per barn. Reduces the risk of food spoilage.", unlocks: "Food storage" },
-  barracks: { sigil: "BK", summary: "Houses up to 50 infantry troops per barracks. Required to train foot soldiers.", unlocks: "Footmen, Pikemen" },
-  castles: { sigil: "CT", summary: "Increases population cap by 100, houses up to 20 knights and stables 5 horses. Also provides 500 wood and stone capacity, plus 7,500 food and 20,000 gold capacity.", unlocks: "Knights" },
-  embassies: { sigil: "EM", summary: "Houses up to 4 diplomats per embassy. Required for diplomatic missions and alliance strategy.", unlocks: "Diplomats" },
-  farm: { sigil: "FM", summary: "Generates food per hour and provides 2,000 food storage capacity plus 30 gold capacity.", unlocks: "Food production" },
-  guildhalls: { sigil: "GH", summary: "Houses up to 5 spies per guildhall. Required for covert operations and intelligence gathering.", unlocks: "Spies" },
-  horse_farms: { sigil: "HF", summary: "Provides capacity for 50 horses and generates additional horses per hour. Required for cavalry.", unlocks: "Horse production" },
-  houses: { sigil: "HS", summary: "Increases population cap by 10 people per house and provides 100 extra gold capacity.", unlocks: "Population growth" },
-  lumberyard: { sigil: "LY", summary: "Generates wood per hour and provides 200 wood storage capacity. Core resource production.", unlocks: "Wood production" },
-  markets: { sigil: "MK", summary: "Allows you to buy and sell goods with other kingdoms. Houses up to 3 trade wagons at a time.", unlocks: "Marketplace trading" },
-  quarry: { sigil: "QY", summary: "Generates stone per hour and provides 200 stone storage capacity. Core resource production.", unlocks: "Stone production" },
-  shipyard: { sigil: "SY", summary: "Constructs ships for fishing, logistics, colony expansion, and naval warfare.", unlocks: "Fishing Boats, Market Ships, Settler Ships, Patrol Fleets, War Frigates" },
-  stables: { sigil: "ST", summary: "Houses up to 10 cavalry per stable and adds 1 extra horse capacity to your kingdom.", unlocks: "Light Cavalry, Heavy Cavalry" },
-  temples: { sigil: "TP", summary: "Houses up to 5 priests per temple. Generates mana over time for spell casting.", unlocks: "Priests, Mana" },
+const BUILDING_META: Record<string, { icon: string; summary: string; unlocks: string }> = {
+  archery_ranges: { icon: "🎯", summary: "Houses up to 20 archers per range built. Required to train ranged military units.", unlocks: "Archers, Crossbowmen" },
+  barns: { icon: "🌾", summary: "Increases food storage capacity by 10,000 per barn. Reduces the risk of food spoilage.", unlocks: "Food storage" },
+  barracks: { icon: "🛡️", summary: "Houses up to 50 infantry troops per barracks. Required to train foot soldiers.", unlocks: "Footmen, Pikemen" },
+  castles: { icon: "🏰", summary: "Increases population cap by 100, houses up to 20 knights and stables 5 horses. Also provides 500 wood and stone capacity, plus 7,500 food and 20,000 gold capacity.", unlocks: "Knights" },
+  embassies: { icon: "🏛️", summary: "Houses up to 4 diplomats per embassy. Required for diplomatic missions and alliance strategy.", unlocks: "Diplomats" },
+  farm: { icon: "🚜", summary: "Generates food per hour and provides 2,000 food storage capacity plus 30 gold capacity.", unlocks: "Food production" },
+  guildhalls: { icon: "🕵️", summary: "Houses up to 5 spies per guildhall. Required for covert operations and intelligence gathering.", unlocks: "Spies" },
+  horse_farms: { icon: "🐎", summary: "Provides capacity for 50 horses and generates additional horses per hour. Required for cavalry.", unlocks: "Horse production" },
+  houses: { icon: "🏠", summary: "Increases population cap by 10 people per house and provides 100 extra gold capacity.", unlocks: "Population growth" },
+  lumberyard: { icon: "🪵", summary: "Generates wood per hour and provides 200 wood storage capacity. Core resource production.", unlocks: "Wood production" },
+  markets: { icon: "🏪", summary: "Allows you to buy and sell goods with other kingdoms. Houses up to 3 trade wagons at a time.", unlocks: "Marketplace trading" },
+  quarry: { icon: "🪨", summary: "Generates stone per hour and provides 200 stone storage capacity. Core resource production.", unlocks: "Stone production" },
+  shipyard: { icon: "⚓", summary: "Constructs ships for fishing, logistics, colony expansion, and naval warfare.", unlocks: "Fishing Boats, Market Ships, Settler Ships, Patrol Fleets, War Frigates" },
+  stables: { icon: "🐴", summary: "Houses up to 10 cavalry per stable and adds 1 extra horse capacity to your kingdom.", unlocks: "Light Cavalry, Heavy Cavalry" },
+  temples: { icon: "⛪", summary: "Houses up to 5 priests per temple. Generates mana over time for spell casting.", unlocks: "Priests, Mana" },
 };
 
 const BUILDING_PROD: Record<string, { income: string; trains: string; special: string }> = {
@@ -1198,7 +1198,7 @@ function BuildingsView() {
             </div>
             {buildings.map((b) => {
               const code = String(b.building_code);
-              const meta = BUILDING_META[code] || { sigil: code.slice(0, 2).toUpperCase(), summary: "Core kingdom infrastructure.", unlocks: "General growth and economy support." };
+              const meta = BUILDING_META[code] || { icon: "🏗️", summary: "Core kingdom infrastructure.", unlocks: "General growth and economy support." };
               const built = Number(b.level || 0);
               const bldg = Number(queueCounts[code] || 0);
               const total = built + bldg;
@@ -1219,8 +1219,8 @@ function BuildingsView() {
                 >
                   <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 64px 64px 64px", gap: 8, alignItems: "center" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                      <div style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid rgba(216,176,117,.55)", background: "linear-gradient(180deg, rgba(89,67,37,.82), rgba(35,27,15,.92))", display: "grid", placeItems: "center", fontWeight: 800, color: "#f2dfbf", fontSize: 11, flexShrink: 0 }}>
-                        {meta.sigil}
+                      <div style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid rgba(216,176,117,.55)", background: "linear-gradient(180deg, rgba(89,67,37,.82), rgba(35,27,15,.92))", display: "grid", placeItems: "center", color: "#f2dfbf", fontSize: 17, lineHeight: 1, flexShrink: 0 }}>
+                        {meta.icon}
                       </div>
                       <span style={{ fontWeight: 700, fontSize: 16, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{String(b.building_name || code)}</span>
                     </div>
@@ -1256,7 +1256,7 @@ function BuildingsView() {
             <tbody>
               {buildings.map((b, idx) => {
                 const code = String(b.building_code);
-                const meta = BUILDING_META[code] || { sigil: code.slice(0, 2).toUpperCase(), summary: "Core kingdom infrastructure.", unlocks: "General growth and economy support." };
+                const meta = BUILDING_META[code] || { icon: "🏗️", summary: "Core kingdom infrastructure.", unlocks: "General growth and economy support." };
                 const prod = BUILDING_PROD[code];
                 const built = Number(b.level || 0);
                 const bldg = Number(queueCounts[code] || 0);
@@ -1275,8 +1275,8 @@ function BuildingsView() {
                     <td style={{ padding: "10px 12px", borderBottom: "1px solid rgba(255,255,255,.05)", whiteSpace: "nowrap" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <div style={{ width: 4, height: 36, borderRadius: 2, background: catColor, flexShrink: 0 }} />
-                        <div style={{ width: 34, height: 34, borderRadius: 6, border: "1px solid rgba(216,176,117,.4)", background: "linear-gradient(180deg, rgba(89,67,37,.82), rgba(35,27,15,.92))", display: "grid", placeItems: "center", fontWeight: 800, color: "#f2dfbf", fontSize: 11, flexShrink: 0 }}>
-                          {meta.sigil}
+                        <div style={{ width: 34, height: 34, borderRadius: 6, border: "1px solid rgba(216,176,117,.4)", background: "linear-gradient(180deg, rgba(89,67,37,.82), rgba(35,27,15,.92))", display: "grid", placeItems: "center", color: "#f2dfbf", fontSize: 18, lineHeight: 1, flexShrink: 0 }}>
+                          {meta.icon}
                         </div>
                         <div>
                           <div style={{ fontWeight: 700, fontSize: 14 }}>{String(b.building_name || code)}</div>
@@ -1348,7 +1348,8 @@ function BuildingsView() {
               <select value={buildCode} onChange={(e) => setBuildCode(e.target.value)} style={{ ...INPUT_STYLE, minWidth: 0, width: "100%" }}>
                 {buildOptions.map((code) => {
                   const name = buildingMap[code]?.building_name || String(code).replace(/_/g, " ");
-                  return <option key={code} value={code}>{name}</option>;
+                  const icon = BUILDING_META[code]?.icon || "🏗️";
+                  return <option key={code} value={code}>{icon} {name}</option>;
                 })}
               </select>
               <input
@@ -1381,7 +1382,7 @@ function BuildingsView() {
               }}
             >
               <div style={{ color: TEXT_MUTED, fontSize: 13 }}>
-                Demolish selected: <span style={{ color: TEXT_MAIN, fontWeight: 700 }}>{buildCode.replace(/_/g, " ")}</span>{" "}
+                Demolish selected: <span style={{ color: TEXT_MAIN, fontWeight: 700 }}>{BUILDING_META[buildCode]?.icon || "🏗️"} {buildCode.replace(/_/g, " ")}</span>{" "}
                 (<span style={{ color: selectedBuildingBuilt > 0 ? "#c8e7b1" : "#ffae9a" }}>{selectedBuildingBuilt.toLocaleString()} built</span>)
               </div>
               <input
@@ -1414,7 +1415,7 @@ function BuildingsView() {
 
             {buildingMap[buildCode] ? (() => {
           const bm = buildingMap[buildCode];
-          const meta = BUILDING_META[buildCode] || { sigil: "??", summary: "Kingdom structure.", unlocks: "" };
+          const meta = BUILDING_META[buildCode] || { icon: "🏗️", summary: "Kingdom structure.", unlocks: "" };
           const prod = BUILDING_PROD[buildCode];
           const rawSec = Number(bm.base_build_seconds || 0);
           const buildTimeTxt = rawSec >= 604800
@@ -1439,8 +1440,8 @@ function BuildingsView() {
             <div style={{ marginTop: 14, borderRadius: 10, border: "1px solid rgba(216,176,117,.3)", padding: "14px 16px", background: "rgba(0,0,0,.28)" }}>
               {/* Header */}
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-                <div style={{ width: 42, height: 42, borderRadius: 7, border: "1px solid rgba(216,176,117,.6)", background: "linear-gradient(180deg, rgba(89,67,37,.9), rgba(35,27,15,.95))", display: "grid", placeItems: "center", fontWeight: 800, color: "#f2dfbf", fontSize: 13, flexShrink: 0 }}>
-                  {meta.sigil}
+                <div style={{ width: 42, height: 42, borderRadius: 7, border: "1px solid rgba(216,176,117,.6)", background: "linear-gradient(180deg, rgba(89,67,37,.9), rgba(35,27,15,.95))", display: "grid", placeItems: "center", color: "#f2dfbf", fontSize: 22, lineHeight: 1, flexShrink: 0 }}>
+                  {meta.icon}
                 </div>
                 <div>
                   <div style={{ fontWeight: 800, fontSize: 17, color: "#fff7ec" }}>{bm.building_name || buildCode}</div>
@@ -1485,7 +1486,7 @@ function BuildingsView() {
         {buildQueue.map((q) => (
           <div key={q.id} style={{ marginBottom: 8, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr auto auto", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 14, overflowWrap: "anywhere" }}>
-              <span style={{ color: ACCENT, fontWeight: 700 }}>{BUILDING_META[String(q.building_code)]?.sigil || "??"}</span>
+              <span style={{ color: ACCENT, fontWeight: 700 }}>{BUILDING_META[String(q.building_code)]?.icon || "🏗️"}</span>
               {" "}{String(q.building_code).replace(/_/g, " ")} {"->"} {Number(q.quantity || 1).toLocaleString()}
             </span>
             <QueueCountdown completesAt={q.completes_at} onComplete={() => void load()} />
